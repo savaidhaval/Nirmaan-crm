@@ -245,3 +245,6 @@ body.guest { background: linear-gradient(160deg, color-mix(in srgb, var(--brand)
 @media (min-width: 900px) { .toast { bottom: 28px; } }
 
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+
+.help + .btn, .help + .row-btns { margin-top: 12px; }
+h1 + .help { margin: -8px 0 14px; }
