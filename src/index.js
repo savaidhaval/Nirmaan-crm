@@ -2159,17 +2159,17 @@ router.get('/api/storage/google/callback', async (req, env) => {
     if (!rootFolderId) return new Response(driveResultPage(false, 'Google did not return a folder id.'), { status: 500, headers: { 'Content-Type': 'text/html; charset=utf-8' } });
 
     // Mark state as used
-    await env.DB.prepare('UPDATE oauth_states SET used_at = ? WHERE id = ?').bind(now, row.id).run();
+    await env.DB.prepare('UPDATE oauth_states SET used_at = ? WHERE state_hash = ?').bind(now, row.state_hash).run();
 
     // Save settings
-    await setSettingRaw(env, 'storage.gdrive.status', 'connected', user.user_id);
-    if (refreshTokenEnc) await setSettingRaw(env, 'storage.gdrive.refresh_token_enc', refreshTokenEnc, user.user_id);
-    await setSettingRaw(env, 'storage.gdrive.access_token_enc', accessTokenEnc, user.user_id);
-    await setSettingRaw(env, 'storage.gdrive.access_expires_at', accessExpiresAt, user.user_id);
-    if (accountEmail) await setSettingRaw(env, 'storage.gdrive.account_email', accountEmail, user.user_id);
-    if (rootFolderId) await setSettingRaw(env, 'storage.gdrive.root_folder_id', rootFolderId, user.user_id);
-    await setSettingRaw(env, 'storage.gdrive.connected_at', now, user.user_id);
-    await setSettingRaw(env, 'storage.driver', 'gdrive', user.user_id);
+    await setSettingRaw(env, 'storage.gdrive.status', 'connected', user.id);
+    if (refreshTokenEnc) await setSettingRaw(env, 'storage.gdrive.refresh_token_enc', refreshTokenEnc, user.id);
+    await setSettingRaw(env, 'storage.gdrive.access_token_enc', accessTokenEnc, user.id);
+    await setSettingRaw(env, 'storage.gdrive.access_expires_at', accessExpiresAt, user.id);
+    if (accountEmail) await setSettingRaw(env, 'storage.gdrive.account_email', accountEmail, user.id);
+    if (rootFolderId) await setSettingRaw(env, 'storage.gdrive.root_folder_id', rootFolderId, user.id);
+    await setSettingRaw(env, 'storage.gdrive.connected_at', now, user.id);
+    await setSettingRaw(env, 'storage.driver', 'gdrive', user.id);
 
     await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, 'connect', 'storage', 0, 'Google Drive connected', ?)`).bind(user.id, now).run();
 
