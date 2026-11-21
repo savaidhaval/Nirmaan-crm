@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Shared file — NirmaanCRM</title>
+  <link rel="stylesheet" href="app.css">
+  <meta name="robots" content="noindex, nofollow">
+</head>
+<body>
+  <div class="login-card" style="max-width:520px;">
+    <div class="brand">
+      <img src="/brand/logo.png" alt="Logo" class="logo" onerror="this.style.display='none'">
+      <div class="trade-name">Shared with you</div>
+    </div>
+    <h1 id="file-title">Brochure</h1>
+    <p id="file-subtitle" style="color:#6b7280;"></p>
+    <button class="btn btn-primary btn-full" id="btn-open">Open file</button>
+    <p class="help" id="msg" style="display:none;color:#dc2626;"></p>
+  </div>
+  <script src="ui.js"></script>
+  <script>
+    // Token is read from the URL path: /s/<token>
+    const token = location.pathname.split('/').pop();
+    const btn = document.getElementById('btn-open');
+    const msg = document.getElementById('msg');
+
+    btn.addEventListener('click', async () => {
+      try {
+        // /s/<token>/file returns a redirect to the file, or streams it
+        const res = await fetch('/s/' + encodeURIComponent(token) + '/file', {
+          credentials: 'include',
+          redirect: 'manual',
+        });
+        if (res.status === 302 || res.status === 301) {
+          location.href = res.headers.get('location');
+        } else if (res.ok) {
+          location.href = '/s/' + encodeURIComponent(token) + '/file';
+        } else {
+          msg.textContent = 'This link has expired or is no longer valid. Please ask the sender to share a new one.';
+          msg.style.display = 'block';
+          btn.style.display = 'none';
+        }
+      } catch (e) {
+        msg.textContent = 'Unable to open this link. Please try again.';
+        msg.style.display = 'block';
+      }
+    });
+  </script>
+</body>
+</html>

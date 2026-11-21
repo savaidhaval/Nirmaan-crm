@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NirmaanCRM</title>
+  <link rel="stylesheet" href="app.css">
+  <link rel="manifest" href="manifest.json">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="theme-color" content="#1d4ed8">
+</head>
+<body>
+  <div class="shell">
+    <header class="topbar">
+      <div class="brand">
+        <img src="/brand/logo.png" alt="Logo" class="logo" onerror="this.style.display='none'">
+        <div id="topbar-trade-name" class="trade-name">NirmaanCRM</div>
+      </div>
+      <div id="topbar-project-picker" class="project-picker">Select project</div>
+      <div class="top-right">
+        <button class="icon-btn" title="Help">?</button>
+        <button class="icon-btn" id="btn-user-menu" title="User menu">👤</button>
+        <div id="user-menu" class="user-menu" style="display:none;">
+          <div class="menu-item" id="menu-logout">Logout</div>
+        </div>
+        <button class="icon-btn" title="Notifications">🔔</button>
+        <span id="notify-count" class="notify-badge">0</span>
+      </div>
+    </header>
+
+    <div id="app-main" class="main">
+      <!-- Page content injected by app.js -->
+    </div>
+
+    <footer class="bottom-nav" id="bottom-nav"></footer>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <style>
+    .user-menu {
+      position: absolute;
+      right: 0;
+      top: 56px;
+      background: #ffffff;
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      min-width: 140px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+      z-index: 200;
+    }
+    .menu-item {
+      padding: 12px 16px;
+      cursor: pointer;
+      font-size: 16px;
+    }
+    .menu-item:hover { background: #f3f4f6; }
+    .notify-badge {
+      position: absolute;
+      top: 2px;
+      right: -4px;
+      background: #dc2626;
+      color: #fff;
+      font-size: 12px;
+      padding: 2px 6px;
+      border-radius: 10px;
+    }
+  </style>
+
+  <script src="ui.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

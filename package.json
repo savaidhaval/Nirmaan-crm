@@ -1,0 +1,14 @@
+{
+  "name": "nirmaan-crm",
+  "version": "1.0.0",
+  "description": "NirmaanCRM — CRM + project management for a Mumbai real-estate developer",
+  "private": true,
+  "devDependencies": {
+    "wrangler": "^3.0.0"
+  },
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "deploy:staging": "wrangler deploy --env staging"
+  }
+}

@@ -1,0 +1,19 @@
+/* print.css — clean "Save as PDF" for letters/POs (§7.10) */
+@page { size: A4; margin: 0; }
+
+body.print { background: var(--white); color: #111; font-size: 12pt; }
+.print-no { display: none !important; }
+
+.letterhead { width: 100%; border-collapse: collapse; }
+.letterhead img { width: 100%; display: block; }
+.letterhead-print-area { padding: 45mm 20mm 30mm 20mm; }
+.draft-watermark {
+  position: fixed;
+  top: 50%; left: 50%;
+  transform: translate(-50%, -50%) rotate(-30deg);
+  font-size: 120pt;
+  color: rgba(220, 38, 38, 0.15);
+  z-index: 10000;
+  pointer-events: none;
+  white-space: nowrap;
+}
