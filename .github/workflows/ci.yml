@@ -1,0 +1,20 @@
+# Checks every pull request: frontend scripts parse and the Worker bundles for production and staging.
+name: CI
+on:
+  pull_request:
+  push:
+    branches: [main]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: npm install --no-audit --no-fund
+      - name: Syntax check frontend
+        run: for f in public/*.js; do node --check "$f"; done
+      - name: Bundle production
+        run: npx wrangler deploy --dry-run --env="" --outdir /tmp/prod
+      - name: Bundle staging
+        run: npx wrangler deploy --dry-run --env=staging --outdir /tmp/staging
