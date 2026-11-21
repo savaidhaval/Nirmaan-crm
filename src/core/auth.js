@@ -79,7 +79,8 @@ export async function getSession(env, tokenHash) {
   const row = await env.DB.prepare(`
     SELECT s.id AS session_id, s.user_id, s.expires_at, s.user_agent, s.created_at,
            u.name, u.email, u.phone, u.role, u.lang, u.active, u.extra_roles,
-           u.must_change_password, u.is_primary_owner, u.deactivated_at
+           u.must_change_password, u.is_primary_owner, u.deactivated_at,
+           (SELECT enabled_at FROM user_totp t WHERE t.user_id = u.id) AS mfa_enabled_at
     FROM sessions s
     JOIN users u ON u.id = s.user_id
     WHERE s.id = ? AND s.expires_at > datetime('now') AND u.deleted_at IS NULL
@@ -153,7 +154,7 @@ export async function ensureBootstrapOwner(env) {
 }
 
 // Authenticate with email + password
-export async function loginPassword(env, email, password, userAgent) {
+export async function loginPassword(env, email, password, userAgent, opts = {}) {
   const rateKey = `login:${email}`;
   const rl = await checkRateLimit(env, rateKey, 5, 15);
   if (!rl.allowed) {
@@ -183,6 +184,10 @@ export async function loginPassword(env, email, password, userAgent) {
   const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
   await env.DB.prepare('UPDATE users SET last_login_at = ? WHERE id = ?').bind(now, user.id).run();
 
+  if (opts.beforeSession) {
+    const early = await opts.beforeSession(user);   // e.g. a two-step challenge: no session until the second factor is proven
+    if (early) return { user, early };
+  }
   const session = await createSession(env, user.id, userAgent);
   return { user, session };
 }

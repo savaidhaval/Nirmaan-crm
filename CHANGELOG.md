@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- New (phase 2): late-interest accrual with waivers and interest receipts; bulk CSV import; two-step sign-in (TOTP + recovery codes, per-role requirement); project financials with RERA withdrawal estimate; vendor bill GST/TDS, TDS report, Tally exports; customer statement; DPDP find/export/erase. See docs/ACTION_PLAN.md.
 - Audit pass: atomic holds/bookings, 48h holds with expiry, discount approval limits, audited price/plan changes, lead protection (normalised phone, first registration wins), lead state machine, receipt integrity (numbering, cash limit, duplicates, reversal), refunds workflow, unit transfer, Maharashtra cost sheet, RERA 70% routing report, signed lead webhook, append-only audit log, KYC document isolation, magic-byte uploads, sanitized errors, IP login throttle, hashed sessions. See docs/AUDIT.md.
 - Reports and UI: interactive stacking plan, cash flow/escrow, aging, marketing & partner ROI, velocity & discount leakage, charts on the dashboard.
 - Fix: changing the payment plan after bookings crashed (foreign key).

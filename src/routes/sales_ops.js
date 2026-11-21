@@ -17,6 +17,8 @@ export const phone10 = (p) => String(p || '').replace(/\D/g, '').slice(-10);
 const rupees = (p) => '₹' + (Number(p) / 100).toLocaleString('en-IN');
 const MANAGER = ['owner', 'pm'];
 
+export const shared = {};   // createLead is shared with the CSV importer
+
 export function registerSalesOps(router, h) {
   const { withAuth, json, serverError, visibleProjectIds, userCan, getSetting, nowStr, encryptSetting, clientIp, checkRateLimit } = h;
 
@@ -54,6 +56,8 @@ export function registerSalesOps(router, h) {
     await audit(env, user, 'create', 'sal_leads', r.meta.last_row_id, `Lead "${name}" registered${partnerId ? ' via channel partner #' + partnerId : ''}${systemSource ? ' from ' + systemSource : ''}`);
     return { status: 200, id: r.meta.last_row_id, assignee };
   }
+
+  shared.createLead = createLead;
 
   router.post('/api/sales/leads', async (req, env) => withAuth(req, env, 'sales', 'C', async (req, env) => {
     try {
@@ -306,8 +310,9 @@ export function registerSalesOps(router, h) {
       if (ref && await env.DB.prepare('SELECT id FROM sal_receipts WHERE booking_id = ? AND ref_no = ? AND mode = ? AND reversed_at IS NULL').bind(booking.id, ref, mode).first()) return json({ ok: false, error: 'A receipt with this reference already exists for this booking.' }, 409);
       const account = b.account === 'project_other' ? 'project_other' : 'rera_designated';
       if (account === 'project_other' && !['owner', 'accounts'].includes(req.user.role)) return json({ ok: false, error: 'Only the Owner or Accounts can route a receipt outside the RERA designated account.' }, 403);
+      const kind = b.kind === 'interest' ? 'interest' : 'principal';   // interest paid on delayed instalments does not settle any demand
       let demandId = null;
-      if (b.demand_id) {
+      if (b.demand_id && kind === 'principal') {
         const d = await env.DB.prepare('SELECT id FROM sal_demands WHERE id = ? AND booking_id = ?').bind(Number(b.demand_id), booking.id).first();
         if (!d) return json({ ok: false, error: 'That demand does not belong to this booking.' }, 400);
         demandId = d.id;
@@ -318,10 +323,10 @@ export function registerSalesOps(router, h) {
       await env.DB.prepare('INSERT INTO counters (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').bind('rc:' + booking.project_id, seq).run();
       const receiptNo = `RC-${proj ? proj.code : booking.project_id}-${String(seq).padStart(5, '0')}`;
       const now = nowStr();
-      const stmts = [env.DB.prepare('INSERT INTO sal_receipts (booking_id, demand_id, amount_paise, tds_paise, mode, ref_no, received_on, received_by, note, receipt_no, account, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-        .bind(booking.id, demandId, amount, tds, mode, ref, b.received_on || now.substring(0, 10), req.user.user_id, String(b.note || '').slice(0, 300), receiptNo, account, now)];
+      const stmts = [env.DB.prepare('INSERT INTO sal_receipts (booking_id, demand_id, amount_paise, tds_paise, mode, ref_no, received_on, received_by, note, receipt_no, account, kind, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+        .bind(booking.id, demandId, amount, tds, mode, ref, b.received_on || now.substring(0, 10), req.user.user_id, String(b.note || '').slice(0, 300), receiptNo, account, kind, now)];
       if (demandId) stmts.push(env.DB.prepare(`UPDATE sal_demands SET settled_paise = settled_paise + ?, status = CASE WHEN settled_paise + ? >= amount_paise + COALESCE(gst_paise, 0) THEN 'paid' ELSE 'partial' END WHERE id = ?`).bind(amount + tds, amount + tds, demandId));
-      stmts.push(env.DB.prepare('INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, ?, ?, ?, ?, ?)').bind(req.user.user_id, 'create', 'sal_receipts', booking.id, `Receipt ${receiptNo} ${rupees(amount)} (${mode}${ref ? ' ' + ref : ''}, ${account}) from ${booking.customer_name}`, now));
+      stmts.push(env.DB.prepare('INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, ?, ?, ?, ?, ?)').bind(req.user.user_id, 'create', 'sal_receipts', booking.id, `${kind === 'interest' ? 'Interest receipt' : 'Receipt'} ${receiptNo} ${rupees(amount)} (${mode}${ref ? ' ' + ref : ''}, ${account}) from ${booking.customer_name}`, now));
       await env.DB.batch(stmts);
       return json({ ok: true, data: { receipt_no: receiptNo } });
     } catch (e) { return serverError(e, 'receipt'); }
@@ -389,7 +394,7 @@ export function registerSalesOps(router, h) {
       const amount = Math.round(Number(b.amount_paise) || 0); const forfeit = Math.round(Number(b.forfeited_paise) || 0);
       if (!(amount >= 0) || !(forfeit >= 0) || (amount === 0 && forfeit === 0)) return json({ ok: false, error: 'Enter the refund and forfeiture amounts.' }, 400);
       if (forfeit > Math.floor(booking.agreed_price_paise / 10)) return json({ ok: false, error: 'Forfeiture cannot exceed 10% of the agreed price.' }, 400);
-      const col = await env.DB.prepare('SELECT COALESCE(SUM(amount_paise + tds_paise), 0) AS t FROM sal_receipts WHERE booking_id = ? AND reversed_at IS NULL').bind(booking.id).first();
+      const col = await env.DB.prepare('SELECT COALESCE(SUM(amount_paise + tds_paise), 0) AS t FROM sal_receipts WHERE booking_id = ? AND reversed_at IS NULL AND kind = \'principal\'').bind(booking.id).first();
       const used = await env.DB.prepare("SELECT COALESCE(SUM(amount_paise + forfeited_paise), 0) AS t FROM sal_refunds WHERE booking_id = ? AND status != 'rejected'").bind(booking.id).first();
       if (amount + forfeit + Number(used.t) > Number(col.t)) return json({ ok: false, error: 'Refund plus forfeiture is more than the customer paid.' }, 400);
       if (String(b.reason || '').trim().length < 5) return json({ ok: false, error: 'Give a reason.' }, 400);
