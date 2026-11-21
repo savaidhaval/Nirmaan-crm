@@ -2,41 +2,53 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
   <title>NirmaanCRM</title>
   <link rel="stylesheet" href="app.css">
+  <link rel="stylesheet" href="/brand/theme.css">
   <link rel="manifest" href="manifest.json">
   <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="theme-color" content="#1d4ed8">
 </head>
-<body>
-  <div class="shell">
-    <header class="topbar">
-      <div class="brand">
-        <img src="/brand/logo.png" alt="Logo" class="logo">
-        <div id="topbar-trade-name" class="trade-name">NirmaanCRM</div>
+<body class="guest">
+  <div class="app">
+    <aside class="sidebar" id="sidebar">
+      <div class="side-brand">
+        <div class="logo-mark" id="side-logo">N</div>
+        <div class="trade-name" id="side-name">NirmaanCRM</div>
       </div>
-      <div id="topbar-project-picker" class="project-picker">Select project</div>
-      <div class="top-right">
-        <button class="icon-btn" title="Help">?</button>
-        <button class="icon-btn" id="btn-user-menu" title="User menu">👤</button>
-        <div id="user-menu" class="user-menu" style="display:none;">
-          <div class="menu-item" id="menu-logout">Logout</div>
-        </div>
-        <button class="icon-btn" title="Notifications">🔔</button>
-        <span id="notify-count" class="notify-badge">0</span>
-      </div>
-    </header>
+      <nav class="side-nav" id="side-nav"></nav>
+      <div class="side-foot" id="side-foot"></div>
+    </aside>
 
-    <div id="app-main" class="main">
-      <!-- Page content injected by app.js -->
+    <div class="content">
+      <header class="topbar">
+        <div class="brand">
+          <div class="logo-mark" id="top-logo">N</div>
+          <div id="topbar-trade-name" class="trade-name">NirmaanCRM</div>
+        </div>
+        <div class="top-right">
+          <button class="icon-btn" id="btn-help" title="Help" aria-label="Help"></button>
+          <button class="icon-btn" id="btn-bell" title="Notifications" aria-label="Notifications">
+            <span id="bell-icon"></span><span id="notify-count" class="notify-badge">0</span>
+          </button>
+          <button class="icon-btn" id="btn-user-menu" title="Account" aria-label="Account"><span class="avatar" id="avatar">?</span></button>
+          <div id="user-menu" class="user-menu">
+            <div class="who"><b id="um-name"></b><span id="um-role"></span></div>
+            <div class="menu-item" id="menu-password">Change password</div>
+            <div class="menu-item danger" id="menu-logout">Log out</div>
+          </div>
+        </div>
+      </header>
+
+      <main id="app-main" class="main"></main>
     </div>
 
-    <footer class="bottom-nav" id="bottom-nav"></footer>
+    <nav class="bottom-nav" id="bottom-nav" aria-label="Main"></nav>
   </div>
 
-  <div class="toast" id="toast"></div>
-
+  <div class="toast" id="toast" role="status"></div>
 
   <script src="ui.js"></script>
   <script src="app.js"></script>

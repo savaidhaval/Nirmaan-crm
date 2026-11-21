@@ -160,19 +160,64 @@ async function syncQueue() {
 }
 window.addEventListener('online', syncQueue);
 
+
+// ---------- Icons (inline SVG, no external requests) ----------
+const ICONS = {
+  home: 'M3 12l9-9 9 9M5 10v10h14V10', dashboard: 'M3 3h7v9H3zM14 3h7v5h-7zM14 12h7v9h-7zM3 16h7v5H3z',
+  projects: 'M3 21h18M5 21V7l7-4 7 4v14M9 9h2M9 13h2M13 9h2M13 13h2M10 21v-4h4v4',
+  approvals: 'M9 12l2 2 4-4M12 21a9 9 0 100-18 9 9 0 000 18z', drawings: 'M12 20h9M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z',
+  site: 'M2 18h20M4 18a8 8 0 0116 0M12 6V3', procurement: 'M6 6h15l-1.5 9h-12zM6 6L5 3H2M9 20.5a.5.5 0 100-1 .5.5 0 000 1zM18 20.5a.5.5 0 100-1 .5.5 0 000 1z',
+  sales: 'M3 17l6-6 4 4 8-8M15 7h6v6', documents: 'M14 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V8zM14 3v5h5M9 13h6M9 17h6',
+  users: 'M17 21v-2a4 4 0 00-4-4H7a4 4 0 00-4 4v2M10 11a4 4 0 100-8 4 4 0 000 8zM21 21v-2a4 4 0 00-3-3.9M16 3.1a4 4 0 010 7.8',
+  branding: 'M12 3a9 9 0 100 18c1.1 0 2-.9 2-2 0-.5-.2-1-.5-1.3-.3-.3-.5-.8-.5-1.2 0-1.1.9-2 2-2h2.3A3.7 3.7 0 0021 11c0-4.4-4-8-9-8z',
+  sharelinks: 'M10 13a5 5 0 007 0l3-3a5 5 0 00-7-7l-1 1M14 11a5 5 0 00-7 0l-3 3a5 5 0 007 7l1-1',
+  audit: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 3h6v4H9zM9 12h6M9 16h6',
+  storage: 'M18 18H7a5 5 0 01-.5-10 6 6 0 0111.4 1.5A4.3 4.3 0 0118 18z', email: 'M4 5h16v14H4zM4 7l8 6 8-6',
+  settings: 'M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6',
+  help: 'M12 21a9 9 0 100-18 9 9 0 000 18zM9.1 9a3 3 0 015.8 1c0 2-3 3-3 3M12 17h.01',
+  bell: 'M18 8a6 6 0 10-12 0c0 7-3 9-3 9h18s-3-2-3-9M13.7 21a2 2 0 01-3.4 0', more: 'M5 12h.01M12 12h.01M19 12h.01',
+  money: 'M12 1v22M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6', alert: 'M12 9v4M12 17h.01M10.3 3.9L1.8 18a2 2 0 001.7 3h17a2 2 0 001.7-3L13.7 3.9a2 2 0 00-3.4 0z',
+  clipboard: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 3h6v4H9z', userplus: 'M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8zM19 8v6M22 11h-6',
+  password: 'M5 11h14v10H5zM8 11V7a4 4 0 118 0v4',
+};
+function icon(name, size) {
+  const d = ICONS[name] || ICONS.more;
+  return `<svg class="i" viewBox="0 0 24 24" aria-hidden="true"${size ? ` style="width:${size}px;height:${size}px"` : ''}><path d="${d}"/></svg>`;
+}
+
+// Everything each role may open, grouped for the desktop sidebar.
+function sidebarItems(role) {
+  const H = { label: 'Home', route: role === 'owner' ? 'dashboard' : 'home', icon: role === 'owner' ? 'dashboard' : 'home' };
+  const I = (label, route) => ({ label, route, icon: route });
+  const by = {
+    owner: [[null, [H]], ['Work', [I('Projects', 'projects'), I('Approvals', 'approvals'), I('Drawings', 'drawings'), I('Site', 'site')]], ['Money', [I('Procurement', 'procurement'), I('Sales', 'sales')]],
+      ['Admin', [I('Documents', 'documents'), I('Users & access', 'users'), I('Branding', 'branding'), I('Shared links', 'sharelinks'), I('Audit log', 'audit')]], ['Setup', [I('Storage', 'storage'), I('Email', 'email'), I('Settings', 'settings')]]],
+    pm: [[null, [H]], ['Work', [I('Projects', 'projects'), I('Approvals', 'approvals'), I('Drawings', 'drawings'), I('Site', 'site')]], ['Money', [I('Procurement', 'procurement'), I('Sales', 'sales')]], ['Admin', [I('Documents', 'documents'), I('Branding', 'branding'), I('Shared links', 'sharelinks'), I('Audit log', 'audit')]]],
+    site: [[null, [H]], ['Work', [I('Drawings', 'drawings'), I('Site', 'site'), I('Procurement', 'procurement')]], ['Admin', [I('Documents', 'documents')]]],
+    sales: [[null, [H]], ['Work', [I('Sales', 'sales')]], ['Admin', [I('Documents', 'documents')]]],
+    accounts: [[null, [H]], ['Money', [I('Sales', 'sales'), I('Procurement', 'procurement')]], ['Admin', [I('Documents', 'documents'), I('Branding', 'branding')]]],
+    purchase: [[null, [H]], ['Work', [I('Procurement', 'procurement'), I('Drawings', 'drawings')]], ['Admin', [I('Documents', 'documents')]]],
+    hr: [[null, [H]]],
+    viewer: [[null, [H]], ['Work', [I('Projects', 'projects'), I('Approvals', 'approvals'), I('Drawings', 'drawings'), I('Site', 'site')]], ['Admin', [I('Documents', 'documents')]]],
+  };
+  return by[role] || by.viewer;
+}
+const ROUTE_TITLES = { dashboard: 'Home', home: 'Home', more: 'More', notifications: 'Notifications', password: 'Change password', help: 'Help' };
+
 // ---------- Navigation ----------
 function getBottomNavItems(role) {
-  const home = { label: 'Home', route: 'home' };
-  const more = { label: 'More', route: 'more' };
+  const home = { label: 'Home', route: 'home', icon: 'home' };
+  const more = { label: 'More', route: 'more', icon: 'more' };
+  const I = (label, route) => ({ label, route, icon: route });
   const maps = {
-    owner: [{ label: 'Home', route: 'dashboard' }, { label: 'Projects', route: 'projects' }, { label: 'Approvals', route: 'approvals' }, { label: 'Sales', route: 'sales' }, more],
-    pm: [home, { label: 'Site', route: 'site' }, { label: 'Approvals', route: 'approvals' }, { label: 'Drawings', route: 'drawings' }, more],
-    site: [home, { label: 'Drawings', route: 'drawings' }, { label: 'Site', route: 'site' }, more],
-    sales: [home, { label: 'Sales', route: 'sales' }, more],
-    accounts: [home, { label: 'Sales', route: 'sales' }, { label: 'Procurement', route: 'procurement' }, more],
-    purchase: [home, { label: 'Procurement', route: 'procurement' }, { label: 'Drawings', route: 'drawings' }, more],
+    owner: [{ label: 'Home', route: 'dashboard', icon: 'dashboard' }, I('Projects', 'projects'), I('Approvals', 'approvals'), I('Sales', 'sales'), more],
+    pm: [home, I('Site', 'site'), I('Approvals', 'approvals'), I('Drawings', 'drawings'), more],
+    site: [home, I('Drawings', 'drawings'), I('Site', 'site'), more],
+    sales: [home, I('Sales', 'sales'), more],
+    accounts: [home, I('Sales', 'sales'), I('Procurement', 'procurement'), more],
+    purchase: [home, I('Procurement', 'procurement'), I('Drawings', 'drawings'), more],
     hr: [home, more],
-    viewer: [home, { label: 'Projects', route: 'projects' }, more],
+    viewer: [home, I('Projects', 'projects'), more],
   };
   return maps[role] || maps.viewer;
 }
@@ -184,11 +229,47 @@ const PAGES = {
   audit: renderAudit, notifications: renderNotifications, help: renderHelp, password: renderChangePassword, email: renderEmailSettings,
 };
 
+let brandChrome = null;
+async function loadBrandChrome() {
+  if (brandChrome) return brandChrome;
+  let name = 'NirmaanCRM';
+  try { name = JSON.parse(sessionStorage.getItem('nirmaan.brandname') || '"NirmaanCRM"'); } catch (e) { /* ignore */ }
+  brandChrome = { name };
+  try {
+    const d = await api('/api/branding');
+    const n = d.data.branding && (d.data.branding.trade_name || d.data.branding.legal_name);
+    if (n) { brandChrome.name = n; try { sessionStorage.setItem('nirmaan.brandname', JSON.stringify(n)); } catch (e) { /* ignore */ } }
+  } catch (e) { /* roles without branding access keep the default */ }
+  return brandChrome;
+}
+
+function paintChrome() {
+  const name = (brandChrome && brandChrome.name) || 'NirmaanCRM';
+  const initial = esc(name.trim().charAt(0).toUpperCase() || 'N');
+  for (const id of ['side-name', 'topbar-trade-name']) { const el = $(id); if (el) el.textContent = name; }
+  for (const id of ['side-logo', 'top-logo']) {
+    const el = $(id); if (!el) continue;
+    el.innerHTML = `${initial}<img src="/brand/logo_icon.png" alt="" hidden>`;
+    const img = el.querySelector('img');
+    img.addEventListener('load', () => { el.textContent = ''; img.hidden = false; el.appendChild(img); });
+    img.addEventListener('error', () => img.remove());
+  }
+}
+
 function renderApp() {
   const main = $('app-main');
   if (!currentUser) { renderLogin(); return; }
-  const tradeName = $('topbar-trade-name');
-  if (tradeName) tradeName.textContent = currentUser.name;
+  document.body.classList.remove('guest');
+  paintChrome();
+  // desktop sidebar
+  const side = $('side-nav');
+  if (side) {
+    side.innerHTML = sidebarItems(currentUser.role).map(([group, items]) => `${group ? `<div class="side-group">${esc(t(group))}</div>` : ''}${items.map((i) => `<a class="side-link${i.route === currentPage ? ' active' : ''}" href="#" data-route="${i.route}">${icon(i.icon)}<span>${esc(t(i.label))}</span></a>`).join('')}`).join('')
+      + `<div class="side-group">${esc(t('Help'))}</div><a class="side-link${currentPage === 'help' ? ' active' : ''}" href="#" data-route="help">${icon('help')}<span>${esc(t('Help'))}</span></a>`;
+    side.querySelectorAll('[data-route]').forEach((a) => { a.onclick = (e) => { e.preventDefault(); navigate(a.dataset.route); }; });
+  }
+  $('side-foot').textContent = `${currentUser.name} · ${currentUser.role}`;
+  // phone bottom tabs
   const nav = $('bottom-nav');
   if (nav) {
     nav.innerHTML = '';
@@ -196,11 +277,16 @@ function renderApp() {
       const a = document.createElement('a');
       a.className = 'nav-item' + (item.route === currentPage ? ' active' : '');
       a.href = '#';
-      a.textContent = t(item.label);
+      a.innerHTML = `${icon(item.icon)}<span>${esc(t(item.label))}</span>`;
       a.onclick = (e) => { e.preventDefault(); navigate(item.route); };
       nav.appendChild(a);
     });
   }
+  // top bar
+  $('avatar').textContent = (currentUser.name || '?').split(/\s+/).map((w) => w[0]).slice(0, 2).join('').toUpperCase();
+  $('um-name').textContent = currentUser.name; $('um-role').textContent = `${currentUser.role} · ${currentUser.email}`;
+  document.title = `${t(ROUTE_TITLES[currentPage] || (sidebarItems(currentUser.role).flatMap((g) => g[1]).find((i) => i.route === currentPage) || {}).label || 'NirmaanCRM')} — NirmaanCRM`;
+  window.scrollTo(0, 0);
   (PAGES[currentPage] || renderHome)(main);
 }
 
@@ -209,6 +295,7 @@ async function loadUser() {
     const data = await api('/api/auth/me');
     currentUser = data.data.user;
     if (data.data.must_change_password) { renderChangePassword($('app-main'), true); return; }
+    await loadBrandChrome();
     renderApp();
     refreshBell();
     syncQueue();
@@ -229,9 +316,9 @@ async function refreshBell() {
 }
 
 function renderChangePassword(main, forced) {
-  $('bottom-nav').innerHTML = '';
+  if (forced) document.body.classList.add('guest');
   main.innerHTML = `
-    <div class="login-card" style="max-width:460px;margin:24px auto;padding:24px;">
+    <div class="login-card" style="${forced ? '' : 'margin-top:0;box-shadow:var(--shadow)'}">
       <h1>${forced ? 'Choose your own password' : 'Change password'}</h1>
       <p class="help">${forced ? 'You are using a temporary password. ' : ''}Use at least 10 characters.</p>
       <div class="field"><label>${forced ? 'Temporary password' : 'Current password'}</label><input type="password" id="pw-cur" autocomplete="current-password"></div>
@@ -239,7 +326,9 @@ function renderChangePassword(main, forced) {
       <div class="field"><label>New password again</label><input type="password" id="pw-new2" autocomplete="new-password"></div>
       <div class="error" id="pw-err" style="display:none"></div>
       <button class="btn btn-primary btn-full" id="pw-save">Save password</button>
+      ${forced ? '<p class="help" style="text-align:center"><a href="#" id="pw-out">Log out</a></p>' : ''}
     </div>`;
+  if ($('pw-out')) $('pw-out').onclick = (e) => { e.preventDefault(); logout(); };
   $('pw-save').onclick = async () => {
     const er = $('pw-err'); er.style.display = 'none';
     const cur = $('pw-cur').value, n1 = $('pw-new').value, n2 = $('pw-new2').value;
@@ -255,6 +344,24 @@ function renderChangePassword(main, forced) {
 }
 
 // ---------- Home / More / Help ----------
+function renderDashboard(main) {
+  const d = new Date().toLocaleDateString('en-IN', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Asia/Kolkata' });
+  const tile = (id, label, ico, tone, route, sub) => `<div class="dashboard-tile tone-${tone}" data-go="${route}" tabindex="0" role="link"><span class="ico">${icon(ico, 26)}</span><div class="tile-label">${label}</div><div class="tile-value" id="val-${id}">…</div>${sub ? `<div class="tile-sub" id="sub-${id}"></div>` : ''}</div>`;
+  main.innerHTML = `<div class="hero"><div><h1>${esc(t('Hello'))}, ${esc(currentUser.name.split(' ')[0])}</h1><div class="date">${esc(d)}</div></div>
+      <div class="row-btns" style="margin:0"><button class="btn btn-primary" data-go="site">${icon('site', 18)} Site report</button><button class="btn" data-go="sales">${icon('sales', 18)} New lead</button></div></div>
+    <div class="dashboard-grid" id="dashboard-grid">
+      ${tile('money-in', 'Money in — this month', 'money', 'good', 'sales')}
+      ${tile('overdue', 'Overdue receivables', 'alert', 'bad', 'sales', 1)}
+      ${tile('bills', 'Bills due in 7 days', 'clipboard', 'warn', 'procurement', 1)}
+      ${tile('pos', 'POs waiting for approval', 'procurement', 'warn', 'procurement')}
+      ${tile('dpr', 'Site reports yesterday', 'site', 'info', 'site')}
+      ${tile('snags', 'Open high-severity snags', 'alert', 'bad', 'site')}
+      ${tile('leads', 'New leads this week', 'userplus', 'info', 'sales')}
+    </div>`;
+  main.querySelectorAll('[data-go]').forEach((el) => { el.onclick = () => navigate(el.dataset.go); el.onkeydown = (e) => { if (e.key === 'Enter') navigate(el.dataset.go); }; });
+  loadDashboard();
+}
+
 function renderHome(main) {
   if (currentUser.role === 'owner') { renderDashboard(main); return; }
   const tiles = {
@@ -272,16 +379,11 @@ function renderHome(main) {
 
 function renderMore(main) {
   const o = currentUser.role === 'owner';
-  const items = [
-    ['Documents', 'documents', true], ['Notifications', 'notifications', true],
-    ['Users & access', 'users', o], ['Audit log', 'audit', o || currentUser.role === 'pm'],
-    ['Branding & letterhead', 'branding', ['owner', 'pm', 'sales', 'accounts'].includes(currentUser.role)],
-    ['Shared links', 'sharelinks', ['owner', 'pm'].includes(currentUser.role)],
-    ['Storage (Google Drive)', 'storage', o], ['Email settings', 'email', o], ['Settings', 'settings', o],
-    ['Help', 'help', true], ['Change password', 'password', true],
-  ].filter((x) => x[2]);
+  const bottom = getBottomNavItems(currentUser.role).map((i) => i.route);
+  const items = [...sidebarItems(currentUser.role).flatMap((g) => g[1]).filter((i) => !bottom.includes(i.route) && i.route !== 'home' && i.route !== 'dashboard'),
+    { label: 'Notifications', route: 'notifications', icon: 'bell' }, { label: 'Help', route: 'help', icon: 'help' }, { label: 'Change password', route: 'password', icon: 'password' }];
   const canCsv = ['owner', 'pm', 'accounts', 'viewer'].includes(currentUser.role);
-  main.innerHTML = `<h1>${esc(t('More'))}</h1>${items.map(([l, r]) => `<button class="btn btn-full" style="margin-bottom:10px;text-align:left" data-go="${r}">${esc(t(l))}</button>`).join('')}
+  main.innerHTML = `<h1>${esc(t('More'))}</h1><div class="grid">${items.map((i) => `<button class="btn btn-full" style="justify-content:flex-start;gap:12px" data-go="${i.route}">${icon(i.icon, 20)}${esc(t(i.label))}</button>`).join('')}</div>
     ${canCsv ? `<div class="card"><b>Download for Excel</b><div class="row-btns"><a class="btn small" href="/api/export/receipts">Receipts</a><a class="btn small" href="/api/export/receivables">Receivables</a><a class="btn small" href="/api/export/purchases">Purchases</a><a class="btn small" href="/api/export/leads">Leads</a>${o ? '<a class="btn small" href="/api/export-all">Everything (backup)</a>' : ''}</div></div>` : ''}
     <div class="field"><label>${esc(t('Language'))}</label><select id="more-lang"><option value="en">English</option><option value="hi">हिन्दी</option><option value="mr">मराठी</option></select></div>
     <button class="btn btn-full" style="margin-top:12px;color:#dc2626" id="more-logout">${esc(t('Log out'))}</button>`;
@@ -946,14 +1048,11 @@ async function loadSales() {
 
 // ---------- Init extras ----------
 document.addEventListener('DOMContentLoaded', () => {
-  const bell = $('notify-count');
-  if (bell) { bell.style.cursor = 'pointer'; bell.onclick = () => navigate('notifications'); }
-  const bellBtn = document.querySelector('.top-right .icon-btn[title="Notifications"]');
-  if (bellBtn) bellBtn.onclick = () => navigate('notifications');
-  const helpBtn = document.querySelector('.top-right .icon-btn[title="Help"]');
-  if (helpBtn) helpBtn.onclick = () => navigate('help');
-  const logo = document.querySelector('img.logo');
-  if (logo) logo.addEventListener('error', () => { logo.style.display = 'none'; });
+  $('bell-icon').innerHTML = icon('bell');
+  $('btn-help').innerHTML = icon('help');
+  $('btn-bell').onclick = () => navigate('notifications');
+  $('btn-help').onclick = () => navigate('help');
+  $('menu-password').onclick = () => { $('user-menu').style.display = 'none'; navigate('password'); };
 });
 
 if ('serviceWorker' in navigator) {
@@ -962,10 +1061,13 @@ if ('serviceWorker' in navigator) {
 
 // ---------- Login (password or emailed code) ----------
 function renderLogin() {
-  $('bottom-nav').innerHTML = '';
+  document.body.classList.add('guest');
+  document.title = 'Sign in — NirmaanCRM';
   $('app-main').innerHTML = `
-    <div class="login-card" style="max-width:420px;margin:40px auto;padding:24px;background:#f9fafb;border-radius:12px;">
-      <h1>Sign in</h1>
+    <div class="login-card">
+      <div class="brand"><div class="logo-mark">N</div></div>
+      <h1>Welcome back</h1>
+      <p class="sub">Sign in to NirmaanCRM</p>
       <div class="field"><label for="login-email">Email</label><input type="email" id="login-email" autocomplete="username" placeholder="you@yourcompany.in"></div>
       <div id="login-pw-block">
         <div class="field"><label for="login-password">Password</label><div class="password-input"><input type="password" id="login-password" autocomplete="current-password"><button type="button" id="login-toggle">Show</button></div></div>
@@ -976,7 +1078,7 @@ function renderLogin() {
         <button class="btn btn-full" id="otp-send">Email me a login code instead</button>
         <div id="otp-enter" style="display:none;margin-top:12px"><div class="field"><label for="otp-code">6-digit code from your email</label><input id="otp-code" inputmode="numeric" maxlength="6" autocomplete="one-time-code"></div><button class="btn btn-primary btn-full" id="otp-verify">Sign in with code</button></div>
       </div>
-      <p class="help" style="margin-top:16px">First time? Use the temporary password you were given. You will then choose your own.</p>
+      <p class="help" style="text-align:center;margin-top:18px">First time? Use the temporary password you were given. You will then choose your own.</p>
     </div>`;
   const err = (m) => { const e = $('login-error'); e.textContent = m; e.style.display = 'block'; };
   $('login-toggle').onclick = () => { const i = $('login-password'); i.type = i.type === 'password' ? 'text' : 'password'; };

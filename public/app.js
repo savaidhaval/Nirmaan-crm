@@ -124,45 +124,6 @@ async function disconnectGDrive() {
 }
 
 // ---------- Update routing to include storage page ----------
-function renderDashboard(main) {
-  main.innerHTML = `
-    <h1>Owner Dashboard</h1>
-    <div class="dashboard-grid" id="dashboard-grid">
-      <div class="dashboard-tile" id="tile-money-in">
-        <div class="tile-label">Money In — This Month</div>
-        <div class="tile-value" id="val-money-in">₹0</div>
-      </div>
-      <div class="dashboard-tile" id="tile-overdue">
-        <div class="tile-label">Overdue Receivables</div>
-        <div class="tile-value" id="val-overdue">₹0</div>
-        <div class="tile-sub" id="sub-overdue">0 customers</div>
-      </div>
-      <div class="dashboard-tile" id="tile-bills">
-        <div class="tile-label">Bills Due ≤7 Days</div>
-        <div class="tile-value" id="val-bills">₹0</div>
-        <div class="tile-sub" id="sub-bills">0 bills</div>
-      </div>
-      <div class="dashboard-tile" id="tile-pos">
-        <div class="tile-label">POs Pending Your Approval</div>
-        <div class="tile-value" id="val-pos">0</div>
-      </div>
-      <div class="dashboard-tile" id="tile-dpr">
-        <div class="tile-label">Reports Filed Yesterday</div>
-        <div class="tile-value" id="val-dpr">0</div>
-      </div>
-      <div class="dashboard-tile" id="tile-snags">
-        <div class="tile-label">Open High Snags</div>
-        <div class="tile-value" id="val-snags">0</div>
-      </div>
-      <div class="dashboard-tile" id="tile-leads">
-        <div class="tile-label">New Leads This Week</div>
-        <div class="tile-value" id="val-leads">0</div>
-      </div>
-    </div>
-  `;
-  loadDashboard();
-}
-
 async function loadDashboard() {
   try {
     const data = await api('/api/dashboard');
