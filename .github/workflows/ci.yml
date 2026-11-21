@@ -18,3 +18,33 @@ jobs:
         run: npx wrangler deploy --dry-run --env="" --outdir /tmp/prod
       - name: Bundle staging
         run: npx wrangler deploy --dry-run --env=staging --outdir /tmp/staging
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - run: npm install --no-audit --no-fund
+      - name: Start a local Worker with a throw-away database
+        run: |
+          printf 'SESSION_SECRET=ci-session-secret-0123456789\nAPP_KEY=ci-app-key-0123456789abcdef0123456789\nOWNER_EMAIL=owner@test.local\nOWNER_PASSWORD=ChangeMe12345\nWEBHOOK_SECRET=testwebhooksecret\n' > .dev.vars
+          npx wrangler d1 migrations apply nirmaan-db --local
+          (npx wrangler dev --port 8787 > dev.log 2>&1 &)
+          for i in $(seq 1 40); do curl -sf localhost:8787/api/health && break; sleep 2; done
+          curl -sf -c jar -H 'X-NirmaanCRM: 1' -H 'Content-Type: application/json' -d '{"email":"owner@test.local","password":"ChangeMe12345"}' localhost:8787/api/auth/login > /dev/null
+          curl -sf -b jar -H 'X-NirmaanCRM: 1' -H 'Content-Type: application/json' -d '{"currentPassword":"ChangeMe12345","newPassword":"CiStrongPass-12345"}' localhost:8787/api/auth/change-password > /dev/null
+      - name: Run test suites
+        env:
+          BASE: http://localhost:8787
+          OWNER_EMAIL: owner@test.local
+          OWNER_PASSWORD: CiStrongPass-12345
+        run: |
+          set -e
+          for t in security features multibrand sales2 audit reports; do
+            echo "== $t"; node tests/$t.mjs
+            # the login limiter counts failures only, but clear any leftovers between suites
+            npx wrangler d1 execute nirmaan-db --local --command "DELETE FROM rate_limits" > /dev/null
+          done
+      - name: Worker log on failure
+        if: failure()
+        run: tail -60 dev.log

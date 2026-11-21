@@ -5,7 +5,7 @@ const ok = (n, c, x = '') => { c ? pass++ : fail++; console.log(`${c ? 'PASS' : 
 class C { constructor() { this.cookie = ''; }
   async call(m, p, b) { const h = { 'X-NirmaanCRM': '1' }; if (this.cookie) h.cookie = this.cookie; let body = b; if (b) { h['Content-Type'] = 'application/json'; body = JSON.stringify(b); }
     const r = await fetch(BASE + p, { method: m, headers: h, body, redirect: 'manual' }); const sc = r.headers.get('set-cookie'); if (sc) this.cookie = sc.split(';')[0]; let d = null; try { d = await r.json(); } catch (e) { /* */ } return { status: r.status, data: d && d.data, err: d && d.error }; } }
-const run = Date.now().toString(36); const digits = run.replace(/\D/g, '').padEnd(8, '3').slice(0, 8);
+const run = Date.now().toString(36); const digits = String(Date.now()).slice(-8);
 const o = new C(); await o.call('POST', '/api/auth/login', { email: process.env.OWNER_EMAIL, password: process.env.OWNER_PASSWORD });
 let seq = 0;
 const mk = async (role, projects) => { const email = `zr-${role}-${++seq}-${run}@test.local`; const r = await o.call('POST', '/api/users', { name: 'zr ' + role, email, role, projects }); const c = new C(); await c.call('POST', '/api/auth/login', { email, password: r.data.temporaryPassword }); await c.call('POST', '/api/auth/change-password', { currentPassword: r.data.temporaryPassword, newPassword: 'ZrStrongPass-' + run }); return c; };

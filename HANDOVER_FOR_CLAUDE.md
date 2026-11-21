@@ -102,12 +102,16 @@ letter styles generated/bands/image, "How your letters will look", demand-letter
 public privacy/terms pages, printable role cheat sheets (`/cheatsheets`), docs/UAT.md, docs/RESTORE.md + `scripts/restore.mjs` (verified),
 `tests/security.mjs` (50 checks) and `tests/features.mjs` (28 checks). Fixed: duplicate `visibleProjectIds` that ignored role rules.
 
+## Audit pass (see docs/AUDIT.md)
+Atomic holds/bookings, discount approval limits, audited price/plan changes, lead protection and state machine, receipt integrity
+(numbering, cash limit, reversal), refunds workflow, cost sheet, signed lead webhook, append-only audit log, KYC isolation,
+hashed sessions, magic-byte uploads, sanitized errors; stacking plan + cash-flow/escrow, aging, marketing/CP ROI, velocity/discount
+reports. New secret (optional): `WEBHOOK_SECRET`. New migration `0011_audit_hardening.sql` (CI deploy applies it).
+
 ## Still to do
-1. Run docs/UAT.md with your real site engineer, and `node tests/security.mjs` against staging.
-2. Hindi/Marathi wording should be reviewed by a native speaker.
-3. Not built: PDF attachment on demand-letter emails (the letter is in the email body; print → Save as PDF for a file), browser ZIP "free up space",
-   customer-portal, GST returns. Publish the Google OAuth app so Drive does not expire every 7 days.
-4. Deploy: `git pull`, `npx wrangler deploy`. No new migrations.
+1. Items marked **Open** in docs/AUDIT.md (Agreement-for-Sale template, member corpus module, portal adapters, WhatsApp API, OTP visit tagging, TOTP MFA, late-interest accrual).
+2. Run docs/UAT.md with real staff; send me what feels wrong.
+3. Email setup (kept pending by the Owner).
 
 ## How to Run Locally
 ```powershell
