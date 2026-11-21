@@ -25,17 +25,49 @@ function words(n) {
 }
 const rupeeWords = (paise) => `Rupees ${words(Math.floor(paise / 100))}${paise % 100 ? ' and ' + words(paise % 100) + ' Paise' : ''} Only`;
 
-function letterhead(b) {
-  const pre = b.letterhead_mode && b.letterhead_mode !== 'generated';
-  const top = (Number(b.margin_top_mm) || 20), side = (Number(b.margin_side_mm) || 20), bottom = (Number(b.margin_bottom_mm) || 20);
-  const col = /^#[0-9a-fA-F]{3,8}$/.test(b.colour_primary || '') ? b.colour_primary : '#1d4ed8';
-  const head = pre ? '' : `<div class="lh" style="border-bottom:3px solid ${col}"><h1 style="color:${col}">${e(b.trade_name || b.legal_name || 'Company name')}</h1>
-    ${b.tagline ? `<div class="tag">${e(b.tagline)}</div>` : ''}<div class="meta">${e(b.legal_name)}${b.address ? ' · ' + e(b.address) : ''}${b.phone ? ' · ' + e(b.phone) : ''}${b.email ? ' · ' + e(b.email) : ''}${b.gstin ? ' · GSTIN ' + e(b.gstin) : ''}${b.promoter_rera_ref ? ' · RERA ' + e(b.promoter_rera_ref) : ''}</div></div>`;
-  return { head, pad: `padding:${pre ? top : 14}mm ${side}mm ${bottom + 10}mm ${side}mm`, foot: b.footer_text ? `<div class="foot">${e(b.footer_text)}</div>` : '' };
+// Pictures come from signed-in-only endpoints (never public). Returns an object URL or null.
+async function asset(kind) {
+  try {
+    const r = await fetch('/api/print/asset/' + kind, { credentials: 'include' });
+    if (!r.ok) return null;
+    return URL.createObjectURL(await r.blob());
+  } catch (err) { return null; }
 }
 
-function render(d) {
-  const b = d.brand; const lh = letterhead(b);
+function imgReady(img) { return new Promise((res) => { if (img.complete) res(); else { img.onload = res; img.onerror = res; } }); }
+
+async function letterhead(b, draft) {
+  const mode = b.letterhead_mode || 'generated';
+  const has = (k) => (b.pictures || []).includes(k);
+  const top = Number(b.margin_top_mm) || 20, side = Number(b.margin_side_mm) || 20, bottom = Number(b.margin_bottom_mm) || 20;
+  const col = /^#[0-9a-fA-F]{3,8}$/.test(b.colour_primary || '') ? b.colour_primary : '#1d4ed8';
+  const pics = {};
+  const want = [];
+  if (mode === 'image' && has('letterhead')) want.push('letterhead');
+  if (mode === 'bands') { if (has('header')) want.push('header'); if (has('footer')) want.push('footer'); }
+  if (mode === 'generated' && has('logo')) want.push('logo');
+  if (!draft) { if (has('signature')) want.push('signature'); if (has('stamp')) want.push('stamp'); }
+  await Promise.all(want.map(async (k) => { pics[k] = await asset(k); }));
+  let head = '', foot = '', bg = '', pad;
+  if (mode === 'image' && pics.letterhead) {
+    bg = `<img class="bg" src="${pics.letterhead}" alt="">`;
+    pad = `padding:${top}mm ${side}mm ${bottom}mm ${side}mm`;
+  } else if (mode === 'bands') {
+    head = pics.header ? `<img class="band" src="${pics.header}" alt="">` : '';
+    foot = pics.footer ? `<img class="band bottom" src="${pics.footer}" alt="">` : (b.footer_text ? `<div class="foot">${e(b.footer_text)}</div>` : '');
+    pad = `padding:0 ${side}mm ${bottom + 12}mm ${side}mm`;
+    head = head ? head + `<div style="height:8mm"></div>` : `<div style="height:${top}mm"></div>`;
+  } else {
+    head = `<div class="lh" style="border-bottom:3px solid ${col}">${pics.logo ? `<img src="${pics.logo}" alt="" style="height:16mm;float:right">` : ''}<h1 style="color:${col}">${e(b.trade_name || b.legal_name || 'Company name')}</h1>
+      ${b.tagline ? `<div class="tag">${e(b.tagline)}</div>` : ''}<div class="meta">${e(b.legal_name)}${b.address ? ' · ' + e(b.address) : ''}${b.phone ? ' · ' + e(b.phone) : ''}${b.email ? ' · ' + e(b.email) : ''}${b.gstin ? ' · GSTIN ' + e(b.gstin) : ''}${b.promoter_rera_ref ? ' · RERA ' + e(b.promoter_rera_ref) : ''}</div></div>`;
+    foot = b.footer_text ? `<div class="foot">${e(b.footer_text)}</div>` : '';
+    pad = `padding:14mm ${side}mm ${bottom + 10}mm ${side}mm`;
+  }
+  return { head, foot, bg, pad, pics };
+}
+
+async function render(d) {
+  const b = d.brand; const lh = await letterhead(b, d.draft);
   let body = '';
   if (d.kind === 'po') {
     const p = d.po;
@@ -60,7 +92,7 @@ function render(d) {
       <tr><th>Amount due</th><th class="r">${inr(total - (x.settled_paise || 0))}</th></tr></table>
       <div class="words">${rupeeWords(total - (x.settled_paise || 0))}</div>
       ${b.bank_name ? `<p><b>Pay to:</b> ${e(b.bank_account_name)}, ${e(b.bank_name)}${b.bank_branch ? ', ' + e(b.bank_branch) : ''}, IFSC ${e(b.bank_ifsc)}. Ask our office for the account number.</p>` : ''}`;
-  } else {
+  } else if (d.kind === 'receipt') {
     const r = d.receipt;
     body = `<div class="doc-title">Receipt</div>
       <div class="two"><div><b>Received from:</b> ${e(r.customer_name)}<br><b>Flat:</b> ${e((r.wing ? r.wing + '-' : '') + r.unit_no)}, ${e(r.project_name)}</div><div style="text-align:right"><b>Receipt #</b> ${e(r.id)}<br><b>Date:</b> ${e(r.received_on)}</div></div>
@@ -69,13 +101,25 @@ function render(d) {
       ${r.tds_paise ? `<tr><td colspan="2">TDS deducted by customer</td><td class="r">${inr(r.tds_paise)}</td></tr>` : ''}</table>
       <div class="words">${rupeeWords(r.amount_paise)}</div>
       <p style="font-size:10pt;color:#555">Subject to realisation of cheque, if paid by cheque.</p>`;
+  } else {
+    // sample: shows margins, a ruler and a dummy letter so artwork can be checked on real paper
+    body = `<div class="doc-title">Sample letter</div><p>Dear Sir / Madam,</p><p>This page shows how your letters will look with the current style and margins. Check that the text stays clear of your logo, header and footer artwork when printed on A4.</p>
+      <table><tr><th>Item</th><th class="r">Amount</th></tr><tr><td>Sample line</td><td class="r">${inr(12345600)}</td></tr></table>
+      <div class="words">${rupeeWords(12345600)}</div>
+      <div class="ruler"><span>0</span><span>5 cm</span><span>10 cm</span><span>15 cm</span><span>20 cm</span></div>
+      <p style="font-size:10pt;color:#555">Margins: top ${e(b.margin_top_mm || 45)} mm · bottom ${e(b.margin_bottom_mm || 30)} mm · sides ${e(b.margin_side_mm || 20)} mm. Style: ${e(b.letterhead_mode || 'generated')}.</p>`;
   }
-  const sign = d.draft ? '' : `<div class="sign">For ${e(b.legal_name || b.trade_name)}<br><br><br>${e(b.signatory_name || '')}<br>${e(b.signatory_title || '')}</div>`;
+  // signature and stamp appear only on issued documents (never on drafts)
+  const sign = d.draft ? '' : `<div class="sign">For ${e(b.legal_name || b.trade_name)}<div class="sigrow">${lh.pics.signature ? `<img src="${lh.pics.signature}" alt="Signature" class="sig">` : '<br><br><br>'}${lh.pics.stamp ? `<img src="${lh.pics.stamp}" alt="Stamp" class="stamp">` : ''}</div>${e(b.signatory_name || '')}<br>${e(b.signatory_title || '')}</div>`;
   sheet.style.cssText = lh.pad;
-  sheet.innerHTML = `${d.draft ? '<div class="watermark">DRAFT</div>' : ''}${lh.head}${body}${sign}${lh.foot}`;
+  sheet.innerHTML = `${lh.bg}${d.draft ? '<div class="watermark">DRAFT</div>' : ''}${lh.head}<div class="body">${body}</div>${sign}${lh.foot}`;
+  await Promise.all(Array.from(sheet.querySelectorAll('img')).map(imgReady));
   document.title = `${d.kind}-${id}`;
 }
 
 document.getElementById('btn-print').addEventListener('click', () => window.print());
 document.getElementById('btn-back').addEventListener('click', () => window.close());
-api(`/api/print/${kind}/${id}`).then((r) => render(r.data)).catch((err) => { sheet.textContent = err.message; });
+const load = kind === 'sample'
+  ? api('/api/branding').then((r) => ({ kind: 'sample', draft: true, brand: r.data.branding || {} }))
+  : api(`/api/print/${kind}/${id}`).then((r) => r.data);
+load.then(render).catch((err) => { sheet.textContent = err.message; });

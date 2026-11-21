@@ -1,6 +1,9 @@
 # Changelog
 
 ## Unreleased
+- New: brochure library, site photo queue, snag workflow, People/HR, project archive, encrypted PAN/bank, signature/stamp/letterhead styles, demand-letter email, owner checklist, Hindi/Marathi everywhere, privacy/terms pages, cheat sheets, UAT + restore drill, automated security/feature tests.
+- Fix: `visibleProjectIds` duplicated in index.js ignored the "only site is limited" rule and archived projects.
+- Fix: Drive connect (PKCE verifier, callback binds, hidden Connect button).
 - Fix: cron triggers never ran (`scheduled` was not on the default export). Failed logins only count towards the lockout.
 - New: letterhead print views, RFQ quotes, GRN, vendor bills/ledger, offline queue, Hindi/Marathi site flow, CSV + JSON exports, nightly Drive backup, Drive upload/download routing (untested against Google).
 - Fix: blank page caused by `const API_BASE` declared twice; `api()` now JSON-encodes object bodies.

@@ -93,14 +93,21 @@ Letterhead print views (`/print.html?k=po|demand|receipt&id=`, DRAFT watermark u
 Hindi + Marathi for the site flow, CSV exports + owner JSON export, nightly Drive backup, Drive routing for uploads/downloads,
 **cron triggers now actually fire** (`scheduled` was never exported before), login limiter counts only failures.
 
+## Third pass (all earlier "not built" items)
+Brochure library with versions + "Older versions" (internal files hidden from sales), site photo queue (IndexedDB, retried, idempotent),
+snag workflow (open → fixed → verified), People/HR module (staff, positions, candidates, hired → staff), Hindi/Marathi on every screen
+(dictionary translator; branding/settings forms only partly translated), project archive/restore (+ Drive folder to `_archive`),
+branding with encrypted PAN/bank account, signature/stamp/letterhead images (signed-in only, never public; shown only on issued docs),
+letter styles generated/bands/image, "How your letters will look", demand-letter email, owner "Finish setting up" checklist,
+public privacy/terms pages, printable role cheat sheets (`/cheatsheets`), docs/UAT.md, docs/RESTORE.md + `scripts/restore.mjs` (verified),
+`tests/security.mjs` (50 checks) and `tests/features.mjs` (28 checks). Fixed: duplicate `visibleProjectIds` that ignored role rules.
+
 ## Still to do
-1. **Needs you:** Google OAuth redirect URI `https://nirmaan-crm.savai-dhaval.workers.dev/api/storage/google/callback`, then More → Storage → Connect.
-   Drive upload / download / nightly backup are written but UNTESTED against real Google. Test with a 20 MB PDF after connecting.
-2. **Needs you:** More → Email settings → SMTP details → Send test. SMTP protocol is tested against a scripted server only.
-3. Not built: site photo queue (IndexedDB), signature/stamp images on printed letters, pre-printed letterhead image modes beyond margins,
-   demand-letter email attachment, brochure library UI + versions, HR/people screens, bulk Hindi/Marathi for non-site screens,
-   Archive-old-project tool, Phase 13 drills (restore drill, negative tests) and role cheat sheets.
-4. Deploy: `npm install`, `npx wrangler deploy`. No new migrations.
+1. Run docs/UAT.md with your real site engineer, and `node tests/security.mjs` against staging.
+2. Hindi/Marathi wording should be reviewed by a native speaker.
+3. Not built: PDF attachment on demand-letter emails (the letter is in the email body; print → Save as PDF for a file), browser ZIP "free up space",
+   customer-portal, GST returns. Publish the Google OAuth app so Drive does not expire every 7 days.
+4. Deploy: `git pull`, `npx wrangler deploy`. No new migrations.
 
 ## How to Run Locally
 ```powershell

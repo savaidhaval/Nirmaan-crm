@@ -191,13 +191,13 @@ function sidebarItems(role) {
   const I = (label, route) => ({ label, route, icon: route });
   const by = {
     owner: [[null, [H]], ['Work', [I('Projects', 'projects'), I('Approvals', 'approvals'), I('Drawings', 'drawings'), I('Site', 'site')]], ['Money', [I('Procurement', 'procurement'), I('Sales', 'sales')]],
-      ['Admin', [I('Documents', 'documents'), I('Users & access', 'users'), I('Branding', 'branding'), I('Shared links', 'sharelinks'), I('Audit log', 'audit')]], ['Setup', [I('Storage', 'storage'), I('Email', 'email'), I('Settings', 'settings')]]],
-    pm: [[null, [H]], ['Work', [I('Projects', 'projects'), I('Approvals', 'approvals'), I('Drawings', 'drawings'), I('Site', 'site')]], ['Money', [I('Procurement', 'procurement'), I('Sales', 'sales')]], ['Admin', [I('Documents', 'documents'), I('Branding', 'branding'), I('Shared links', 'sharelinks'), I('Audit log', 'audit')]]],
+      ['Admin', [I('Documents', 'documents'), I('Brochures', 'brochures'), I('People', 'people'), I('Users & access', 'users'), I('Branding', 'branding'), I('Shared links', 'sharelinks'), I('Audit log', 'audit')]], ['Setup', [I('Storage', 'storage'), I('Email', 'email'), I('Settings', 'settings')]]],
+    pm: [[null, [H]], ['Work', [I('Projects', 'projects'), I('Approvals', 'approvals'), I('Drawings', 'drawings'), I('Site', 'site')]], ['Money', [I('Procurement', 'procurement'), I('Sales', 'sales')]], ['Admin', [I('Documents', 'documents'), I('Brochures', 'brochures'), I('People', 'people'), I('Branding', 'branding'), I('Shared links', 'sharelinks'), I('Audit log', 'audit')]]],
     site: [[null, [H]], ['Work', [I('Drawings', 'drawings'), I('Site', 'site'), I('Procurement', 'procurement')]], ['Admin', [I('Documents', 'documents')]]],
-    sales: [[null, [H]], ['Work', [I('Sales', 'sales')]], ['Admin', [I('Documents', 'documents')]]],
-    accounts: [[null, [H]], ['Money', [I('Sales', 'sales'), I('Procurement', 'procurement')]], ['Admin', [I('Documents', 'documents'), I('Branding', 'branding')]]],
+    sales: [[null, [H]], ['Work', [I('Sales', 'sales'), I('Brochures', 'brochures')]], ['Admin', [I('Documents', 'documents')]]],
+    accounts: [[null, [H]], ['Money', [I('Sales', 'sales'), I('Procurement', 'procurement')]], ['Admin', [I('Documents', 'documents'), I('Brochures', 'brochures'), I('Branding', 'branding')]]],
     purchase: [[null, [H]], ['Work', [I('Procurement', 'procurement'), I('Drawings', 'drawings')]], ['Admin', [I('Documents', 'documents')]]],
-    hr: [[null, [H]]],
+    hr: [[null, [H]], ['Work', [I('People', 'people')]]],
     viewer: [[null, [H]], ['Work', [I('Projects', 'projects'), I('Approvals', 'approvals'), I('Drawings', 'drawings'), I('Site', 'site')]], ['Admin', [I('Documents', 'documents')]]],
   };
   return by[role] || by.viewer;
@@ -216,7 +216,7 @@ function getBottomNavItems(role) {
     sales: [home, I('Sales', 'sales'), more],
     accounts: [home, I('Sales', 'sales'), I('Procurement', 'procurement'), more],
     purchase: [home, I('Procurement', 'procurement'), I('Drawings', 'drawings'), more],
-    hr: [home, more],
+    hr: [home, I('People', 'people'), more],
     viewer: [home, I('Projects', 'projects'), more],
   };
   return maps[role] || maps.viewer;
@@ -225,7 +225,7 @@ function getBottomNavItems(role) {
 const PAGES = {
   home: renderHome, dashboard: renderDashboard, projects: renderProjects, users: renderUsers, documents: renderDocuments,
   settings: renderSettings, approvals: renderApprovals, drawings: renderDrawings, site: renderSite, procurement: renderProcurement,
-  sales: renderSales, storage: renderStorage, branding: renderBranding, sharelinks: renderShareLinks, more: renderMore,
+  sales: renderSales, storage: renderStorage, branding: (m) => renderBranding(m), sharelinks: renderShareLinks, more: renderMore,
   audit: renderAudit, notifications: renderNotifications, help: renderHelp, password: renderChangePassword, email: renderEmailSettings,
 };
 
@@ -370,7 +370,7 @@ function renderHome(main) {
     sales: [['🤝', 'Leads', 'sales']],
     accounts: [['💰', 'Sales & receipts', 'sales'], ['🛒', 'Purchase orders', 'procurement']],
     purchase: [['🛒', 'Procurement', 'procurement'], ['📐', 'Drawings', 'drawings']],
-    hr: [], viewer: [['🏗', 'Projects', 'projects']],
+    hr: [['👥', 'People', 'people']], viewer: [['🏗', 'Projects', 'projects']],
   }[currentUser.role] || [];
   main.innerHTML = `<h1>${esc(t('Hello'))}, ${esc(currentUser.name)}</h1><p class="help">${esc(currentUser.role)}</p>
     <div class="grid">${tiles.map(([i, l, r]) => `<button class="btn btn-full tile-btn" data-go="${r}"><span style="font-size:28px">${i}</span><br>${esc(l)}</button>`).join('') || '<div class="empty-state"><p>Nothing here yet.</p></div>'}</div>`;
@@ -403,6 +403,7 @@ function renderHelp(main) {
     <p><b>GRN</b> — Goods Received Note when material arrives.</p>
     <p><b>CLP</b> — Construction-linked payment plan: demands raised as site milestones complete.</p>
     <p><b>TDS</b> — tax the buyer deducts and deposits; counted towards what they have paid.</p></div>
+    <div class="card"><h3>Print this</h3><p><a href="/cheatsheets" target="_blank" rel="noopener">One-page cheat sheets for each role</a> (print or save as PDF).</p></div>
     <div class="card"><h3>Need a hand?</h3><p>Ask the Owner. Approval dates and RERA deadlines here are reminders only — confirm them with your CA and architect.</p></div>`;
 }
 
