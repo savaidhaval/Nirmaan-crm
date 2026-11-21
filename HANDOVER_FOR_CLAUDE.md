@@ -26,7 +26,7 @@ Set via `wrangler secret put` (never in code):
 - `SESSION_SECRET`
 - `APP_KEY`
 - `OWNER_EMAIL` = `savai.dhaval@gmail.com`
-- `OWNER_PASSWORD` = `12345678` (change at first login per guide)
+- `OWNER_PASSWORD` = (temporary; the Owner is forced to choose their own at first login)
 - `GOOGLE_CLIENT_ID`
 - `GOOGLE_CLIENT_SECRET`
 
@@ -75,40 +75,33 @@ nirmaan-crm/
     └── _header                # (old file, can be deleted)
 ```
 
-## Known Issues / TODO
+## Status (latest session)
+Fixed: blank page (duplicate `API_BASE` declaration in `ui.js`/`app.js`), `api()` not JSON-encoding bodies, broken SQL in
+dashboard / receivables / branding / approvals / documents / share links, uploads and downloads returning garbage (D1 BLOBs),
+`/s/*` and `/brand/*` never reaching the Worker, OTP login that could never verify, SMTP client rewritten (tested against a
+scripted server, not a real mailbox), settings encryption helper, wrangler 4 config.
 
-### 1. Frontend JavaScript Errors (Critical — blocks usage)
-The browser console shows:
-- `Uncaught SyntaxError: Invalid left-hand side in assignment` at `app.js:811` — caused by `btnUserMenu?.onclick = ...` pattern. Fix: replace optional chaining on LHS of assignment with `if (btnUserMenu) { btnUserMenu.onclick = ... }`
-- `logo.png` and `pwa_192.png` return 404 — branding images not yet uploaded (harmless)
+Built: forced password change, users admin (add / edit / reset / deactivate / log out, owner safeguards), Mumbai approvals
+template + event timeline, drawing revisions with atomic supersede (site sees latest IFC only), milestones, PO maker-checker
+approval with PM limit, sales inventory / payment plan / bookings (paise-exact) / receipts / cancellation, milestone.done →
+demands ready, documents upload + links, customer share links with revoke, Email settings screen + OTP login + digest,
+notification bell, CSP (no inline scripts), XSS-safe rendering.
 
-**Status:** The `?.onclick` fix was applied in the last deploy but user reports the page still shows blank. Verify by checking browser console after refresh.
-
-### 2. Google Drive Not Connected
-- Mode G selected but Drive OAuth not yet completed
-- Need to add redirect URI `https://nirmaan-crm.savai-dhaval.workers.dev/api/storage/google/callback` to Google Cloud Console OAuth client
-- Then connect via Settings → Storage in the CRM
-
-### 3. Email Not Configured
-- SMTP credentials not entered (Phase 11)
-- OTP login and 8 AM digest require working SMTP
-- Owner email: `savai.dhaval@gmail.com`
-
-### 4. Placeholder Frontend Pages
-These modules have API backends but stub frontend pages:
-- Approvals, Drawings, Site Execution, Procurement, Sales CRM
-- Currently show "module coming soon" or basic list views
-
-### 5. Files Stored in D1 (Not Google Drive)
-- Current file uploads go to D1 `file_blobs` table
-- Google Drive driver (`core/gdrive.js`) is built but not yet connected
-- Once Drive is connected, new uploads should route to Drive
+## Still to do
+1. **Google Drive** — needs your OAuth client: add redirect URI `https://nirmaan-crm.savai-dhaval.workers.dev/api/storage/google/callback`,
+   then Settings → Storage → Connect. Upload/download routing to Drive is NOT wired yet; files go to the database (1.5 MB cap).
+2. **Email** — More → Email settings: enter SMTP (465/SSL), Save, "Send test email". OTP login switches on after a successful test.
+3. Not built yet: offline DPR queue, RFQ quote comparison, GRN + bills, print views on letterhead (PO / demand letter / receipt),
+   Hindi/Marathi dictionaries, reports CSV export, nightly backup job, people/HR module screens, Phase 13 drills.
+4. Deploy: `npm install` (wrangler 4), `npx wrangler deploy`. No new migrations in this session.
 
 ## How to Run Locally
 ```powershell
 cd D:\Opencode\nirmaan-crm
 npm install --save-dev wrangler
 npx wrangler login
+copy .dev.vars.example .dev.vars   # then edit
+npx wrangler d1 migrations apply nirmaan-db --local
 npx wrangler dev
 ```
 
@@ -125,7 +118,7 @@ npx wrangler d1 migrations apply nirmaan-db-staging --remote --env staging
 
 ## Owner Login Credentials
 - **Email:** `savai.dhaval@gmail.com`
-- **Password:** `12345678` (must change at first login)
+- **Password:** the temporary `OWNER_PASSWORD` secret (forced change at first login)
 
 ## Next Steps for Claude
 1. Create GitHub repo at `https://github.com/savaidhaval/Nirmaan-crm` (user will do this)

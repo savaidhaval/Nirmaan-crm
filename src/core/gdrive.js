@@ -1,3 +1,4 @@
+import { appKeyBytes } from './settings.js';
 // core/gdrive.js — Google Drive integration (§3.4)
 // Plain fetch, no Google library. Scope: drive.file only.
 
@@ -36,7 +37,7 @@ async function sha256(bytes) {
 
 // AES-GCM encrypt/decrypt using APP_KEY (same approach as settings.js)
 async function appKeyRaw(env) {
-  return base64urlDecode(env.APP_KEY);
+  return appKeyBytes(env.APP_KEY);
 }
 
 async function encryptValue(env, plaintext) {

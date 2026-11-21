@@ -3,11 +3,12 @@
 import { Router } from './core/router.js';
 import {
   getCurrentUser, loginPassword, logout, ensureBootstrapOwner,
-  setSessionCookie, clearSessionCookie, createOtpCode, verifyOtpCode, createSession,
+  setSessionCookie, clearSessionCookie, createOtpCode, verifyOtpCode, createSession, checkRateLimit,
 } from './core/auth.js';
 import { userCan } from './core/permissions.js';
+import { getSetting, setSetting, appKeyBytes } from './core/settings.js';
 import { query } from './core/db.js';
-import { sendMail, retryFailedEmails, sendDigest } from './core/mail.js';
+import { sendMail, retryFailedEmails, sendDigest, notifyMissingDprs, getEmailConfig, esc as escHtml } from './core/mail.js';
 import * as gdrive from './core/gdrive.js';
 
 const router = new Router();
@@ -24,15 +25,20 @@ function json(data, status = 200) {
   return Response.json(data, { status });
 }
 
-function requireAuth(user) {
-  if (!user) throw new Error('Please log in.');
-  if (!user.active || user.deactivated_at) throw new Error('Account deactivated.');
-  return user;
+// Returns an error Response when the user may not proceed, else null.
+function authFailure(user, allowMustChange = false) {
+  if (!user) return json({ ok: false, error: 'Please log in.' }, 401);
+  if (!user.active || user.deactivated_at) return json({ ok: false, error: 'Account deactivated.' }, 403);
+  if (user.must_change_password && !allowMustChange) {
+    return json({ ok: false, error: 'Please choose your own password first.', code: 'must_change_password' }, 403);
+  }
+  return null;
 }
 
 async function withAuth(req, env, module, action, handler, requireHeader = true) {
   const user = await getCurrentUser(env, req.headers.get('cookie'));
-  requireAuth(user);
+  const fail = authFailure(user);
+  if (fail) return fail;
   if (!userCan(user, module, action)) {
     return json({ ok: false, error: 'Not allowed.' }, 403);
   }
@@ -49,15 +55,6 @@ async function withAuth(req, env, module, action, handler, requireHeader = true)
 // ---------- Health (public) ----------
 router.get('/api/health', async (req, env) => {
   return json({ ok: true, env: env.ENVIRONMENT || 'production' });
-});
-
-// ---------- Debug: test permissions ----------
-router.get('/api/debug/perm', async (req, env) => {
-  const user = await getCurrentUser(env, req.headers.get('cookie'));
-  if (!user) return json({ ok: false, error: 'Not logged in' }, 401);
-  const canProjects = userCan(user, 'projects', 'V');
-  const canUsers = userCan(user, 'users_settings', 'V');
-  return json({ ok: true, role: user.role, canProjects, canUsers });
 });
 
 // ---------- Auth routes ----------
@@ -77,7 +74,7 @@ router.post('/api/auth/login', async (req, env) => {
     setSessionCookie(res, session.tokenHash, session.expiresAt);
     return res;
   } catch (e) {
-    return json({ ok: false, error: 'login: ' + e.message }, 500);
+    return json({ ok: false, error: e.message }, /Too many/.test(e.message) ? 429 : 401);
   }
 });
 
@@ -99,6 +96,8 @@ router.get('/api/auth/me', async (req, env) => {
 router.post('/api/auth/change-password', async (req, env) => {
   const user = await getCurrentUser(env, req.headers.get('cookie'));
   if (!user) return json({ ok: false, error: 'Please log in.' }, 401);
+  if (req.headers.get('X-NirmaanCRM') !== '1') return json({ ok: false, error: 'Invalid request.' }, 403);
+  if (!user.active || user.deactivated_at) return json({ ok: false, error: 'Account deactivated.' }, 403);
   const { currentPassword, newPassword } = await req.json();
   if (!newPassword || newPassword.length < 10) {
     return json({ ok: false, error: 'New password must be at least 10 characters.' }, 400);
@@ -217,8 +216,7 @@ router.post('/api/users', async (req, env) => {
       return json({ ok: false, error: 'Name, email, and role are required.' }, 400);
     }
     if (role === 'owner') {
-      const allowSecond = await env.DB.prepare("SELECT value_json FROM settings WHERE key = ?").bind('access.allow_second_owner').first();
-      if (!allowSecond || allowSecond.value_json !== '"on"') {
+      if ((await getSetting(env, 'access.allow_second_owner')) !== 'on') {
         return json({ ok: false, error: 'Second Owner is not enabled.' }, 403);
       }
     }
@@ -226,9 +224,7 @@ router.post('/api/users', async (req, env) => {
     if (existing) {
       return json({ ok: false, error: 'A user with this email already exists.' }, 400);
     }
-    const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-    let tempPassword = '';
-    for (let i = 0; i < 12; i++) tempPassword += chars[Math.floor(Math.random() * chars.length)];
+    const tempPassword = makeTempPassword();
     const salt = makeSalt();
     const hash = await hashPassword(tempPassword, salt);
     const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
@@ -241,6 +237,132 @@ router.post('/api/users', async (req, env) => {
     }
     await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, ?, 'users', ?, ?, ?)`).bind(user.user_id, 'create', userId, `Added ${name} as ${roleLabel(role)}`, now).run();
     return json({ ok: true, data: { id: userId, temporaryPassword: tempPassword } });
+  });
+});
+
+// ---------- User management (§4.6 safeguards) ----------
+function makeTempPassword() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  const bytes = crypto.getRandomValues(new Uint8Array(12));
+  return Array.from(bytes, (b) => chars[b % chars.length]).join('');
+}
+
+async function activeOwnerCount(env, excludeId) {
+  const r = await env.DB.prepare("SELECT COUNT(*) AS n FROM users WHERE role = 'owner' AND active = 1 AND deleted_at IS NULL AND id != ?").bind(excludeId || 0).first();
+  return Number(r.n);
+}
+
+async function loadTarget(env, req) {
+  const target = await env.DB.prepare('SELECT * FROM users WHERE id = ? AND deleted_at IS NULL').bind(Number(req.params.id)).first();
+  if (!target) return { err: json({ ok: false, error: 'User not found.' }, 404) };
+  const me = req.user;
+  if (target.id === me.user_id) return { err: json({ ok: false, error: 'You cannot change your own role or status. Ask another Owner.' }, 400) };
+  if (target.is_primary_owner) return { err: json({ ok: false, error: 'The primary Owner cannot be changed.' }, 403) };
+  if (target.role === 'owner' && !me.is_primary_owner) return { err: json({ ok: false, error: 'Only the primary Owner can change another Owner.' }, 403) };
+  return { target };
+}
+
+const nowStr = () => new Date().toISOString().replace('T', ' ').substring(0, 19);
+
+router.put('/api/users/:id', async (req, env) => {
+  return withAuth(req, env, 'users_settings', 'E', async (req, env) => {
+    const { target, err } = await loadTarget(env, req);
+    if (err) return err;
+    const body = await req.json();
+    const fields = [];
+    const vals = [];
+    if (body.name) { fields.push('name = ?'); vals.push(String(body.name)); }
+    if (body.phone !== undefined) { fields.push('phone = ?'); vals.push(String(body.phone)); }
+    if (body.lang) { fields.push('lang = ?'); vals.push(String(body.lang)); }
+    if (body.extra_roles !== undefined) {
+      const extras = Array.isArray(body.extra_roles) ? body.extra_roles.filter((r) => r !== 'owner') : [];
+      fields.push('extra_roles = ?'); vals.push(extras.length ? JSON.stringify(extras) : null);
+    }
+    if (body.role && body.role !== target.role) {
+      if (!['owner', 'pm', 'site', 'sales', 'accounts', 'purchase', 'hr', 'viewer'].includes(body.role)) return json({ ok: false, error: 'Unknown role.' }, 400);
+      if (body.role === 'owner') {
+        if ((await getSetting(env, 'access.allow_second_owner')) !== 'on') return json({ ok: false, error: 'Second Owner is not enabled.' }, 403);
+      }
+      fields.push('role = ?'); vals.push(body.role);
+    }
+    if (fields.length) {
+      await env.DB.prepare(`UPDATE users SET ${fields.join(', ')} WHERE id = ?`).bind(...vals, target.id).run();
+    }
+    if (Array.isArray(body.projects)) {
+      const pids = body.projects.map(Number).filter(Boolean);
+      const cur = await env.DB.prepare('SELECT project_id FROM project_members WHERE user_id = ? AND removed_at IS NULL').bind(target.id).all();
+      const have = cur.results.map((r) => r.project_id);
+      const now = nowStr();
+      for (const pid of pids.filter((x) => !have.includes(x))) {
+        await env.DB.prepare('INSERT INTO project_members (project_id, user_id, added_by, created_at) VALUES (?, ?, ?, ?)').bind(pid, target.id, req.user.user_id, now).run();
+      }
+      for (const pid of have.filter((x) => !pids.includes(x))) {
+        await env.DB.prepare('UPDATE project_members SET removed_at = ? WHERE project_id = ? AND user_id = ? AND removed_at IS NULL').bind(now, pid, target.id).run();
+      }
+    }
+    if (body.role && body.role !== target.role) await env.DB.prepare('DELETE FROM sessions WHERE user_id = ?').bind(target.id).run();
+    await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, 'update', 'users', ?, ?, ?)`).bind(req.user.user_id, target.id, `Updated ${target.name}`, nowStr()).run();
+    return json({ ok: true });
+  });
+});
+
+router.get('/api/users/:id/projects', async (req, env) => {
+  return withAuth(req, env, 'users_settings', 'V', async (req, env) => {
+    const rows = await env.DB.prepare('SELECT project_id FROM project_members WHERE user_id = ? AND removed_at IS NULL').bind(Number(req.params.id)).all();
+    return json({ ok: true, data: { projects: rows.results.map((r) => r.project_id) } });
+  });
+});
+
+router.post('/api/users/:id/deactivate', async (req, env) => {
+  return withAuth(req, env, 'users_settings', 'E', async (req, env) => {
+    const { target, err } = await loadTarget(env, req);
+    if (err) return err;
+    if (target.role === 'owner' && (await activeOwnerCount(env, target.id)) < 1) return json({ ok: false, error: 'There must always be one active Owner.' }, 400);
+    const now = nowStr();
+    await env.DB.prepare('UPDATE users SET active = 0, deactivated_at = ? WHERE id = ?').bind(now, target.id).run();
+    await env.DB.prepare('DELETE FROM sessions WHERE user_id = ?').bind(target.id).run();
+    await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, 'deactivate', 'users', ?, ?, ?)`).bind(req.user.user_id, target.id, `Deactivated ${target.name}`, now).run();
+    return json({ ok: true });
+  });
+});
+
+router.post('/api/users/:id/reactivate', async (req, env) => {
+  return withAuth(req, env, 'users_settings', 'E', async (req, env) => {
+    const { target, err } = await loadTarget(env, req);
+    if (err) return err;
+    await env.DB.prepare('UPDATE users SET active = 1, deactivated_at = NULL WHERE id = ?').bind(target.id).run();
+    await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, 'reactivate', 'users', ?, ?, ?)`).bind(req.user.user_id, target.id, `Reactivated ${target.name}`, nowStr()).run();
+    return json({ ok: true });
+  });
+});
+
+router.post('/api/users/:id/reset-password', async (req, env) => {
+  return withAuth(req, env, 'users_settings', 'E', async (req, env) => {
+    const { target, err } = await loadTarget(env, req);
+    if (err) return err;
+    const temp = makeTempPassword();
+    const salt = makeSalt();
+    const hash = await hashPassword(temp, salt);
+    await env.DB.prepare('UPDATE users SET password_hash = ?, password_salt = ?, must_change_password = 1 WHERE id = ?').bind(hash, bytesToBase64(salt), target.id).run();
+    await env.DB.prepare('DELETE FROM sessions WHERE user_id = ?').bind(target.id).run();
+    await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, 'reset_password', 'users', ?, ?, ?)`).bind(req.user.user_id, target.id, `Reset password for ${target.name}`, nowStr()).run();
+    return json({ ok: true, data: { temporaryPassword: temp } });
+  });
+});
+
+router.post('/api/users/:id/logout', async (req, env) => {
+  return withAuth(req, env, 'users_settings', 'E', async (req, env) => {
+    const id = Number(req.params.id);
+    await env.DB.prepare('DELETE FROM sessions WHERE user_id = ?').bind(id).run();
+    return json({ ok: true });
+  });
+});
+
+router.post('/api/auth/logout-everyone', async (req, env) => {
+  return withAuth(req, env, 'users_settings', 'E', async (req, env) => {
+    await env.DB.prepare('DELETE FROM sessions WHERE user_id != ?').bind(req.user.user_id).run();
+    await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, 'logout_all', 'users', 0, 'Logged everyone out', ?)`).bind(req.user.user_id, nowStr()).run();
+    return json({ ok: true });
   });
 });
 
@@ -260,11 +382,11 @@ router.get('/api/documents', async (req, env) => {
         }
         sql += ' AND project_id = ?';
         params.push(projectId);
-      } else if (ids.length > 0) {
-        sql += ' AND project_id IN (' + ids.map(() => '?').join(',') + ')';
-        params.push(...ids);
       } else {
-        return json({ ok: true, data: { documents: [] } });
+        const orphans = ['owner', 'pm'].includes(user.role) ? ' OR project_id IS NULL' : '';
+        if (ids.length === 0 && !orphans) return json({ ok: true, data: { documents: [] } });
+        sql += ` AND (${ids.length ? 'project_id IN (' + ids.map(() => '?').join(',') + ')' : '0'}${orphans})`;
+        params.push(...ids);
       }
       sql += ' ORDER BY created_at DESC';
       const rows = await query(env.DB, sql, params);
@@ -275,21 +397,19 @@ router.get('/api/documents', async (req, env) => {
   });
 });
 
+// Link-type documents only. Files go through /api/files/upload so a client can never point a record at someone else's blob or Drive file.
 router.post('/api/documents', async (req, env) => {
   return withAuth(req, env, 'projects', 'C', async (req, env) => {
     try {
       const user = req.user;
-      const body = await req.json();
-      const { project_id, title, category, kind, module, entity, entity_id, mime, size_bytes, store, drive_file_id, drive_folder_id, thumb_drive_file_id, md5, audience, language, series_key, version, is_latest, supersedes_id, external_url, r2_key, blob_id } = body;
-      if (!title) {
-        return json({ ok: false, error: 'Title is required.' }, 400);
-      }
-      const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
-      const result = await env.DB.prepare(`
-        INSERT INTO documents (project_id, title, category, kind, module, entity, entity_id, mime, size_bytes, store, drive_file_id, drive_folder_id, thumb_drive_file_id, md5, audience, language, series_key, version, is_latest, supersedes_id, external_url, r2_key, blob_id, uploaded_by, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).bind(project_id || null, title, category || 'other', kind || 'file', module || null, entity || null, entity_id || null, mime || null, size_bytes || 0, store || null, drive_file_id || null, drive_folder_id || null, thumb_drive_file_id || null, md5 || null, audience || 'internal', language || null, series_key || null, version || 1, is_latest !== undefined ? is_latest : 1, supersedes_id || null, external_url || null, r2_key || null, blob_id || null, user.user_id, now).run();
-      await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, ?, 'documents', ?, ?, ?)`).bind(user.user_id, 'create', result.meta.last_row_id, `Uploaded document "${title}"`, now).run();
+      const { project_id, title, category, external_url, audience } = await req.json();
+      if (!title) return json({ ok: false, error: 'Title is required.' }, 400);
+      if (!/^https:\/\/[^\s]+$/i.test(String(external_url || ''))) return json({ ok: false, error: 'A link must start with https://' }, 400);
+      if (project_id && !(await visibleProjectIds(env, user)).includes(Number(project_id))) return json({ ok: false, error: 'Not allowed.' }, 403);
+      const now = nowStr();
+      const result = await env.DB.prepare(`INSERT INTO documents (project_id, title, category, kind, external_url, audience, version, is_latest, uploaded_by, created_at) VALUES (?, ?, ?, 'link', ?, ?, 1, 1, ?, ?)`)
+        .bind(project_id || null, String(title), category || 'other', external_url, audience === 'customer' ? 'customer' : 'internal', user.user_id, now).run();
+      await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, 'create', 'documents', ?, ?, ?)`).bind(user.user_id, result.meta.last_row_id, `Added link "${title}"`, now).run();
       return json({ ok: true, data: { id: result.meta.last_row_id } });
     } catch (e) {
       return json({ ok: false, error: 'doc-create: ' + e.message }, 500);
@@ -303,6 +423,7 @@ router.get('/api/documents/:id', async (req, env) => {
       const id = Number(req.params.id);
       const row = await env.DB.prepare('SELECT * FROM documents WHERE id = ? AND deleted_at IS NULL').bind(id).first();
       if (!row) return json({ ok: false, error: 'Document not found.' }, 404);
+      if (row.project_id && !(await visibleProjectIds(env, req.user)).includes(row.project_id)) return json({ ok: false, error: 'Not allowed.' }, 403);
       return json({ ok: true, data: row });
     } catch (e) {
       return json({ ok: false, error: 'doc-get: ' + e.message }, 500);
@@ -315,6 +436,9 @@ router.delete('/api/documents/:id', async (req, env) => {
     try {
       const id = Number(req.params.id);
       const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
+      const dd = await env.DB.prepare('SELECT project_id FROM documents WHERE id = ?').bind(id).first();
+      if (!dd) return json({ ok: false, error: 'Document not found.' }, 404);
+      if (dd.project_id && !(await visibleProjectIds(env, req.user)).includes(dd.project_id)) return json({ ok: false, error: 'Not allowed.' }, 403);
       await env.DB.prepare(`UPDATE documents SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL`).bind(now, id).run();
       await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, ?, 'documents', ?, ?, ?)`).bind(req.user.user_id, 'delete', id, `Deleted document ${id}`, now).run();
       return json({ ok: true, data: { id } });
@@ -328,10 +452,11 @@ router.delete('/api/documents/:id', async (req, env) => {
 router.get('/api/settings', async (req, env) => {
   return withAuth(req, env, 'users_settings', 'V', async (req, env) => {
     try {
-      const rows = await env.DB.prepare('SELECT key, value_json FROM settings').all();
+      const rows = await env.DB.prepare('SELECT key FROM settings').all();
       const settings = {};
       for (const r of rows.results) {
-        try { settings[r.key] = JSON.parse(r.value_json); } catch (e) { settings[r.key] = r.value_json; }
+        if (/password|secret|token|api_key|refresh|oauth/i.test(r.key)) { settings[r.key] = '[hidden]'; continue; }
+        try { settings[r.key] = await getSetting(env, r.key); } catch (e) { settings[r.key] = '[unreadable]'; }
       }
       return json({ ok: true, data: { settings } });
     } catch (e) {
@@ -340,15 +465,18 @@ router.get('/api/settings', async (req, env) => {
   });
 });
 
+const EDITABLE_SETTINGS = ['po.pm_approval_limit_paise', 'access.allow_second_owner', 'access.limit_roles_to_assigned_projects', 'sales.share_all_leads',
+  'demand.due_days_after_milestone', 'share.default_expiry_days', 'share.default_max_views', 'files.brochure_max_mb', 'branding.apply_colours_to_app',
+  'brochure.price_list_default_audience', 'storage.warn_percent'];
+
 router.post('/api/settings/:key', async (req, env) => {
   return withAuth(req, env, 'users_settings', 'E', async (req, env) => {
     try {
       const key = req.params.key;
-      const body = await req.json();
-      const { value } = body;
-      const val = typeof value === 'string' ? value : JSON.stringify(value);
-      const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
-      await env.DB.prepare(`INSERT INTO settings (key, value_json, updated_by, updated_at) VALUES (?, ?, ?, ?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json, updated_by=excluded.updated_by, updated_at=excluded.updated_at`).bind(key, val, req.user.user_id, now).run();
+      if (!EDITABLE_SETTINGS.includes(key)) return json({ ok: false, error: 'That setting cannot be changed here.' }, 400);
+      const { value } = await req.json();
+      await setSetting(env, key, value, req.user.user_id);
+      await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, 'update', 'settings', 0, ?, ?)`).bind(req.user.user_id, `Changed setting ${key}`, nowStr()).run();
       return json({ ok: true, data: { key, value } });
     } catch (e) {
       return json({ ok: false, error: 'settings-set: ' + e.message }, 500);
@@ -500,7 +628,7 @@ router.get('/api/drawings', async (req, env) => {
       const user = req.user;
       const ids = await visibleProjectIds(env, user);
       if (ids.length === 0) return json({ ok: true, data: { drawings: [] } });
-      const sql = `SELECT d.*, (SELECT rev_no FROM drw_revisions WHERE drawing_id = d.id AND status = 'ifc' AND deleted_at IS NULL LIMIT 1) AS current_ifc_rev FROM drw_drawings d WHERE d.deleted_at IS NULL AND d.project_id IN (${ids.map(() => '?').join(',')}) ORDER BY d.discipline, d.code`;
+      const sql = `SELECT d.*, (SELECT rev_no FROM drw_revisions WHERE drawing_id = d.id AND status = 'ifc' LIMIT 1) AS current_ifc_rev FROM drw_drawings d WHERE d.deleted_at IS NULL AND d.project_id IN (${ids.map(() => '?').join(',')})${user.role === 'site' ? " AND EXISTS (SELECT 1 FROM drw_revisions r WHERE r.drawing_id = d.id AND r.status = 'ifc')" : ''} ORDER BY d.discipline, d.code`;
       const rows = await query(env.DB, sql, ids);
       return json({ ok: true, data: { drawings: rows.results } });
     } catch (e) {
@@ -542,7 +670,10 @@ router.get('/api/drawings/:id/revisions', async (req, env) => {
       if (!ids.includes(drawing.project_id)) {
         return json({ ok: false, error: 'Not allowed.' }, 403);
       }
-      const rows = await env.DB.prepare('SELECT * FROM drw_revisions WHERE drawing_id = ? ORDER BY created_at DESC').bind(drawingId).all();
+      // Site role sees ONLY the current IFC revision (enforced here, not just in the UI)
+      const rows = req.user.role === 'site'
+        ? await env.DB.prepare("SELECT * FROM drw_revisions WHERE drawing_id = ? AND status = 'ifc'").bind(drawingId).all()
+        : await env.DB.prepare('SELECT * FROM drw_revisions WHERE drawing_id = ? ORDER BY id DESC').bind(drawingId).all();
       return json({ ok: true, data: { revisions: rows.results } });
     } catch (e) {
       return json({ ok: false, error: 'drw-rev: ' + e.message }, 500);
@@ -583,7 +714,17 @@ router.post('/api/site/milestones/:id/done', async (req, env) => {
       const doneDate = actual_date || now;
       await env.DB.prepare(`UPDATE site_milestones SET status = 'done', actual_date = ? WHERE id = ?`).bind(doneDate, id).run();
       await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, ?, 'site_milestones', ?, ?, ?)`).bind(user.user_id, 'done', id, `Milestone marked done: ${ms.name}`, now).run();
-      return json({ ok: true, data: { id, actual_date: doneDate } });
+      // milestone.done subscriber: matching demands scheduled -> ready (due = done + N days)
+      let readied = 0;
+      if (ms.milestone_key) {
+        const dueDays = Number(await getSetting(env, 'demand.due_days_after_milestone')) || 7;
+        const r = await env.DB.prepare(`UPDATE sal_demands SET status = 'ready', due_date = date(?, '+' || ? || ' days')
+          WHERE status = 'scheduled' AND stage_id IN (SELECT id FROM sal_plan_stages WHERE project_id = ? AND milestone_key = ?)
+          AND booking_id IN (SELECT b.id FROM sal_bookings b JOIN sal_inventory i ON i.id = b.unit_id WHERE b.project_id = ? AND b.status <> 'cancelled' AND (? IS NULL OR ? = '' OR i.wing = ?))`)
+          .bind(String(doneDate).substring(0, 10), dueDays, ms.project_id, ms.milestone_key, ms.project_id, ms.wing || null, ms.wing || null, ms.wing || null).run();
+        readied = r.meta.changes || 0;
+      }
+      return json({ ok: true, data: { id, actual_date: doneDate, demands_ready: readied } });
     } catch (e) {
       return json({ ok: false, error: 'ms-done: ' + e.message }, 500);
     }
@@ -753,21 +894,33 @@ router.post('/api/procurement/pos', async (req, env) => {
     try {
       const user = req.user;
       const body = await req.json();
-      const { project_id, vendor_id, rfq_id, amount_paise, gst_bp, gst_paise, total_paise, terms, status } = body;
-      if (!project_id || !vendor_id || !amount_paise) {
+      const { project_id, vendor_id, rfq_id, gst_bp, terms } = body;
+      const items = Array.isArray(body.items) ? body.items.filter((i) => i && i.description) : [];
+      let amount_paise = Math.round(Number(body.amount_paise) || 0);
+      if (items.length) amount_paise = items.reduce((t, i) => t + Math.round((Number(i.qty) || 0) * (Number(i.rate_paise) || 0)), 0);
+      if (!project_id || !vendor_id || !(amount_paise > 0)) {
         return json({ ok: false, error: 'Project, vendor, and amount are required.' }, 400);
       }
       const ids = await visibleProjectIds(env, user);
       if (!ids.includes(Number(project_id))) {
         return json({ ok: false, error: 'Not allowed.' }, 403);
       }
+      const gstBp = gst_bp !== undefined ? Number(gst_bp) : 1800;
+      const gst_paise = Math.round(amount_paise * gstBp / 10000);
+      const total_paise = amount_paise + gst_paise;
+      const status = 'draft';
       const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
       // Get next PO seq
       const counter = await env.DB.prepare('SELECT value FROM counters WHERE key = ?').bind(`po:${project_id}`).first();
       const nextSeq = (counter ? Number(counter.value) : 0) + 1;
       await env.DB.prepare('INSERT INTO counters (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').bind(`po:${project_id}`, nextSeq).run();
-      const poNo = `PO-${project_id}-${String(nextSeq).padStart(4, '0')}`;
-      const result = await env.DB.prepare(`INSERT INTO pro_pos (project_id, vendor_id, rfq_id, po_no, po_seq, amount_paise, gst_bp, gst_paise, total_paise, terms, status, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(project_id, vendor_id, rfq_id || null, poNo, nextSeq, amount_paise, gst_bp || 1800, gst_paise || 0, total_paise || amount_paise, terms || '', status || 'draft', user.user_id, now).run();
+      const proj = await env.DB.prepare('SELECT code FROM projects WHERE id = ?').bind(project_id).first();
+      const poNo = `PO-${proj ? proj.code : project_id}-${String(nextSeq).padStart(4, '0')}`;
+      const result = await env.DB.prepare(`INSERT INTO pro_pos (project_id, vendor_id, rfq_id, po_no, po_seq, amount_paise, gst_bp, gst_paise, total_paise, terms, status, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(project_id, vendor_id, rfq_id || null, poNo, nextSeq, amount_paise, gstBp, gst_paise, total_paise, terms || '', status, user.user_id, now).run();
+      for (const it of items) {
+        const qty = Number(it.qty) || 0; const rate = Math.round(Number(it.rate_paise) || 0);
+        await env.DB.prepare('INSERT INTO pro_po_items (po_id, description, qty, unit, rate_paise, amount_paise) VALUES (?, ?, ?, ?, ?, ?)').bind(result.meta.last_row_id, String(it.description), qty, it.unit || '', rate, Math.round(qty * rate)).run();
+      }
       await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, ?, 'pro_pos', ?, ?, ?)`).bind(user.user_id, 'create', result.meta.last_row_id, `Created PO ${poNo}`, now).run();
       return json({ ok: true, data: { id: result.meta.last_row_id, po_no: poNo } });
     } catch (e) {
@@ -781,11 +934,10 @@ router.get('/api/sales/leads', async (req, env) => {
   return withAuth(req, env, 'sales', 'V', async (req, env) => {
     try {
       const user = req.user;
-      const sql = user.role === 'owner' || user.role === 'pm'
-        ? 'SELECT * FROM sal_leads WHERE deleted_at IS NULL ORDER BY created_at DESC'
-        : 'SELECT * FROM sal_leads WHERE deleted_at IS NULL AND assigned_to = ? ORDER BY created_at DESC';
-      const params = user.role === 'owner' || user.role === 'pm' ? [] : [user.user_id];
-      const rows = await query(env.DB, sql, params);
+      const seeAll = user.role === 'owner' || user.role === 'pm' || (await getSetting(env, 'sales.share_all_leads')) === 'on';
+      const rows = seeAll
+        ? await env.DB.prepare('SELECT * FROM sal_leads WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT 300').all()
+        : await env.DB.prepare('SELECT * FROM sal_leads WHERE deleted_at IS NULL AND assigned_to = ? ORDER BY created_at DESC LIMIT 300').bind(user.user_id).all();
       return json({ ok: true, data: { leads: rows.results } });
     } catch (e) {
       return json({ ok: false, error: 'lead-list: ' + e.message }, 500);
@@ -802,8 +954,11 @@ router.post('/api/sales/leads', async (req, env) => {
       if (!name || !phone) {
         return json({ ok: false, error: 'Name and phone are required.' }, 400);
       }
+      const dup = await env.DB.prepare('SELECT id, name FROM sal_leads WHERE phone = ? AND deleted_at IS NULL LIMIT 1').bind(String(phone).trim()).first();
+      if (dup) return json({ ok: false, error: `This mobile number is already a lead (${dup.name}).` }, 409);
+      if (project_id && !(await visibleProjectIds(env, user)).includes(Number(project_id))) return json({ ok: false, error: 'Not allowed.' }, 403);
       const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
-      const result = await env.DB.prepare(`INSERT INTO sal_leads (project_id, name, phone, email, source, source_detail, budget_paise, config_pref, status, assigned_to, consent, consent_at, notes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(project_id || null, name, phone, body.email || '', source || 'other', source_detail || '', budget_paise || 0, config_pref || '', status || 'new', user.user_id, consent || 0, consent_at || null, body.notes || '', now).run();
+      const result = await env.DB.prepare(`INSERT INTO sal_leads (project_id, name, phone, email, source, source_detail, budget_paise, config_pref, status, assigned_to, consent, consent_at, notes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(project_id || null, name, phone, body.email || '', source || 'other', source_detail || '', budget_paise || 0, config_pref || '', status || 'new', user.user_id, consent ? 1 : 0, consent_at || null, body.notes || '', now).run();
       await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, ?, 'sal_leads', ?, ?, ?)`).bind(user.user_id, 'create', result.meta.last_row_id, `Created lead "${name}"`, now).run();
       return json({ ok: true, data: { id: result.meta.last_row_id } });
     } catch (e) {
@@ -827,6 +982,291 @@ router.get('/api/sales/inventory', async (req, env) => {
     } catch (e) {
       return json({ ok: false, error: 'inventory: ' + e.message }, 500);
     }
+  });
+});
+
+// ---------- Approvals: Mumbai template (Appendix A) ----------
+const MUMBAI_TEMPLATE = [
+  ['Property card / title search / search report', 'Advocate / Revenue', 'compliance', null, 0, 'Property card, 7/12 or CTS extract, title search report'],
+  ['DP remark & zoning check (reservation, road line)', 'MCGM', 'approval', null, 0, 'DP remarks application receipt, zone certificate'],
+  ['Architect & consultants appointed (LOA)', 'Internal', 'compliance', null, 0, 'Signed letters of appointment'],
+  ['Site survey & layout plan', 'Licensed surveyor', 'compliance', null, 0, 'Survey plan, boundary demarcation'],
+  ['Society consent & DA/development agreement registration', 'Society / Advocate', 'compliance', null, 1, 'Society resolution, registered DA'],
+  ["Existing tenants' transit-rent & bank guarantee arrangements", 'Internal / Bank', 'compliance', 30, 1, 'Permanent alternate accommodation agreements, BG copies'],
+  ['IOD application (BMC building-proposal system / AutoDCR — confirm current portal with your architect)', 'MCGM', 'approval', null, 0, 'AutoDCR submission receipt, approved plan, title documents'],
+  ['Provisional Fire NOC', 'Chief Fire Officer, Mumbai Fire Brigade (MCGM)', 'noc', 30, 0, 'Fire layout drawings, application receipt'],
+  ['Height NOC (AAI colour coding)', 'Airports Authority of India', 'noc', 30, 0, 'Colour-coded zoning map, NOCAS application'],
+  ['Environment clearance / SEIAA (if built-up >= 20,000 sqm — confirm with your environment consultant)', 'SEIAA / MoEFCC', 'noc', 45, 0, 'EC application, consultant report'],
+  ['Tree authority permission', 'MCGM Tree Authority', 'noc', 30, 0, 'Tree survey, application receipt'],
+  ['Traffic NOC (if applicable)', 'Mumbai Traffic Police', 'noc', 30, 0, 'Site plan, access details'],
+  ['CRZ / MCZMA clearance (if coastal plot)', 'MCZMA', 'noc', 45, 0, 'CRZ map, consultant report'],
+  ['Collector / land-tenure permission (if applicable)', 'Collector', 'noc', 30, 0, 'Land tenure documents'],
+  ['IOD conditions compliance (all departments)', 'MCGM', 'compliance', 15, 0, 'Compliance letters from each department'],
+  ['BOCW labour cess registration & returns', 'Labour Dept', 'compliance', 30, 0, 'Registration certificate, cess receipts'],
+  ["CAR / contractor's all-risk insurance", 'Insurer', 'renewal', 30, 0, 'Policy copy, premium receipt'],
+  ['Commencement Certificate (CC)', 'MCGM', 'approval', 30, 0, 'IOD compliance, CC application'],
+  ['MahaRERA registration (BEFORE any advertisement/sale)', 'MahaRERA', 'approval', 45, 0, 'CC, title report, CA certificate, architect certificate'],
+  ['Plinth check & further CC', 'MCGM', 'approval', 15, 0, 'Plinth completion certificate by architect'],
+  ['Stage-wise further CCs (superstructure)', 'MCGM', 'approval', 15, 0, 'Stage completion certificates'],
+  ['RERA quarterly progress updates (confirm filing window in the current MahaRERA circular)', 'MahaRERA', 'renewal', 15, 0, 'Quarterly update form, CA statement'],
+  ['70% designated-account compliance (receipts vs withdrawals)', 'Bank / CA', 'renewal', 15, 0, 'Bank statement, CA Form 3'],
+  ['Fire completion NOC', 'CFO', 'noc', 30, 0, 'Fire installation completion certificate'],
+  ['Lift & electrical inspector approvals', 'PWD Electrical / Lift Inspector', 'noc', 30, 0, 'Lift licence, electrical inspection report'],
+  ['Building Completion Certificate (BCC)', 'MCGM', 'approval', 30, 0, 'Completion drawings, NOCs'],
+  ['Occupancy Certificate (OC)', 'MCGM', 'approval', 30, 0, 'BCC, all completion NOCs'],
+  ['Water/sewer connections; electricity meters', 'MCGM / electricity distributor (as applicable to your plot)', 'approval', 30, 0, 'OC, application forms'],
+  ['Society formation / conveyance (as applicable)', 'Registrar / Advocate', 'compliance', 45, 0, 'Society registration documents, conveyance deed draft'],
+];
+
+router.post('/api/approvals/load-template', async (req, env) => {
+  return withAuth(req, env, 'approvals', 'C', async (req, env) => {
+    try {
+      const { project_id, redevelopment } = await req.json();
+      const ids = await visibleProjectIds(env, req.user);
+      if (!project_id || !ids.includes(Number(project_id))) return json({ ok: false, error: 'Not allowed.' }, 403);
+      const have = await env.DB.prepare('SELECT COUNT(*) AS n FROM apr_items WHERE project_id = ? AND deleted_at IS NULL').bind(Number(project_id)).first();
+      if (Number(have.n) > 0) return json({ ok: false, error: 'This project already has approval items. Template can only be loaded into an empty list.' }, 400);
+      const rows = MUMBAI_TEMPLATE.filter((r) => redevelopment || !r[4]);
+      const now = nowStr();
+      const stmts = rows.map((r, i) => env.DB.prepare(`INSERT INTO apr_items (project_id, name, authority, category, stage_order, status, reminder_days, renew_months, notes, created_at) VALUES (?, ?, ?, ?, ?, 'not_started', ?, ?, ?, ?)`)
+        .bind(Number(project_id), r[0], r[1], r[2], (i + 1) * 10, r[3] || 30, r[2] === 'renewal' ? (r[0].startsWith('RERA quarterly') ? 3 : 12) : null, r[5], now));
+      await env.DB.batch(stmts);
+      await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, 'create', 'apr_items', ?, ?, ?)`).bind(req.user.user_id, Number(project_id), `Loaded Mumbai approvals template (${rows.length} items)`, now).run();
+      return json({ ok: true, data: { count: rows.length } });
+    } catch (e) {
+      return json({ ok: false, error: 'apr-template: ' + e.message }, 500);
+    }
+  });
+});
+
+// ---------- Drawings: issue new revision (atomic supersede) ----------
+router.post('/api/drawings/:id/revisions', async (req, env) => {
+  return withAuth(req, env, 'drawings', 'C', async (req, env) => {
+    try {
+      const drawingId = Number(req.params.id);
+      const drawing = await env.DB.prepare('SELECT * FROM drw_drawings WHERE id = ? AND deleted_at IS NULL').bind(drawingId).first();
+      if (!drawing) return json({ ok: false, error: 'Drawing not found.' }, 404);
+      const ids = await visibleProjectIds(env, req.user);
+      if (!ids.includes(drawing.project_id)) return json({ ok: false, error: 'Not allowed.' }, 403);
+      const body = await req.json();
+      const status = body.status === 'ifc' ? 'ifc' : 'draft';
+      if (status === 'ifc' && !userCan(req.user, 'drawings', 'A')) return json({ ok: false, error: 'Only a PM or Owner can issue a drawing for construction.' }, 403);
+      const last = await env.DB.prepare('SELECT rev_no FROM drw_revisions WHERE drawing_id = ? ORDER BY id DESC LIMIT 1').bind(drawingId).first();
+      const n = last ? (parseInt(String(last.rev_no).replace(/\D/g, ''), 10) || 0) + 1 : 0;
+      const revNo = 'R' + n;
+      const now = nowStr();
+      const stmts = [];
+      if (status === 'ifc') stmts.push(env.DB.prepare("UPDATE drw_revisions SET status = 'superseded' WHERE drawing_id = ? AND status = 'ifc'").bind(drawingId));
+      stmts.push(env.DB.prepare('INSERT INTO drw_revisions (drawing_id, rev_no, status, issued_on, received_from, note, document_id, issued_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
+        .bind(drawingId, revNo, status, status === 'ifc' ? (body.issued_on || now.substring(0, 10)) : null, body.received_from || '', body.note || '', body.document_id || null, req.user.user_id, now));
+      stmts.push(env.DB.prepare('UPDATE drw_drawings SET waiting_consultant = 0 WHERE id = ?').bind(drawingId));
+      await env.DB.batch(stmts);
+      await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, 'create', 'drw_revisions', ?, ?, ?)`).bind(req.user.user_id, drawingId, `${drawing.code} ${revNo} issued as ${status === 'ifc' ? 'Issued For Construction' : 'Draft'}`, now).run();
+      if (status === 'ifc') {
+        const rcpt = await env.DB.prepare("SELECT id FROM users WHERE active = 1 AND deleted_at IS NULL AND role IN ('site', 'pm') AND id != ?").bind(req.user.user_id).all();
+        for (const u of rcpt.results) {
+          await env.DB.prepare('INSERT INTO notifications (user_id, title, body, link, created_at) VALUES (?, ?, ?, ?, ?)').bind(u.id, `New drawing: ${drawing.code} ${revNo}`, `${drawing.title} is now Issued For Construction. Older revisions are superseded.`, 'drawings', now).run();
+        }
+      }
+      return json({ ok: true, data: { rev_no: revNo } });
+    } catch (e) {
+      return json({ ok: false, error: 'drw-issue: ' + e.message }, 500);
+    }
+  });
+});
+
+// ---------- Site: create milestone ----------
+router.post('/api/site/milestones', async (req, env) => {
+  return withAuth(req, env, 'site', 'C', async (req, env) => {
+    try {
+      const b = await req.json();
+      const ids = await visibleProjectIds(env, req.user);
+      if (!b.project_id || !b.name || !ids.includes(Number(b.project_id))) return json({ ok: false, error: 'Project and name are required.' }, 400);
+      const r = await env.DB.prepare('INSERT INTO site_milestones (project_id, wing, name, milestone_key, planned_date, sort_order, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+        .bind(Number(b.project_id), b.wing || null, b.name, b.milestone_key || null, b.planned_date || null, b.sort_order || 100, nowStr()).run();
+      return json({ ok: true, data: { id: r.meta.last_row_id } });
+    } catch (e) {
+      return json({ ok: false, error: /UNIQUE/.test(e.message) ? 'That milestone key already exists for this wing.' : 'ms-create: ' + e.message }, /UNIQUE/.test(e.message) ? 400 : 500);
+    }
+  });
+});
+
+// ---------- Procurement: maker-checker PO approval ----------
+router.post('/api/procurement/pos/:id/submit', async (req, env) => {
+  return withAuth(req, env, 'procurement', 'E', async (req, env) => {
+    const po = await env.DB.prepare('SELECT * FROM pro_pos WHERE id = ? AND deleted_at IS NULL').bind(Number(req.params.id)).first();
+    if (!po) return json({ ok: false, error: 'PO not found.' }, 404);
+    if (!(await visibleProjectIds(env, req.user)).includes(po.project_id)) return json({ ok: false, error: 'Not allowed.' }, 403);
+    if (po.status !== 'draft') return json({ ok: false, error: 'Only a draft PO can be sent for approval.' }, 400);
+    await env.DB.prepare("UPDATE pro_pos SET status = 'pending_approval' WHERE id = ?").bind(po.id).run();
+    const limit = Number(await getSetting(env, 'po.pm_approval_limit_paise')) || 500000;
+    const roles = po.total_paise > limit ? "('owner')" : "('owner', 'pm')";
+    const approvers = await env.DB.prepare(`SELECT id FROM users WHERE active = 1 AND deleted_at IS NULL AND role IN ${roles} AND id != ?`).bind(req.user.user_id).all();
+    for (const u of approvers.results) {
+      await env.DB.prepare('INSERT INTO notifications (user_id, title, body, link, created_at) VALUES (?, ?, ?, ?, ?)').bind(u.id, `PO ${po.po_no} needs approval`, `Total ₹${(po.total_paise / 100).toLocaleString('en-IN')}`, 'procurement', nowStr()).run();
+    }
+    return json({ ok: true });
+  });
+});
+
+async function decidePo(req, env, decision) {
+  const po = await env.DB.prepare('SELECT * FROM pro_pos WHERE id = ? AND deleted_at IS NULL').bind(Number(req.params.id)).first();
+  if (!po) return json({ ok: false, error: 'PO not found.' }, 404);
+  if (!(await visibleProjectIds(env, req.user)).includes(po.project_id)) return json({ ok: false, error: 'Not allowed.' }, 403);
+  if (po.status !== 'pending_approval') return json({ ok: false, error: 'This PO is not waiting for approval.' }, 400);
+  if (po.created_by === req.user.user_id) return json({ ok: false, error: 'You cannot approve a PO you created.' }, 403);
+  const limit = Number(await getSetting(env, 'po.pm_approval_limit_paise')) || 500000;
+  if (req.user.role !== 'owner' && po.total_paise > limit) {
+    return json({ ok: false, error: `This PO is above your approval limit (₹${(limit / 100).toLocaleString('en-IN')}). The Owner must approve it.` }, 403);
+  }
+  const now = nowStr();
+  const status = decision === 'approve' ? 'approved' : 'rejected';
+  await env.DB.prepare('UPDATE pro_pos SET status = ?, approved_by = ?, approved_at = ? WHERE id = ?').bind(status, req.user.user_id, now, po.id).run();
+  await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, ?, 'pro_pos', ?, ?, ?)`).bind(req.user.user_id, decision, po.id, `${req.user.name} ${status} ${po.po_no} (₹${(po.total_paise / 100).toLocaleString('en-IN')})`, now).run();
+  return json({ ok: true, data: { status } });
+}
+router.post('/api/procurement/pos/:id/approve', (req, env) => withAuth(req, env, 'procurement', 'A', (req, env) => decidePo(req, env, 'approve')));
+router.post('/api/procurement/pos/:id/reject', (req, env) => withAuth(req, env, 'procurement', 'A', (req, env) => decidePo(req, env, 'reject')));
+
+// ---------- Sales: inventory, payment plan, bookings, receipts ----------
+router.post('/api/sales/inventory', async (req, env) => {
+  return withAuth(req, env, 'sales', 'C', async (req, env) => {
+    try {
+      const b = await req.json();
+      const ids = await visibleProjectIds(env, req.user);
+      if (!b.project_id || !b.unit_no || !ids.includes(Number(b.project_id))) return json({ ok: false, error: 'Project and unit number are required.' }, 400);
+      const r = await env.DB.prepare('INSERT INTO sal_inventory (project_id, wing, floor, unit_no, type, carpet_sqft, rera_carpet_sqft, price_paise, floor_rise_paise, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+        .bind(Number(b.project_id), b.wing || null, b.floor ?? null, String(b.unit_no), b.type || '', b.carpet_sqft || null, b.rera_carpet_sqft || null, Math.round(Number(b.price_paise) || 0), Math.round(Number(b.floor_rise_paise) || 0), nowStr()).run();
+      return json({ ok: true, data: { id: r.meta.last_row_id } });
+    } catch (e) {
+      return json({ ok: false, error: /UNIQUE/.test(e.message) ? 'That unit already exists in this wing.' : 'inv-create: ' + e.message }, /UNIQUE/.test(e.message) ? 400 : 500);
+    }
+  });
+});
+
+router.get('/api/sales/plan-stages', async (req, env) => {
+  return withAuth(req, env, 'sales', 'V', async (req, env) => {
+    const pid = Number(new URL(req.url).searchParams.get('project_id'));
+    if (!(await visibleProjectIds(env, req.user)).includes(pid)) return json({ ok: false, error: 'Not allowed.' }, 403);
+    const rows = await env.DB.prepare('SELECT * FROM sal_plan_stages WHERE project_id = ? ORDER BY sort_order, id').bind(pid).all();
+    return json({ ok: true, data: { stages: rows.results } });
+  });
+});
+
+router.post('/api/sales/plan-stages', async (req, env) => {
+  return withAuth(req, env, 'sales', 'E', async (req, env) => {
+    const { project_id, stages } = await req.json();
+    if (!(await visibleProjectIds(env, req.user)).includes(Number(project_id))) return json({ ok: false, error: 'Not allowed.' }, 403);
+    if (!Array.isArray(stages) || !stages.length) return json({ ok: false, error: 'Add at least one stage.' }, 400);
+    const total = stages.reduce((t, s) => t + (parseInt(s.pct_bp, 10) || 0), 0);
+    if (total !== 10000) return json({ ok: false, error: `Stages must total 100% (they total ${(total / 100).toFixed(2)}%).` }, 400);
+    const stmts = [env.DB.prepare('DELETE FROM sal_plan_stages WHERE project_id = ?').bind(Number(project_id))];
+    stages.forEach((s, i) => stmts.push(env.DB.prepare('INSERT INTO sal_plan_stages (project_id, stage_name, pct_bp, milestone_key, sort_order) VALUES (?, ?, ?, ?, ?)').bind(Number(project_id), String(s.stage_name), parseInt(s.pct_bp, 10), s.milestone_key || null, (i + 1) * 10)));
+    await env.DB.batch(stmts);
+    return json({ ok: true });
+  });
+});
+
+router.get('/api/sales/bookings', async (req, env) => {
+  return withAuth(req, env, 'sales', 'V', async (req, env) => {
+    const ids = await visibleProjectIds(env, req.user);
+    if (!ids.length) return json({ ok: true, data: { bookings: [] } });
+    const rows = await env.DB.prepare(`SELECT b.*, i.unit_no, i.wing, (SELECT COALESCE(SUM(amount_paise + tds_paise), 0) FROM sal_receipts r WHERE r.booking_id = b.id AND r.reversed_at IS NULL) AS collected_paise
+      FROM sal_bookings b JOIN sal_inventory i ON i.id = b.unit_id WHERE b.deleted_at IS NULL AND b.project_id IN (${ids.map(() => '?').join(',')}) ORDER BY b.id DESC LIMIT 200`).bind(...ids).all();
+    return json({ ok: true, data: { bookings: rows.results } });
+  });
+});
+
+router.get('/api/sales/bookings/:id', async (req, env) => {
+  return withAuth(req, env, 'sales', 'V', async (req, env) => {
+    const b = await env.DB.prepare('SELECT b.*, i.unit_no, i.wing FROM sal_bookings b JOIN sal_inventory i ON i.id = b.unit_id WHERE b.id = ? AND b.deleted_at IS NULL').bind(Number(req.params.id)).first();
+    if (!b) return json({ ok: false, error: 'Booking not found.' }, 404);
+    if (!(await visibleProjectIds(env, req.user)).includes(b.project_id)) return json({ ok: false, error: 'Not allowed.' }, 403);
+    const demands = await env.DB.prepare('SELECT * FROM sal_demands WHERE booking_id = ? ORDER BY id').bind(b.id).all();
+    const receipts = await env.DB.prepare('SELECT * FROM sal_receipts WHERE booking_id = ? ORDER BY received_on, id').bind(b.id).all();
+    return json({ ok: true, data: { booking: b, demands: demands.results, receipts: receipts.results } });
+  });
+});
+
+router.post('/api/sales/bookings', async (req, env) => {
+  return withAuth(req, env, 'sales', 'C', async (req, env) => {
+    try {
+      const b = await req.json();
+      const unit = await env.DB.prepare('SELECT * FROM sal_inventory WHERE id = ? AND deleted_at IS NULL').bind(Number(b.unit_id)).first();
+      if (!unit) return json({ ok: false, error: 'Unit not found.' }, 404);
+      if (!(await visibleProjectIds(env, req.user)).includes(unit.project_id)) return json({ ok: false, error: 'Not allowed.' }, 403);
+      if (!b.customer_name) return json({ ok: false, error: 'Customer name is required.' }, 400);
+      const price = Math.round(Number(b.agreed_price_paise) || (unit.price_paise + (unit.floor_rise_paise || 0)));
+      if (!(price > 0)) return json({ ok: false, error: 'Agreed price is required.' }, 400);
+      const token = Math.round(Number(b.token_paise) || 0);
+      const stages = (await env.DB.prepare('SELECT * FROM sal_plan_stages WHERE project_id = ? ORDER BY sort_order, id').bind(unit.project_id).all()).results;
+      const total = stages.reduce((t, s) => t + s.pct_bp, 0);
+      if (stages.length && total !== 10000) return json({ ok: false, error: 'The payment plan stages must total 100% before booking.' }, 400);
+      const gstBp = b.gst_bp !== undefined ? Number(b.gst_bp) : 500;
+      const now = nowStr();
+      const ins = await env.DB.prepare(`INSERT INTO sal_bookings (project_id, unit_id, lead_id, customer_name, phone, email, address, pan, token_paise, agreed_price_paise, gst_bp, status, booking_date, created_by, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'token', ?, ?, ?)`)
+        .bind(unit.project_id, unit.id, b.lead_id || null, b.customer_name, b.phone || '', b.email || '', b.address || '', b.pan || '', token, price, gstBp, now.substring(0, 10), req.user.user_id, now).run();
+      const bookingId = ins.meta.last_row_id;
+      const stmts = [env.DB.prepare("UPDATE sal_inventory SET status = 'booked', blocked_till = NULL WHERE id = ?").bind(unit.id)];
+      let allocated = 0;
+      stages.forEach((st, i) => {
+        const amount = i === stages.length - 1 ? price - allocated : Math.floor(price * st.pct_bp / 10000);
+        allocated += amount;
+        const gst = Math.round(amount * gstBp / 10000);
+        stmts.push(env.DB.prepare(`INSERT INTO sal_demands (booking_id, stage_id, label, amount_paise, gst_paise, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+          .bind(bookingId, st.id, st.stage_name, amount, gst, st.milestone_key ? 'scheduled' : 'ready', now));
+      });
+      stmts.push(env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, 'create', 'sal_bookings', ?, ?, ?)`).bind(req.user.user_id, bookingId, `Booked ${unit.wing ? unit.wing + '-' : ''}${unit.unit_no} for ${b.customer_name}`, now));
+      if (b.lead_id) stmts.push(env.DB.prepare("UPDATE sal_leads SET status = 'booked' WHERE id = ?").bind(Number(b.lead_id)));
+      await env.DB.batch(stmts);
+      return json({ ok: true, data: { id: bookingId, demands: stages.length, warning: token > Math.floor(price / 10) ? 'RERA: advance above 10% of price before a registered agreement is not allowed.' : null } });
+    } catch (e) {
+      return json({ ok: false, error: /UNIQUE/.test(e.message) ? 'This unit is already booked.' : 'booking-create: ' + e.message }, /UNIQUE/.test(e.message) ? 409 : 500);
+    }
+  });
+});
+
+router.post('/api/sales/bookings/:id/receipts', async (req, env) => {
+  return withAuth(req, env, 'sales', 'E', async (req, env) => {
+    try {
+      const b = await req.json();
+      const booking = await env.DB.prepare('SELECT * FROM sal_bookings WHERE id = ? AND deleted_at IS NULL').bind(Number(req.params.id)).first();
+      if (!booking) return json({ ok: false, error: 'Booking not found.' }, 404);
+      if (!(await visibleProjectIds(env, req.user)).includes(booking.project_id)) return json({ ok: false, error: 'Not allowed.' }, 403);
+      if (booking.status === 'cancelled') return json({ ok: false, error: 'This booking is cancelled.' }, 400);
+      const amount = Math.round(Number(b.amount_paise) || 0);
+      const tds = Math.round(Number(b.tds_paise) || 0);
+      if (!(amount > 0)) return json({ ok: false, error: 'Amount is required.' }, 400);
+      const now = nowStr();
+      const stmts = [env.DB.prepare('INSERT INTO sal_receipts (booking_id, demand_id, amount_paise, tds_paise, mode, ref_no, received_on, received_by, note, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+        .bind(booking.id, b.demand_id || null, amount, tds, b.mode || 'bank', b.ref_no || '', b.received_on || now.substring(0, 10), req.user.user_id, b.note || '', now)];
+      if (b.demand_id) {
+        stmts.push(env.DB.prepare(`UPDATE sal_demands SET settled_paise = settled_paise + ?, status = CASE WHEN settled_paise + ? >= amount_paise + COALESCE(gst_paise, 0) THEN 'paid' ELSE 'partial' END WHERE id = ? AND booking_id = ?`).bind(amount + tds, amount + tds, Number(b.demand_id), booking.id));
+      }
+      stmts.push(env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, 'create', 'sal_receipts', ?, ?, ?)`).bind(req.user.user_id, booking.id, `Receipt ₹${(amount / 100).toLocaleString('en-IN')} from ${booking.customer_name}`, now));
+      await env.DB.batch(stmts);
+      return json({ ok: true });
+    } catch (e) {
+      return json({ ok: false, error: 'receipt-create: ' + e.message }, 500);
+    }
+  });
+});
+
+router.post('/api/sales/bookings/:id/cancel', async (req, env) => {
+  return withAuth(req, env, 'sales', 'A', async (req, env) => {
+    const booking = await env.DB.prepare('SELECT * FROM sal_bookings WHERE id = ? AND deleted_at IS NULL').bind(Number(req.params.id)).first();
+    if (!booking) return json({ ok: false, error: 'Booking not found.' }, 404);
+    if (!(await visibleProjectIds(env, req.user)).includes(booking.project_id)) return json({ ok: false, error: 'Not allowed.' }, 403);
+    const { reason } = await req.json();
+    const now = nowStr();
+    await env.DB.batch([
+      env.DB.prepare("UPDATE sal_bookings SET status = 'cancelled', cancelled_on = ?, cancel_reason = ? WHERE id = ?").bind(now.substring(0, 10), reason || '', booking.id),
+      env.DB.prepare("UPDATE sal_inventory SET status = 'available' WHERE id = ?").bind(booking.unit_id),
+      env.DB.prepare("UPDATE sal_demands SET status = 'cancelled' WHERE booking_id = ? AND status != 'paid'").bind(booking.id),
+      env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, 'cancel', 'sal_bookings', ?, ?, ?)`).bind(req.user.user_id, booking.id, `Cancelled booking of ${booking.customer_name}`, now),
+    ]);
+    return json({ ok: true });
   });
 });
 
@@ -856,6 +1296,9 @@ router.post('/api/branding', async (req, env) => {
         'footer_text', 'wa_intro_text', 'colour_primary', 'colour_secondary', 'colour_accent', 'letterhead_mode',
         'margin_top_mm', 'margin_bottom_mm', 'margin_side_mm'];
       const defaults = { colour_primary: '#1d4ed8', letterhead_mode: 'generated', margin_top_mm: 45, margin_bottom_mm: 30, margin_side_mm: 20 };
+      for (const cf of ['colour_primary', 'colour_secondary', 'colour_accent']) {
+        if (body[cf] && !/^#[0-9a-fA-F]{3,8}$/.test(body[cf])) return json({ ok: false, error: 'Colours must look like #1d4ed8.' }, 400);
+      }
       const vals = fields.map((f) => (body[f] !== undefined && body[f] !== '' ? body[f] : (defaults[f] ?? (f.endsWith('_enc') ? null : ''))));
       const projectId = body.project_id ? Number(body.project_id) : null;
       const existing = projectId
@@ -880,7 +1323,7 @@ router.post('/api/branding', async (req, env) => {
 router.get('/api/share-links', async (req, env) => {
   return withAuth(req, env, 'share_links', 'V', async (req, env) => {
     try {
-      const rows = await env.DB.prepare('SELECT sl.*, d.title FROM share_links sl JOIN documents d ON d.id = sl.document_id WHERE sl.revoked_at IS NULL ORDER BY sl.created_at DESC LIMIT 50').all();
+      const rows = await env.DB.prepare('SELECT sl.id, sl.recipient_label, sl.expires_at, sl.max_views, sl.view_count, sl.last_viewed_at, sl.created_at, d.title FROM share_links sl JOIN documents d ON d.id = sl.document_id WHERE sl.revoked_at IS NULL ORDER BY sl.created_at DESC LIMIT 50').all();
       return json({ ok: true, data: { links: rows.results } });
     } catch (e) {
       return json({ ok: false, error: 'share-list: ' + e.message }, 500);
@@ -895,12 +1338,18 @@ router.post('/api/share-links', async (req, env) => {
       const body = await req.json();
       const { document_id, expires_at, max_views, recipient_label } = body;
       if (!document_id) return json({ ok: false, error: 'Document is required.' }, 400);
+      const doc = await env.DB.prepare('SELECT id, title, project_id, audience FROM documents WHERE id = ? AND deleted_at IS NULL').bind(Number(document_id)).first();
+      if (!doc) return json({ ok: false, error: 'Document not found.' }, 404);
+      if (doc.project_id && !(await visibleProjectIds(env, user)).includes(doc.project_id)) return json({ ok: false, error: 'Not allowed.' }, 403);
+      if (doc.audience !== 'customer') return json({ ok: false, error: 'This file is internal. Only files marked "can be shared with customers" can be sent.' }, 400);
+      const days = Number(await getSetting(env, 'share.default_expiry_days')) || 14;
+      const expiry = expires_at || new Date(Date.now() + days * 86400000).toISOString().replace('T', ' ').substring(0, 19);
       const token = crypto.getRandomValues(new Uint8Array(32));
       const tokenHash = await crypto.subtle.digest('SHA-256', token);
       const tokenB64 = bytesToBase64(token).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
       const hashB64 = bytesToBase64(new Uint8Array(tokenHash));
       const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
-      const result = await env.DB.prepare(`INSERT INTO share_links (token_hash, document_id, project_id, recipient_label, created_by, expires_at, max_views, created_at) VALUES (?, ?, NULL, ?, ?, ?, ?, ?)`).bind(hashB64, document_id, recipient_label || '', user.user_id, expires_at || new Date(Date.now() + 30 * 86400000).toISOString().replace('T', ' ').substring(0, 19), max_views || null, now).run();
+      const result = await env.DB.prepare(`INSERT INTO share_links (token_hash, document_id, project_id, recipient_label, created_by, expires_at, max_views, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).bind(hashB64, doc.id, doc.project_id, recipient_label || '', user.user_id, expiry, max_views || null, now).run();
       await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, ?, 'share_links', ?, ?, ?)`).bind(user.user_id, 'create', result.meta.last_row_id, `Created share link`, now).run();
       return json({ ok: true, data: { token: tokenB64, link: `/s/${tokenB64}` } });
     } catch (e) {
@@ -909,18 +1358,65 @@ router.post('/api/share-links', async (req, env) => {
   });
 });
 
+router.post('/api/share-links/:id/revoke', async (req, env) => {
+  return withAuth(req, env, 'share_links', 'E', async (req, env) => {
+    const id = Number(req.params.id);
+    await env.DB.prepare('UPDATE share_links SET revoked_at = ?, revoked_by = ? WHERE id = ? AND revoked_at IS NULL').bind(nowStr(), req.user.user_id, id).run();
+    await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, 'revoke', 'share_links', ?, 'Revoked a customer link', ?)`).bind(req.user.user_id, id, nowStr()).run();
+    return json({ ok: true });
+  });
+});
+
 // ---------- Email routes ----------
+router.get('/api/email/settings', async (req, env) => {
+  return withAuth(req, env, 'users_settings', 'V', async (req, env) => {
+    const c = await getEmailConfig(env);
+    return json({ ok: true, data: { provider: c.provider, host: c.host, port: c.port, security: c.security, username: c.username, from_name: c.fromName, from_email: c.fromEmail,
+      password_set: !!c.password, brevo_key_set: !!c.brevoKey, otp_enabled: (await getSetting(env, 'email.otp_enabled')) === 'on' } });
+  });
+});
+
+router.post('/api/email/settings', async (req, env) => {
+  return withAuth(req, env, 'users_settings', 'E', async (req, env) => {
+    const b = await req.json();
+    const uid = req.user.user_id;
+    const set = (k, v) => setSetting(env, k, v, uid);
+    if (!['smtp', 'brevo_api'].includes(b.provider || 'smtp')) return json({ ok: false, error: 'Unknown provider.' }, 400);
+    await set('email.provider', b.provider || 'smtp');
+    await set('smtp.host', String(b.host || '').trim());
+    await set('smtp.port', Number(b.port) || 465);
+    await set('smtp.security', b.security === 'starttls' ? 'starttls' : 'ssl');
+    await set('smtp.username', String(b.username || '').trim());
+    await set('smtp.from_name', String(b.from_name || 'NirmaanCRM').trim());
+    await set('smtp.from_email', String(b.from_email || '').trim());
+    if (b.password) await set('smtp.password', String(b.password));       // stored AES-GCM encrypted with APP_KEY
+    if (b.brevo_key) await set('brevo.api_key', String(b.brevo_key));
+    await set('email.otp_enabled', 'off');                                // must pass a fresh test before codes are offered
+    await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, 'update', 'settings', 0, 'Changed email settings', ?)`).bind(uid, nowStr()).run();
+    return json({ ok: true });
+  });
+});
+
+// Sends a test message to the logged-in Owner only (never to an arbitrary address).
 router.post('/api/email/test', async (req, env) => {
   return withAuth(req, env, 'users_settings', 'E', async (req, env) => {
-    try {
-      const body = await req.json();
-      const { to } = body;
-      if (!to) return json({ ok: false, error: 'Recipient email required.' }, 400);
-      const result = await sendMail(env, to, 'NirmaanCRM Test Email', '<h1>Test Email</h1><p>This is a test email from your NirmaanCRM system.</p>');
-      return json({ ok: true, data: { sent: result.sent, error: result.error } });
-    } catch (e) {
-      return json({ ok: false, error: 'email-test: ' + e.message }, 500);
-    }
+    const result = await sendMail(env, req.user.email, 'NirmaanCRM test email', '<h2>It works</h2><p>This is a test email from your NirmaanCRM system.</p>', { template: 'test' });
+    if (result.sent) await setSetting(env, 'email.otp_enabled', 'on', req.user.user_id);
+    return json({ ok: true, data: { sent: result.sent, error: result.error, to: req.user.email } });
+  });
+});
+
+router.post('/api/email/digest-now', async (req, env) => {
+  return withAuth(req, env, 'users_settings', 'E', async (req, env) => {
+    const r = await sendDigest(env, req.user.email);
+    return json({ ok: true, data: { sent: r.sent, error: r.error } });
+  });
+});
+
+router.post('/api/email/retry', async (req, env) => {
+  return withAuth(req, env, 'users_settings', 'E', async (req, env) => {
+    await retryFailedEmails(env);
+    return json({ ok: true });
   });
 });
 
@@ -935,32 +1431,47 @@ router.get('/api/email/log', async (req, env) => {
   });
 });
 
+router.get('/api/auth/methods', async (req, env) => json({ ok: true, data: { otp: (await getSetting(env, 'email.otp_enabled')) === 'on' } }));
+
 router.post('/api/auth/otp/send', async (req, env) => {
   try {
-    const { email } = await req.json();
-    if (!email) return json({ ok: false, error: 'Email required.' }, 400);
-    const code = await createOtpCode(env, email);
-    // Send the code via email
-    await sendMail(env, email, 'Your NirmaanCRM Login Code', `<h1>Login Code</h1><p>Your code is <strong>${code}</strong>. It expires in 10 minutes.</p>`);
-    return json({ ok: true });
+    if ((await getSetting(env, 'email.otp_enabled')) !== 'on') return json({ ok: false, error: 'Login by email code is not switched on.' }, 400);
+    const email = String((await req.json()).email || '').trim().toLowerCase();
+    if (!email) return json({ ok: false, error: 'Please enter your email.' }, 400);
+    const ip = req.headers.get('cf-connecting-ip') || 'x';
+    const rl1 = await checkRateLimit(env, `otp-send:${email}`, 3, 15);
+    const rl2 = await checkRateLimit(env, `otp-send-ip:${ip}`, 10, 15);
+    if (!rl1.allowed || !rl2.allowed) return json({ ok: false, error: 'Too many requests. Try again in 15 minutes.' }, 429);
+    const user = await env.DB.prepare('SELECT id, email, name FROM users WHERE lower(email) = ? AND active = 1 AND deleted_at IS NULL').bind(email).first();
+    if (user) {
+      const code = await createOtpCode(env, user.email);
+      await sendMail(env, user.email, 'Your NirmaanCRM login code', `<h2>Your login code</h2><p style="font-size:28px;letter-spacing:4px"><b>${code}</b></p><p>It works for 10 minutes. If you did not ask for it, ignore this email.</p>`, { template: 'otp' });
+    }
+    // Same answer whether or not the account exists.
+    return json({ ok: true, data: { message: 'If that email belongs to an active account, a code is on its way.' } });
   } catch (e) {
-    return json({ ok: false, error: 'otp-send: ' + e.message }, 500);
+    return json({ ok: false, error: 'Could not send the code.' }, 500);
   }
 });
 
 router.post('/api/auth/otp/verify', async (req, env) => {
   try {
-    const { email, code } = await req.json();
-    if (!email || !code) return json({ ok: false, error: 'Email and code required.' }, 400);
-    const result = await verifyOtpCode(env, email, code);
+    const b = await req.json();
+    const email = String(b.email || '').trim().toLowerCase();
+    if (!email || !b.code) return json({ ok: false, error: 'Email and code are required.' }, 400);
+    const rl = await checkRateLimit(env, `otp-verify:${email}`, 10, 15);
+    if (!rl.allowed) return json({ ok: false, error: 'Too many tries. Try again in 15 minutes.' }, 429);
+    const u = await env.DB.prepare('SELECT email FROM users WHERE lower(email) = ? AND deleted_at IS NULL').bind(email).first();
+    const result = u ? await verifyOtpCode(env, u.email, b.code) : { ok: false, error: 'That code is not right.' };
     if (!result.ok) return json({ ok: false, error: result.error }, 400);
     const user = result.user;
     const session = await createSession(env, user.id, req.headers.get('user-agent') || '');
+    await env.DB.prepare('UPDATE users SET last_login_at = ? WHERE id = ?').bind(nowStr(), user.id).run();
     const res = json({ ok: true, data: { user: safeUser({ user_id: user.id, ...user }), must_change_password: !!user.must_change_password } });
     setSessionCookie(res, session.tokenHash, session.expiresAt);
     return res;
   } catch (e) {
-    return json({ ok: false, error: 'otp-verify: ' + e.message }, 500);
+    return json({ ok: false, error: 'Could not check the code.' }, 500);
   }
 });
 
@@ -999,6 +1510,10 @@ router.post('/api/files/upload', async (req, env) => {
         return json({ ok: false, error: 'Not allowed.' }, 403);
       }
 
+      const MAX_DB_BYTES = 1500000; // D1 rows top out near 2 MB; bigger files need Google Drive or a link
+      if (file.size > MAX_DB_BYTES) {
+        return json({ ok: false, error: `This file is ${(file.size / 1048576).toFixed(1)} MB. Files stored in the database can be at most 1.5 MB. Photos are shrunk automatically; for large PDFs connect Google Drive or add a link instead.` }, 413);
+      }
       const arrayBuffer = await file.arrayBuffer();
       const bytes = new Uint8Array(arrayBuffer);
       const sizeBytes = bytes.length;
@@ -1007,10 +1522,20 @@ router.post('/api/files/upload', async (req, env) => {
       const blobResult = await env.DB.prepare(`INSERT INTO file_blobs (mime, size_bytes, data, created_at) VALUES (?, ?, ?, ?)`).bind(file.type, sizeBytes, bytes, now).run();
       const blobId = blobResult.meta.last_row_id;
 
+      // A new upload in an existing series becomes the latest version; older ones stay as history.
+      let version = 1;
+      let supersedes = null;
+      if (seriesKey) {
+        const prev = await env.DB.prepare('SELECT id, version FROM documents WHERE series_key = ? AND COALESCE(project_id, 0) = COALESCE(?, 0) AND is_latest = 1 AND deleted_at IS NULL').bind(seriesKey, projectId ? Number(projectId) : null).first();
+        if (prev) {
+          await env.DB.prepare('UPDATE documents SET is_latest = 0 WHERE id = ?').bind(prev.id).run();
+          version = Number(prev.version) + 1; supersedes = prev.id;
+        }
+      }
       const docResult = await env.DB.prepare(`
-        INSERT INTO documents (project_id, title, category, kind, module, entity, entity_id, mime, size_bytes, store, blob_id, audience, language, series_key, version, is_latest, uploaded_by, created_at)
-        VALUES (?, ?, ?, 'file', ?, ?, ?, ?, ?, 'd1', ?, ?, ?, ?, 1, 1, ?, ?)
-      `).bind(projectId || null, title, category, module || null, entity || null, entityId || null, file.type, sizeBytes, blobId, audience, language, seriesKey, user.user_id, now).run();
+        INSERT INTO documents (project_id, title, category, kind, module, entity, entity_id, mime, size_bytes, store, blob_id, audience, language, series_key, version, is_latest, supersedes_id, uploaded_by, created_at)
+        VALUES (?, ?, ?, 'file', ?, ?, ?, ?, ?, 'd1', ?, ?, ?, ?, ?, 1, ?, ?, ?)
+      `).bind(projectId || null, title, category, module || null, entity || null, entityId || null, file.type, sizeBytes, blobId, audience, language, seriesKey, version, supersedes, user.user_id, now).run();
 
       await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, ?, 'documents', ?, ?, ?)`).bind(user.user_id, 'create', docResult.meta.last_row_id, `Uploaded file "${title}"`, now).run();
 
@@ -1036,10 +1561,11 @@ router.get('/api/files/download/:docId', async (req, env) => {
       if (doc.store === 'd1' || doc.store === null) {
         const blob = await env.DB.prepare('SELECT * FROM file_blobs WHERE id = ?').bind(doc.blob_id).first();
         if (!blob) return json({ ok: false, error: 'File data not found.' }, 404);
-        return new Response(blob.data, {
+        return new Response(blobBytes(blob.data), {
           headers: {
             'Content-Type': doc.mime || 'application/octet-stream',
-            'Content-Disposition': `attachment; filename="${doc.title}"`,
+            'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(doc.title)}`,
+            'X-Content-Type-Options': 'nosniff',
             'Cache-Control': 'private, no-store',
           },
         });
@@ -1095,7 +1621,7 @@ async function serveBrandingFile(env, seriesKey) {
     if (!row || !row.data) {
       return new Response('Not found', { status: 404 });
     }
-    return new Response(row.data, {
+    return new Response(blobBytes(row.data), {
       headers: {
         'Content-Type': row.mime || 'image/png',
         'Cache-Control': 'public, max-age=86400',
@@ -1111,6 +1637,9 @@ router.get('/api/dashboard', async (req, env) => {
   return withAuth(req, env, 'reports', 'V', async (req, env) => {
     try {
       const user = req.user;
+      if (!userCan(user, 'sales', 'V') && !userCan(user, 'procurement', 'V')) {
+        return json({ ok: false, error: 'Not allowed.' }, 403);
+      }
       const ids = await visibleProjectIds(env, user);
       if (ids.length === 0) {
         return json({ ok: true, data: { moneyIn: 0, overdueReceivables: { total: 0, cnt: 0 }, billsDue: { total: 0, cnt: 0 }, posPending: 0, dprsYesterday: 0, highSnags: 0, newLeads: 0 } });
@@ -1414,7 +1943,7 @@ router.get('/api/storage/status', async (req, env) => {
 
 // ---------- Customer share link landing page ----------
 router.get('/s/:token', async (req, env) => {
-  return env.ASSETS.fetch(new Request(`${new URL(req.url).origin}/s.html`, req));
+  return env.ASSETS.fetch(new Request(`${new URL(req.url).origin}/s`, { method: 'GET', headers: req.headers }));
 });
 
 // ---------- Customer share link file download ----------
@@ -1445,10 +1974,11 @@ router.get('/s/:token/file', async (req, env) => {
     if (doc.store === 'd1' || doc.store === null) {
       const blob = await env.DB.prepare('SELECT * FROM file_blobs WHERE id = ?').bind(doc.blob_id).first();
       if (!blob) return new Response('File data not found.', { status: 410 });
-      return new Response(blob.data, {
+      return new Response(blobBytes(blob.data), {
         headers: {
           'Content-Type': doc.mime || 'application/octet-stream',
-          'Content-Disposition': `inline; filename="${doc.title}"`,
+          'Content-Disposition': `inline; filename*=UTF-8''${encodeURIComponent(doc.title)}`,
+          'X-Content-Type-Options': 'nosniff',
           'Cache-Control': 'no-store',
         },
       });
@@ -1459,6 +1989,11 @@ router.get('/s/:token/file', async (req, env) => {
     return new Response('Error: ' + e.message, { status: 500 });
   }
 });
+
+// D1 returns BLOB columns as plain number arrays; turn them back into bytes before responding.
+function blobBytes(d) {
+  return d instanceof Uint8Array ? d : d instanceof ArrayBuffer ? new Uint8Array(d) : Uint8Array.from(d || []);
+}
 
 // ---------- Storage helper functions ----------
 async function getSettingRaw(env, key) {
@@ -1477,7 +2012,7 @@ async function setSettingRaw(env, key, value, updatedBy) {
 }
 
 async function encryptSetting(env, plaintext) {
-  const key = await crypto.subtle.importKey('raw', base64ToBytes(env.APP_KEY), { name: 'AES-GCM' }, false, ['encrypt']);
+  const key = await crypto.subtle.importKey('raw', await appKeyBytes(env.APP_KEY), { name: 'AES-GCM' }, false, ['encrypt']);
   const iv = crypto.getRandomValues(new Uint8Array(12));
   const enc = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, new TextEncoder().encode(plaintext));
   const combined = new Uint8Array(iv.byteLength + enc.byteLength);
@@ -1491,7 +2026,7 @@ async function decryptSetting(env, ciphertextB64url) {
   const combined = base64urlDecode(ciphertextB64url);
   const iv = combined.slice(0, 12);
   const enc = combined.slice(12);
-  const key = await crypto.subtle.importKey('raw', base64ToBytes(env.APP_KEY), { name: 'AES-GCM' }, false, ['decrypt']);
+  const key = await crypto.subtle.importKey('raw', await appKeyBytes(env.APP_KEY), { name: 'AES-GCM' }, false, ['decrypt']);
   const dec = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, enc);
   return new TextDecoder().decode(dec);
 }
@@ -1593,14 +2128,21 @@ async function runCron(cron, env) {
   // 30 20 * * * = 02:00 IST nightly backup
 
   if (cron === '30 * * * *') {
-    // Hourly: retry failed emails + DPR nudge + reminders
+    // Hourly: retry failed emails (max 3 attempts each)
     await retryFailedEmails(env);
   } else if (cron === '30 2 * * *') {
-    // 08:00 IST digest — send to owners
+    // 08:00 IST digest to every active Owner
     const owners = await env.DB.prepare("SELECT email FROM users WHERE role = 'owner' AND active = 1 AND deleted_at IS NULL").all();
     for (const o of owners.results) {
-      try { await sendDigest(env, o.email); } catch (e) {}
+      try { await sendDigest(env, o.email); } catch (e) { console.error('digest failed', e.message); }
     }
+  } else if (cron === '30 13 * * *') {
+    // 19:00 IST: in-app nudge for projects with no site report today
+    await notifyMissingDprs(env);
+  } else if (cron === '30 20 * * *') {
+    // 02:00 IST: housekeeping — expired sessions, OTP codes and rate-limit rows
+    await env.DB.prepare("DELETE FROM sessions WHERE expires_at < datetime('now')").run();
+    await env.DB.prepare("DELETE FROM otp_codes WHERE expires_at < datetime('now')").run();
   }
 }
 
@@ -1614,7 +2156,7 @@ export default {
         return json({ ok: true, env: env.ENVIRONMENT || 'production' });
       }
       await ensureBootstrap(env);
-      if (path.startsWith('/api/')) {
+      if (path.startsWith('/api/') || path.startsWith('/s/') || path.startsWith('/brand/')) {
         return router.handle(request, env);
       }
       return env.ASSETS.fetch(request);

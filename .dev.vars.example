@@ -1,0 +1,7 @@
+# Copy to .dev.vars for `npm run dev`. Never commit .dev.vars.
+SESSION_SECRET=any-long-random-string
+APP_KEY=generate-with: openssl rand -base64 32
+OWNER_EMAIL=you@yourcompany.in
+OWNER_PASSWORD=a-temporary-password-you-will-change-at-first-login
+GOOGLE_CLIENT_ID=
+GOOGLE_CLIENT_SECRET=
