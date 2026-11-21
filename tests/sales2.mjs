@@ -33,7 +33,7 @@ const unit = (await o.call('POST', '/api/sales/inventory', { project_id: pid, un
 await o.call('POST', '/api/sales/plan-stages', { project_id: pid, stages: [{ stage_name: 'All', pct_bp: 10000 }] });
 const bk = (await o.call('POST', '/api/sales/bookings', { unit_id: unit, customer_name: 'zz cust', channel_partner_id: part })).data.id;
 const dem = (await o.call('GET', `/api/sales/bookings/${bk}`)).data.demands[0];
-await o.call('POST', `/api/sales/bookings/${bk}/receipts`, { amount_paise: 5000000, demand_id: dem.id });
+await o.call('POST', `/api/sales/bookings/${bk}/receipts`, { amount_paise: 5000000, demand_id: dem.id, ref_no: 'T' + run });
 let pt = (await o.call('GET', '/api/sales/partners')).data.partners.find((p) => p.id === part);
 ok('brokerage earned = 2% of money received', pt.earned_paise === 100000 && pt.paid_paise === 0, JSON.stringify(pt));
 await o.call('POST', `/api/sales/partners/${part}/payments`, { amount_paise: 40000 });

@@ -566,7 +566,7 @@ function renderDocuments(main) {
   loadDocuments();
 }
 
-const DOC_CATS = [['other', 'Other'], ['drawing', 'Drawing'], ['approval', 'Approval / NOC'], ['legal', 'Legal / agreement'], ['brochure', 'Brochure'], ['photo', 'Site photo'], ['invoice', 'Invoice / bill']];
+const DOC_CATS = [['other', 'Other'], ['kyc', 'Buyer KYC (restricted)'], ['agreement', 'Agreement (restricted)'], ['drawing', 'Drawing'], ['approval', 'Approval / NOC'], ['legal', 'Legal / agreement'], ['brochure', 'Brochure'], ['photo', 'Site photo'], ['invoice', 'Invoice / bill']];
 
 async function uploadDoc() {
   const v = await openForm({ title: 'Upload file', intro: 'JPG, PNG, PDF, Word, Excel or CSV. Photos are shrunk automatically. Up to 1.5 MB while files are stored in the database.', fields: [

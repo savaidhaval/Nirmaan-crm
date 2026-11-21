@@ -13,7 +13,7 @@ const site = await mk('site', [pid]); const sales = await mk('sales', [pid]); co
 const png = () => new Blob([Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='), (c) => c.charCodeAt(0))], { type: 'image/png' });
 
 // brochures + versions
-const up = async (title, audience, body) => { const f = new FormData(); f.append('file', new Blob([body], { type: 'application/pdf' }), 'b.pdf'); f.append('title', title); f.append('category', 'brochure'); f.append('module', 'brochure'); f.append('project_id', String(pid)); f.append('audience', audience); f.append('series_key', 'brochure:' + title.toLowerCase()); return o.call('POST', '/api/files/upload', f); };
+const up = async (title, audience, body) => { const f = new FormData(); f.append('file', new Blob(['%PDF-1.4 ' + body], { type: 'application/pdf' }), 'b.pdf'); f.append('title', title); f.append('category', 'brochure'); f.append('module', 'brochure'); f.append('project_id', String(pid)); f.append('audience', audience); f.append('series_key', 'brochure:' + title.toLowerCase()); return o.call('POST', '/api/files/upload', f); };
 ok('brochure v1 uploads', (await up('Main ' + run, 'customer', 'v1')).status === 200);
 ok('brochure v2 uploads (same series)', (await up('Main ' + run, 'customer', 'v2')).status === 200);
 await up('Prices ' + run, 'internal', 'secret');

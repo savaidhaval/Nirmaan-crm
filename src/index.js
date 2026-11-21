@@ -10,6 +10,7 @@ import { getSetting, setSetting, appKeyBytes } from './core/settings.js';
 import { query } from './core/db.js';
 import { sendMail, retryFailedEmails, sendDigest, notifyMissingDprs, getEmailConfig, esc as escHtml } from './core/mail.js';
 import * as gdrive from './core/gdrive.js';
+import { registerSalesOps, expireHolds, LEAD_TRANSITIONS } from './routes/sales_ops.js';
 
 const router = new Router();
 
@@ -39,6 +40,9 @@ async function withAuth(req, env, module, action, handler, requireHeader = true)
   const user = await getCurrentUser(env, req.headers.get('cookie'));
   const fail = authFailure(user);
   if (fail) return fail;
+  if (['POST', 'PUT', 'DELETE'].includes(req.method) && !/multipart\/form-data/i.test(req.headers.get('content-type') || '') && Number(req.headers.get('content-length') || 0) > 1048576) {
+    return json({ ok: false, error: 'That request is too large.' }, 413);
+  }
   if (!userCan(user, module, action)) {
     return json({ ok: false, error: 'Not allowed.' }, 403);
   }
@@ -62,6 +66,15 @@ router.get('/api/health', async (req, env) => {
   return json({ ok: true, env: env.ENVIRONMENT || 'production' });
 });
 
+// Never send database or stack text to the browser. The detail goes to the log (wrangler tail) with a short reference.
+function serverError(e, label) {
+  const ref = Array.from(crypto.getRandomValues(new Uint8Array(4)), (b) => b.toString(16).padStart(2, '0')).join('');
+  console.error(`[${label}] ref=${ref}`, e && e.stack ? e.stack : e);
+  return json({ ok: false, error: `Something went wrong (ref ${ref}). Please try again. If it keeps happening, tell the Owner this reference.` }, 500);
+}
+
+const clientIp = (req) => req.headers.get('cf-connecting-ip') || 'unknown';
+
 // The one public address of this CRM (https://crm.example.com). Falls back to the request origin only when EXTERNAL_URL is unset (local dev).
 function publicBase(env, req) {
   return String(env.EXTERNAL_URL || new URL(req.url).origin).replace(/\/+$/, '');
@@ -72,8 +85,10 @@ router.post('/api/auth/login', async (req, env) => {
   try {
     await ensureBootstrap(env);
   } catch (e) {
-    return json({ ok: false, error: 'bootstrap: ' + e.message }, 500);
+    return serverError(e, 'bootstrap');
   }
+  const ipRl = await checkRateLimit(env, `login-ip:${clientIp(req)}`, 40, 15);
+  if (!ipRl.allowed) return json({ ok: false, error: 'Too many sign-in attempts from this network. Try again in 15 minutes.' }, 429);
   const { email, password } = await req.json();
   if (!email || !password) {
     return json({ ok: false, error: 'Please enter email and password.' }, 400);
@@ -137,7 +152,7 @@ router.get('/api/projects', async (req, env) => {
       const { results } = await query(env.DB, sql, ids);
       return json({ ok: true, data: { projects: results } });
     } catch (e) {
-      return json({ ok: false, error: 'list: ' + e.message }, 500);
+      return serverError(e, 'list');
     }
   });
 });
@@ -161,7 +176,7 @@ router.post('/api/projects', async (req, env) => {
       await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, ?, 'projects', ?, ?, ?)`).bind(user.user_id, 'create', result.meta.last_row_id, `Created project "${name}" (${code})`, now).run();
       return json({ ok: true, data: { id: result.meta.last_row_id } });
     } catch (e) {
-      return json({ ok: false, error: 'create: ' + e.message }, 500);
+      return serverError(e, 'create');
     }
   });
 });
@@ -408,11 +423,12 @@ router.get('/api/documents', async (req, env) => {
         sql += ` AND (${ids.length ? 'project_id IN (' + ids.map(() => '?').join(',') + ')' : '0'}${orphans})`;
         params.push(...ids);
       }
+      if (!canSeeRestricted(user)) sql += " AND COALESCE(category, '') NOT IN ('kyc', 'legal', 'agreement')";
       sql += ' ORDER BY created_at DESC';
       const rows = await query(env.DB, sql, params);
       return json({ ok: true, data: { documents: rows.results } });
     } catch (e) {
-      return json({ ok: false, error: 'docs: ' + e.message }, 500);
+      return serverError(e, 'docs');
     }
   });
 });
@@ -432,7 +448,7 @@ router.post('/api/documents', async (req, env) => {
       await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, 'create', 'documents', ?, ?, ?)`).bind(user.user_id, result.meta.last_row_id, `Added link "${title}"`, now).run();
       return json({ ok: true, data: { id: result.meta.last_row_id } });
     } catch (e) {
-      return json({ ok: false, error: 'doc-create: ' + e.message }, 500);
+      return serverError(e, 'doc-create');
     }
   });
 });
@@ -444,9 +460,10 @@ router.get('/api/documents/:id', async (req, env) => {
       const row = await env.DB.prepare('SELECT * FROM documents WHERE id = ? AND deleted_at IS NULL').bind(id).first();
       if (!row) return json({ ok: false, error: 'Document not found.' }, 404);
       if (row.project_id && !(await visibleProjectIds(env, req.user)).includes(row.project_id)) return json({ ok: false, error: 'Not allowed.' }, 403);
+      if (!docVisible(req.user, row)) return json({ ok: false, error: 'Not allowed.' }, 403);
       return json({ ok: true, data: row });
     } catch (e) {
-      return json({ ok: false, error: 'doc-get: ' + e.message }, 500);
+      return serverError(e, 'doc-get');
     }
   });
 });
@@ -463,7 +480,7 @@ router.delete('/api/documents/:id', async (req, env) => {
       await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, ?, 'documents', ?, ?, ?)`).bind(req.user.user_id, 'delete', id, `Deleted document ${id}`, now).run();
       return json({ ok: true, data: { id } });
     } catch (e) {
-      return json({ ok: false, error: 'doc-delete: ' + e.message }, 500);
+      return serverError(e, 'doc-delete');
     }
   });
 });
@@ -480,14 +497,15 @@ router.get('/api/settings', async (req, env) => {
       }
       return json({ ok: true, data: { settings } });
     } catch (e) {
-      return json({ ok: false, error: 'settings: ' + e.message }, 500);
+      return serverError(e, 'settings');
     }
   });
 });
 
 const EDITABLE_SETTINGS = ['po.pm_approval_limit_paise', 'access.allow_second_owner', 'access.limit_roles_to_assigned_projects', 'sales.share_all_leads',
   'demand.due_days_after_milestone', 'share.default_expiry_days', 'share.default_max_views', 'files.brochure_max_mb', 'branding.apply_colours_to_app',
-  'brochure.price_list_default_audience', 'storage.warn_percent'];
+  'brochure.price_list_default_audience', 'storage.warn_percent', 'sales.max_holds_per_user', 'sales.max_discount_bp', 'sales.pm_max_discount_bp',
+  'tax.stamp_duty_bp', 'tax.metro_cess_bp', 'tax.women_concession_bp', 'tax.registration_bp', 'tax.registration_cap_paise', 'tax.gst_bp'];
 
 router.post('/api/settings/:key', async (req, env) => {
   return withAuth(req, env, 'users_settings', 'E', async (req, env) => {
@@ -499,7 +517,7 @@ router.post('/api/settings/:key', async (req, env) => {
       await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, 'update', 'settings', 0, ?, ?)`).bind(req.user.user_id, `Changed setting ${key}`, nowStr()).run();
       return json({ ok: true, data: { key, value } });
     } catch (e) {
-      return json({ ok: false, error: 'settings-set: ' + e.message }, 500);
+      return serverError(e, 'settings-set');
     }
   });
 });
@@ -511,7 +529,7 @@ router.get('/api/notifications', async (req, env) => {
       const rows = await env.DB.prepare('SELECT * FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 50').bind(req.user.user_id).all();
       return json({ ok: true, data: { notifications: rows.results } });
     } catch (e) {
-      return json({ ok: false, error: 'notif: ' + e.message }, 500);
+      return serverError(e, 'notif');
     }
   });
 });
@@ -524,7 +542,7 @@ router.post('/api/notifications/:id/read', async (req, env) => {
       await env.DB.prepare('UPDATE notifications SET read_at = ? WHERE id = ? AND user_id = ?').bind(now, id, req.user.user_id).run();
       return json({ ok: true });
     } catch (e) {
-      return json({ ok: false, error: 'notif-read: ' + e.message }, 500);
+      return serverError(e, 'notif-read');
     }
   });
 });
@@ -533,10 +551,18 @@ router.post('/api/notifications/:id/read', async (req, env) => {
 router.get('/api/audit', async (req, env) => {
   return withAuth(req, env, 'users_settings', 'V', async (req, env) => {
     try {
-      const rows = await env.DB.prepare('SELECT al.*, u.name, u.email FROM audit_log al LEFT JOIN users u ON u.id = al.user_id ORDER BY al.created_at DESC LIMIT 100').all();
+      const u = new URL(req.url);
+      const where = []; const params = [];
+      for (const [k, col] of [['action', 'al.action'], ['entity', 'al.entity']]) { const v = u.searchParams.get(k); if (v) { where.push(`${col} = ?`); params.push(v); } }
+      if (u.searchParams.get('user_id')) { where.push('al.user_id = ?'); params.push(Number(u.searchParams.get('user_id'))); }
+      if (u.searchParams.get('entity_id')) { where.push('al.entity_id = ?'); params.push(Number(u.searchParams.get('entity_id'))); }
+      if (u.searchParams.get('q')) { where.push('al.summary LIKE ?'); params.push('%' + u.searchParams.get('q').replace(/[%_]/g, '') + '%'); }
+      if (u.searchParams.get('before_id')) { where.push('al.id < ?'); params.push(Number(u.searchParams.get('before_id'))); }
+      const limit = Math.min(Math.max(Number(u.searchParams.get('limit')) || 100, 1), 200);
+      const rows = await env.DB.prepare(`SELECT al.*, u.name, u.email FROM audit_log al LEFT JOIN users u ON u.id = al.user_id ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY al.id DESC LIMIT ${limit}`).bind(...params).all();
       return json({ ok: true, data: { audit: rows.results } });
     } catch (e) {
-      return json({ ok: false, error: 'audit: ' + e.message }, 500);
+      return serverError(e, 'audit');
     }
   });
 });
@@ -552,7 +578,7 @@ router.get('/api/approvals', async (req, env) => {
       const rows = await query(env.DB, sql, ids);
       return json({ ok: true, data: { items: rows.results } });
     } catch (e) {
-      return json({ ok: false, error: 'apr-list: ' + e.message }, 500);
+      return serverError(e, 'apr-list');
     }
   });
 });
@@ -575,7 +601,7 @@ router.post('/api/approvals', async (req, env) => {
       await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, ?, 'apr_items', ?, ?, ?)`).bind(user.user_id, 'create', result.meta.last_row_id, `Created approval "${name}"`, now).run();
       return json({ ok: true, data: { id: result.meta.last_row_id } });
     } catch (e) {
-      return json({ ok: false, error: 'apr-create: ' + e.message }, 500);
+      return serverError(e, 'apr-create');
     }
   });
 });
@@ -593,7 +619,7 @@ router.get('/api/approvals/:id', async (req, env) => {
       const events = await env.DB.prepare('SELECT * FROM apr_events WHERE item_id = ? ORDER BY created_at').bind(id).all();
       return json({ ok: true, data: { item, events: events.results } });
     } catch (e) {
-      return json({ ok: false, error: 'apr-get: ' + e.message }, 500);
+      return serverError(e, 'apr-get');
     }
   });
 });
@@ -636,7 +662,7 @@ router.post('/api/approvals/:id/event', async (req, env) => {
       await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, ?, 'apr_items', ?, ?, ?)`).bind(user.user_id, 'event', id, `Approval event: ${event}`, now).run();
       return json({ ok: true });
     } catch (e) {
-      return json({ ok: false, error: 'apr-event: ' + e.message }, 500);
+      return serverError(e, 'apr-event');
     }
   });
 });
@@ -652,7 +678,7 @@ router.get('/api/drawings', async (req, env) => {
       const rows = await query(env.DB, sql, ids);
       return json({ ok: true, data: { drawings: rows.results } });
     } catch (e) {
-      return json({ ok: false, error: 'drw-list: ' + e.message }, 500);
+      return serverError(e, 'drw-list');
     }
   });
 });
@@ -675,7 +701,7 @@ router.post('/api/drawings', async (req, env) => {
       await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, ?, 'drw_drawings', ?, ?, ?)`).bind(user.user_id, 'create', result.meta.last_row_id, `Created drawing "${code}"`, now).run();
       return json({ ok: true, data: { id: result.meta.last_row_id } });
     } catch (e) {
-      return json({ ok: false, error: 'drw-create: ' + e.message }, 500);
+      return serverError(e, 'drw-create');
     }
   });
 });
@@ -696,7 +722,7 @@ router.get('/api/drawings/:id/revisions', async (req, env) => {
         : await env.DB.prepare('SELECT * FROM drw_revisions WHERE drawing_id = ? ORDER BY id DESC').bind(drawingId).all();
       return json({ ok: true, data: { revisions: rows.results } });
     } catch (e) {
-      return json({ ok: false, error: 'drw-rev: ' + e.message }, 500);
+      return serverError(e, 'drw-rev');
     }
   });
 });
@@ -712,7 +738,7 @@ router.get('/api/site/milestones', async (req, env) => {
       const rows = await query(env.DB, sql, ids);
       return json({ ok: true, data: { milestones: rows.results } });
     } catch (e) {
-      return json({ ok: false, error: 'ms-list: ' + e.message }, 500);
+      return serverError(e, 'ms-list');
     }
   });
 });
@@ -746,7 +772,7 @@ router.post('/api/site/milestones/:id/done', async (req, env) => {
       }
       return json({ ok: true, data: { id, actual_date: doneDate, demands_ready: readied } });
     } catch (e) {
-      return json({ ok: false, error: 'ms-done: ' + e.message }, 500);
+      return serverError(e, 'ms-done');
     }
   });
 });
@@ -761,7 +787,7 @@ router.get('/api/site/dprs', async (req, env) => {
       const rows = await query(env.DB, sql, ids);
       return json({ ok: true, data: { dprs: rows.results } });
     } catch (e) {
-      return json({ ok: false, error: 'dpr-list: ' + e.message }, 500);
+      return serverError(e, 'dpr-list');
     }
   });
 });
@@ -788,7 +814,7 @@ router.post('/api/site/dprs', async (req, env) => {
       await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, ?, 'site_dprs', ?, ?, ?)`).bind(user.user_id, 'create', result.meta.last_row_id, `DPR filed for ${report_date}`, now).run();
       return json({ ok: true, data: { id: result.meta.last_row_id } });
     } catch (e) {
-      return json({ ok: false, error: 'dpr-create: ' + e.message }, 500);
+      return serverError(e, 'dpr-create');
     }
   });
 });
@@ -803,7 +829,7 @@ router.get('/api/site/snags', async (req, env) => {
       const rows = await query(env.DB, sql, ids);
       return json({ ok: true, data: { snags: rows.results } });
     } catch (e) {
-      return json({ ok: false, error: 'snag-list: ' + e.message }, 500);
+      return serverError(e, 'snag-list');
     }
   });
 });
@@ -830,7 +856,7 @@ router.post('/api/site/snags', async (req, env) => {
       await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, ?, 'site_snags', ?, ?, ?)`).bind(user.user_id, 'create', result.meta.last_row_id, `Snag created: ${title}`, now).run();
       return json({ ok: true, data: { id: result.meta.last_row_id } });
     } catch (e) {
-      return json({ ok: false, error: 'snag-create: ' + e.message }, 500);
+      return serverError(e, 'snag-create');
     }
   });
 });
@@ -842,7 +868,7 @@ router.get('/api/procurement/vendors', async (req, env) => {
       const rows = await env.DB.prepare('SELECT * FROM pro_vendors WHERE deleted_at IS NULL ORDER BY name').all();
       return json({ ok: true, data: { vendors: rows.results } });
     } catch (e) {
-      return json({ ok: false, error: 'vendors: ' + e.message }, 500);
+      return serverError(e, 'vendors');
     }
   });
 });
@@ -859,7 +885,7 @@ router.post('/api/procurement/vendors', async (req, env) => {
       await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, ?, 'pro_vendors', ?, ?, ?)`).bind(user.user_id, 'create', result.meta.last_row_id, `Created vendor "${name}"`, now).run();
       return json({ ok: true, data: { id: result.meta.last_row_id } });
     } catch (e) {
-      return json({ ok: false, error: 'vendor-create: ' + e.message }, 500);
+      return serverError(e, 'vendor-create');
     }
   });
 });
@@ -881,7 +907,7 @@ router.get('/api/procurement/rfqs', async (req, env) => {
       const rows = await query(env.DB, sql, params);
       return json({ ok: true, data: { rfqs: rows.results } });
     } catch (e) {
-      return json({ ok: false, error: 'rfq-list: ' + e.message }, 500);
+      return serverError(e, 'rfq-list');
     }
   });
 });
@@ -897,7 +923,7 @@ router.post('/api/procurement/rfqs', async (req, env) => {
       const result = await env.DB.prepare(`INSERT INTO pro_rfqs (project_id, title, material, qty, unit, needed_by, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`).bind(project_id || null, title, material || '', qty || 0, unit || '', needed_by || null, user.user_id, now).run();
       return json({ ok: true, data: { id: result.meta.last_row_id } });
     } catch (e) {
-      return json({ ok: false, error: 'rfq-create: ' + e.message }, 500);
+      return serverError(e, 'rfq-create');
     }
   });
 });
@@ -912,7 +938,7 @@ router.get('/api/procurement/pos', async (req, env) => {
       const rows = await query(env.DB, sql, ids);
       return json({ ok: true, data: { pos: rows.results } });
     } catch (e) {
-      return json({ ok: false, error: 'po-list: ' + e.message }, 500);
+      return serverError(e, 'po-list');
     }
   });
 });
@@ -952,7 +978,7 @@ router.post('/api/procurement/pos', async (req, env) => {
       await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, ?, 'pro_pos', ?, ?, ?)`).bind(user.user_id, 'create', result.meta.last_row_id, `Created PO ${poNo}`, now).run();
       return json({ ok: true, data: { id: result.meta.last_row_id, po_no: poNo } });
     } catch (e) {
-      return json({ ok: false, error: 'po-create: ' + e.message }, 500);
+      return serverError(e, 'po-create');
     }
   });
 });
@@ -969,29 +995,7 @@ router.get('/api/sales/leads', async (req, env) => {
         : await env.DB.prepare(`SELECT * FROM sal_leads WHERE deleted_at IS NULL${scope} AND assigned_to = ? ORDER BY created_at DESC LIMIT 300`).bind(user.user_id).all();
       return json({ ok: true, data: { leads: rows.results } });
     } catch (e) {
-      return json({ ok: false, error: 'lead-list: ' + e.message }, 500);
-    }
-  });
-});
-
-router.post('/api/sales/leads', async (req, env) => {
-  return withAuth(req, env, 'sales', 'C', async (req, env) => {
-    try {
-      const user = req.user;
-      const body = await req.json();
-      const { name, phone, project_id, source, source_detail, budget_paise, config_pref, status, consent, consent_at } = body;
-      if (!name || !phone) {
-        return json({ ok: false, error: 'Name and phone are required.' }, 400);
-      }
-      const dup = await env.DB.prepare('SELECT id, name FROM sal_leads WHERE phone = ? AND deleted_at IS NULL LIMIT 1').bind(String(phone).trim()).first();
-      if (dup) return json({ ok: false, error: `This mobile number is already a lead (${dup.name}).` }, 409);
-      if (project_id && !(await visibleProjectIds(env, user)).includes(Number(project_id))) return json({ ok: false, error: 'Not allowed.' }, 403);
-      const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
-      const result = await env.DB.prepare(`INSERT INTO sal_leads (project_id, name, phone, email, source, source_detail, budget_paise, config_pref, status, assigned_to, consent, consent_at, notes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(project_id || null, name, phone, body.email || '', source || 'other', source_detail || '', budget_paise || 0, config_pref || '', status || 'new', user.user_id, consent ? 1 : 0, consent_at || null, body.notes || '', now).run();
-      await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, ?, 'sal_leads', ?, ?, ?)`).bind(user.user_id, 'create', result.meta.last_row_id, `Created lead "${name}"`, now).run();
-      return json({ ok: true, data: { id: result.meta.last_row_id } });
-    } catch (e) {
-      return json({ ok: false, error: 'lead-create: ' + e.message }, 500);
+      return serverError(e, 'lead-list');
     }
   });
 });
@@ -1009,7 +1013,7 @@ router.get('/api/sales/inventory', async (req, env) => {
       const rows = await env.DB.prepare('SELECT * FROM sal_inventory WHERE project_id = ? AND deleted_at IS NULL ORDER BY wing, floor, unit_no').bind(projectId).all();
       return json({ ok: true, data: { inventory: rows.results } });
     } catch (e) {
-      return json({ ok: false, error: 'inventory: ' + e.message }, 500);
+      return serverError(e, 'inventory');
     }
   });
 });
@@ -1063,7 +1067,7 @@ router.post('/api/approvals/load-template', async (req, env) => {
       await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, 'create', 'apr_items', ?, ?, ?)`).bind(req.user.user_id, Number(project_id), `Loaded Mumbai approvals template (${rows.length} items)`, now).run();
       return json({ ok: true, data: { count: rows.length } });
     } catch (e) {
-      return json({ ok: false, error: 'apr-template: ' + e.message }, 500);
+      return serverError(e, 'apr-template');
     }
   });
 });
@@ -1099,7 +1103,7 @@ router.post('/api/drawings/:id/revisions', async (req, env) => {
       }
       return json({ ok: true, data: { rev_no: revNo } });
     } catch (e) {
-      return json({ ok: false, error: 'drw-issue: ' + e.message }, 500);
+      return serverError(e, 'drw-issue');
     }
   });
 });
@@ -1158,41 +1162,12 @@ router.post('/api/procurement/pos/:id/approve', (req, env) => withAuth(req, env,
 router.post('/api/procurement/pos/:id/reject', (req, env) => withAuth(req, env, 'procurement', 'A', (req, env) => decidePo(req, env, 'reject')));
 
 // ---------- Sales: inventory, payment plan, bookings, receipts ----------
-router.post('/api/sales/inventory', async (req, env) => {
-  return withAuth(req, env, 'sales', 'C', async (req, env) => {
-    try {
-      const b = await req.json();
-      const ids = await visibleProjectIds(env, req.user);
-      if (!b.project_id || !b.unit_no || !ids.includes(Number(b.project_id))) return json({ ok: false, error: 'Project and unit number are required.' }, 400);
-      const r = await env.DB.prepare('INSERT INTO sal_inventory (project_id, wing, floor, unit_no, type, carpet_sqft, rera_carpet_sqft, price_paise, floor_rise_paise, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-        .bind(Number(b.project_id), b.wing || null, b.floor ?? null, String(b.unit_no), b.type || '', b.carpet_sqft || null, b.rera_carpet_sqft || null, Math.round(Number(b.price_paise) || 0), Math.round(Number(b.floor_rise_paise) || 0), nowStr()).run();
-      return json({ ok: true, data: { id: r.meta.last_row_id } });
-    } catch (e) {
-      return json({ ok: false, error: /UNIQUE/.test(e.message) ? 'That unit already exists in this wing.' : 'inv-create: ' + e.message }, /UNIQUE/.test(e.message) ? 400 : 500);
-    }
-  });
-});
-
 router.get('/api/sales/plan-stages', async (req, env) => {
   return withAuth(req, env, 'sales', 'V', async (req, env) => {
     const pid = Number(new URL(req.url).searchParams.get('project_id'));
     if (!(await visibleProjectIds(env, req.user)).includes(pid)) return json({ ok: false, error: 'Not allowed.' }, 403);
-    const rows = await env.DB.prepare('SELECT * FROM sal_plan_stages WHERE project_id = ? ORDER BY sort_order, id').bind(pid).all();
+    const rows = await env.DB.prepare('SELECT * FROM sal_plan_stages WHERE project_id = ? AND retired = 0 ORDER BY sort_order, id').bind(pid).all();
     return json({ ok: true, data: { stages: rows.results } });
-  });
-});
-
-router.post('/api/sales/plan-stages', async (req, env) => {
-  return withAuth(req, env, 'sales', 'E', async (req, env) => {
-    const { project_id, stages } = await req.json();
-    if (!(await visibleProjectIds(env, req.user)).includes(Number(project_id))) return json({ ok: false, error: 'Not allowed.' }, 403);
-    if (!Array.isArray(stages) || !stages.length) return json({ ok: false, error: 'Add at least one stage.' }, 400);
-    const total = stages.reduce((t, s) => t + (parseInt(s.pct_bp, 10) || 0), 0);
-    if (total !== 10000) return json({ ok: false, error: `Stages must total 100% (they total ${(total / 100).toFixed(2)}%).` }, 400);
-    const stmts = [env.DB.prepare('DELETE FROM sal_plan_stages WHERE project_id = ?').bind(Number(project_id))];
-    stages.forEach((s, i) => stmts.push(env.DB.prepare('INSERT INTO sal_plan_stages (project_id, stage_name, pct_bp, milestone_key, sort_order) VALUES (?, ?, ?, ?, ?)').bind(Number(project_id), String(s.stage_name), parseInt(s.pct_bp, 10), s.milestone_key || null, (i + 1) * 10)));
-    await env.DB.batch(stmts);
-    return json({ ok: true });
   });
 });
 
@@ -1219,161 +1194,6 @@ router.get('/api/sales/bookings/:id', async (req, env) => {
   });
 });
 
-router.post('/api/sales/bookings', async (req, env) => {
-  return withAuth(req, env, 'sales', 'C', async (req, env) => {
-    try {
-      const b = await req.json();
-      const unit = await env.DB.prepare('SELECT * FROM sal_inventory WHERE id = ? AND deleted_at IS NULL').bind(Number(b.unit_id)).first();
-      if (!unit) return json({ ok: false, error: 'Unit not found.' }, 404);
-      if (!(await visibleProjectIds(env, req.user)).includes(unit.project_id)) return json({ ok: false, error: 'Not allowed.' }, 403);
-      if (!b.customer_name) return json({ ok: false, error: 'Customer name is required.' }, 400);
-      const price = Math.round(Number(b.agreed_price_paise) || (unit.price_paise + (unit.floor_rise_paise || 0)));
-      if (!(price > 0)) return json({ ok: false, error: 'Agreed price is required.' }, 400);
-      const token = Math.round(Number(b.token_paise) || 0);
-      const stages = (await env.DB.prepare('SELECT * FROM sal_plan_stages WHERE project_id = ? ORDER BY sort_order, id').bind(unit.project_id).all()).results;
-      const total = stages.reduce((t, s) => t + s.pct_bp, 0);
-      if (stages.length && total !== 10000) return json({ ok: false, error: 'The payment plan stages must total 100% before booking.' }, 400);
-      const gstBp = b.gst_bp !== undefined ? Number(b.gst_bp) : 500;
-      const partnerId = b.channel_partner_id && (await env.DB.prepare('SELECT id FROM sal_partners WHERE id = ? AND deleted_at IS NULL').bind(Number(b.channel_partner_id)).first()) ? Number(b.channel_partner_id) : null;
-      const now = nowStr();
-      const ins = await env.DB.prepare(`INSERT INTO sal_bookings (project_id, unit_id, lead_id, customer_name, phone, email, address, pan, token_paise, agreed_price_paise, gst_bp, status, booking_date, created_by, created_at, channel_partner_id, brokerage_bp)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'token', ?, ?, ?, ?, ?)`)
-        .bind(unit.project_id, unit.id, b.lead_id || null, b.customer_name, b.phone || '', b.email || '', b.address || '', b.pan ? 'enc:' + (await encryptSetting(env, String(b.pan).trim().toUpperCase())) : '', token, price, gstBp, now.substring(0, 10), req.user.user_id, now, partnerId, partnerId ? Math.round(Number(b.brokerage_bp) || 0) || null : null).run();
-      const bookingId = ins.meta.last_row_id;
-      const stmts = [env.DB.prepare("UPDATE sal_inventory SET status = 'booked', blocked_till = NULL WHERE id = ?").bind(unit.id)];
-      let allocated = 0;
-      stages.forEach((st, i) => {
-        const amount = i === stages.length - 1 ? price - allocated : Math.floor(price * st.pct_bp / 10000);
-        allocated += amount;
-        const gst = Math.round(amount * gstBp / 10000);
-        stmts.push(env.DB.prepare(`INSERT INTO sal_demands (booking_id, stage_id, label, amount_paise, gst_paise, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`)
-          .bind(bookingId, st.id, st.stage_name, amount, gst, st.milestone_key ? 'scheduled' : 'ready', now));
-      });
-      stmts.push(env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, 'create', 'sal_bookings', ?, ?, ?)`).bind(req.user.user_id, bookingId, `Booked ${unit.wing ? unit.wing + '-' : ''}${unit.unit_no} for ${b.customer_name}`, now));
-      if (b.lead_id) stmts.push(env.DB.prepare("UPDATE sal_leads SET status = 'booked' WHERE id = ?").bind(Number(b.lead_id)));
-      await env.DB.batch(stmts);
-      return json({ ok: true, data: { id: bookingId, demands: stages.length, warning: token > Math.floor(price / 10) ? 'RERA: advance above 10% of price before a registered agreement is not allowed.' : null } });
-    } catch (e) {
-      return json({ ok: false, error: /UNIQUE/.test(e.message) ? 'This unit is already booked.' : 'booking-create: ' + e.message }, /UNIQUE/.test(e.message) ? 409 : 500);
-    }
-  });
-});
-
-router.post('/api/sales/bookings/:id/receipts', async (req, env) => {
-  return withAuth(req, env, 'sales', 'E', async (req, env) => {
-    try {
-      const b = await req.json();
-      const booking = await env.DB.prepare('SELECT * FROM sal_bookings WHERE id = ? AND deleted_at IS NULL').bind(Number(req.params.id)).first();
-      if (!booking) return json({ ok: false, error: 'Booking not found.' }, 404);
-      if (!(await visibleProjectIds(env, req.user)).includes(booking.project_id)) return json({ ok: false, error: 'Not allowed.' }, 403);
-      if (booking.status === 'cancelled') return json({ ok: false, error: 'This booking is cancelled.' }, 400);
-      const amount = Math.round(Number(b.amount_paise) || 0);
-      const tds = Math.round(Number(b.tds_paise) || 0);
-      if (!(amount > 0)) return json({ ok: false, error: 'Amount is required.' }, 400);
-      const now = nowStr();
-      const stmts = [env.DB.prepare('INSERT INTO sal_receipts (booking_id, demand_id, amount_paise, tds_paise, mode, ref_no, received_on, received_by, note, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-        .bind(booking.id, b.demand_id || null, amount, tds, b.mode || 'bank', b.ref_no || '', b.received_on || now.substring(0, 10), req.user.user_id, b.note || '', now)];
-      if (b.demand_id) {
-        stmts.push(env.DB.prepare(`UPDATE sal_demands SET settled_paise = settled_paise + ?, status = CASE WHEN settled_paise + ? >= amount_paise + COALESCE(gst_paise, 0) THEN 'paid' ELSE 'partial' END WHERE id = ? AND booking_id = ?`).bind(amount + tds, amount + tds, Number(b.demand_id), booking.id));
-      }
-      stmts.push(env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, 'create', 'sal_receipts', ?, ?, ?)`).bind(req.user.user_id, booking.id, `Receipt ₹${(amount / 100).toLocaleString('en-IN')} from ${booking.customer_name}`, now));
-      await env.DB.batch(stmts);
-      return json({ ok: true });
-    } catch (e) {
-      return json({ ok: false, error: 'receipt-create: ' + e.message }, 500);
-    }
-  });
-});
-
-router.post('/api/sales/bookings/:id/cancel', async (req, env) => {
-  return withAuth(req, env, 'sales', 'A', async (req, env) => {
-    const booking = await env.DB.prepare('SELECT * FROM sal_bookings WHERE id = ? AND deleted_at IS NULL').bind(Number(req.params.id)).first();
-    if (!booking) return json({ ok: false, error: 'Booking not found.' }, 404);
-    if (!(await visibleProjectIds(env, req.user)).includes(booking.project_id)) return json({ ok: false, error: 'Not allowed.' }, 403);
-    const { reason } = await req.json();
-    const now = nowStr();
-    await env.DB.batch([
-      env.DB.prepare("UPDATE sal_bookings SET status = 'cancelled', cancelled_on = ?, cancel_reason = ? WHERE id = ?").bind(now.substring(0, 10), reason || '', booking.id),
-      env.DB.prepare("UPDATE sal_inventory SET status = 'available' WHERE id = ?").bind(booking.unit_id),
-      env.DB.prepare("UPDATE sal_demands SET status = 'cancelled' WHERE booking_id = ? AND status != 'paid'").bind(booking.id),
-      env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, 'cancel', 'sal_bookings', ?, ?, ?)`).bind(req.user.user_id, booking.id, `Cancelled booking of ${booking.customer_name}`, now),
-    ]);
-    return json({ ok: true });
-  });
-});
-
-// ---------- Google Drive storage routing (Mode G) ----------
-async function driveReady(env) {
-  return (await getSettingRaw(env, 'storage.driver')) === 'gdrive' && (await getSettingRaw(env, 'storage.gdrive.status')) === 'connected';
-}
-
-async function driveToken(env, force) {
-  const enc = await getSettingRaw(env, 'storage.gdrive.access_token_enc');
-  const exp = await getSettingRaw(env, 'storage.gdrive.access_expires_at');
-  if (!force && enc && exp && new Date(String(exp).replace(' ', 'T') + (String(exp).includes('Z') ? '' : 'Z')).getTime() > Date.now() + 60000) return decryptSetting(env, enc);
-  const refreshEnc = await getSettingRaw(env, 'storage.gdrive.refresh_token_enc');
-  if (!refreshEnc) throw new gdrive.GDriveError('Google Drive is not connected.', 'needs_reconnect');
-  try {
-    const r = await gdrive.refreshAccessToken(env, refreshEnc);
-    await setSettingRaw(env, 'storage.gdrive.access_token_enc', await encryptSetting(env, r.access_token), null);
-    await setSettingRaw(env, 'storage.gdrive.access_expires_at', new Date(Date.now() + (r.expires_in || 3000) * 1000).toISOString(), null);
-    return r.access_token;
-  } catch (e) {
-    if (e.code === 'invalid_grant') await setSettingRaw(env, 'storage.gdrive.status', 'needs_reconnect', null);
-    throw e;
-  }
-}
-
-// Run a Drive call; on an expired token refresh once and retry.
-async function withDrive(env, fn) {
-  let token = await driveToken(env, false);
-  try { return await fn(token); }
-  catch (e) {
-    if (e.code === 'invalid_token') return fn(await driveToken(env, true));
-    throw e;
-  }
-}
-
-async function driveFolderFor(env, token, projectId) {
-  const key = 'p:' + (projectId || 0);
-  const hit = await env.DB.prepare('SELECT drive_folder_id FROM drive_folders WHERE path_key = ?').bind(key).first();
-  if (hit) return hit.drive_folder_id;
-  const root = await getSettingRaw(env, 'storage.gdrive.root_folder_id');
-  const proj = projectId ? await env.DB.prepare('SELECT code FROM projects WHERE id = ?').bind(projectId).first() : null;
-  const name = proj ? proj.code : 'General';
-  const found = await gdrive.findDriveFolder(env, token, name, root);
-  const id = (found.files && found.files[0]) ? found.files[0].id : (await gdrive.createDriveFolder(env, token, name, root)).id;
-  await env.DB.prepare('INSERT OR IGNORE INTO drive_folders (path_key, project_id, drive_folder_id) VALUES (?, ?, ?)').bind(key, projectId || null, id).run();
-  return id;
-}
-
-async function driveUpload(env, file, projectId) {
-  const buf = await file.arrayBuffer();
-  return withDrive(env, async (token) => {
-    const folder = await driveFolderFor(env, token, projectId);
-    const session = await gdrive.resumableUploadInit(env, token, file.name || 'file', file.type, folder, buf.byteLength);
-    const meta = await gdrive.resumableUploadPut(env, token, session, buf, buf.byteLength, file.type);
-    return { fileId: meta.id, md5: meta.md5Checksum || null, folder };
-  });
-}
-
-async function driveResponse(env, doc, req, disposition) {
-  let upstream;
-  try {
-    upstream = await withDrive(env, (token) => gdrive.getDriveFile(env, token, doc.drive_file_id, req.headers.get('range')));
-  } catch (e) {
-    return new Response('Files from Google Drive are paused right now. Ask the Owner to reconnect Google Drive.', { status: 503 });
-  }
-  const h = new Headers({
-    'Content-Type': doc.mime || 'application/octet-stream',
-    'Content-Disposition': `${disposition}; filename*=UTF-8''${encodeURIComponent(doc.title)}`,
-    'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff',
-  });
-  for (const k of ['content-length', 'content-range', 'accept-ranges']) if (upstream.headers.get(k)) h.set(k, upstream.headers.get(k));
-  return new Response(upstream.body, { status: upstream.status, headers: h });
-}
-
-// ---------- Procurement: quotes, GRN, bills, vendor ledger ----------
 router.get('/api/procurement/rfqs/:id/quotes', async (req, env) => {
   return withAuth(req, env, 'procurement', 'V', async (req, env) => {
     const rfq = await env.DB.prepare('SELECT * FROM pro_rfqs WHERE id = ? AND deleted_at IS NULL').bind(Number(req.params.id)).first();
@@ -1931,6 +1751,11 @@ router.post('/api/sales/leads/:id/activity', async (req, env) => {
     const closing = ['booked', 'lost'].includes(b.status);
     if (type === 'call' && !b.next_followup_at && !closing) return json({ ok: false, error: 'Pick the next follow-up date before saving a call.' }, 400);
     if (b.status && !LEAD_FLOW.includes(b.status)) return json({ ok: false, error: 'Unknown status.' }, 400);
+    if (b.status && b.status !== lead.status) {
+      if (b.status === 'booked') return json({ ok: false, error: 'A lead becomes Booked only when you book a flat for them.' }, 400);
+      if (!(LEAD_TRANSITIONS[lead.status] || []).includes(b.status)) return json({ ok: false, error: `A ${lead.status.replace('_', ' ')} lead cannot be moved to ${b.status.replace('_', ' ')}.` }, 400);
+      if (lead.status === 'lost' && !['owner', 'pm'].includes(req.user.role)) return json({ ok: false, error: 'Only a manager can reopen a lost lead.' }, 403);
+    }
     const now = nowStr();
     const stmts = [env.DB.prepare('INSERT INTO sal_activities (lead_id, type, outcome, note, by_user, created_at) VALUES (?, ?, ?, ?, ?, ?)').bind(lead.id, type, b.outcome || '', b.note || '', req.user.user_id, now),
       env.DB.prepare(`UPDATE sal_leads SET last_contact_at = ?, first_contact_at = COALESCE(first_contact_at, ?), next_followup_at = ?, status = CASE WHEN ? IS NOT NULL THEN ? WHEN status = 'new' THEN 'contacted' ELSE status END WHERE id = ?`)
@@ -2057,11 +1882,86 @@ router.get('/api/search', async (req, env) => {
     }
     for (const r of (await env.DB.prepare(`SELECT title, category, module, audience FROM documents WHERE deleted_at IS NULL AND (series_key IS NULL OR series_key NOT LIKE 'brand:%') AND (project_id IS NULL OR project_id IN (${ph})) AND title LIKE ? LIMIT 8`).bind(...ids, like).all()).results) {
       if (r.module === 'brochure' && r.audience !== 'customer' && !['owner', 'pm'].includes(user.role)) continue;
+      if (!docVisible(user, r)) continue;
       out.push({ kind: r.module === 'brochure' ? 'Brochure' : 'Document', title: r.title, sub: r.category || '', route: r.module === 'brochure' ? 'brochures' : 'documents' });
     }
     return json({ ok: true, data: { results: out.slice(0, 40) } });
   });
 });
+
+// ---------- Google Drive storage routing (Mode G) ----------
+async function driveReady(env) {
+  return (await getSettingRaw(env, 'storage.driver')) === 'gdrive' && (await getSettingRaw(env, 'storage.gdrive.status')) === 'connected';
+}
+
+async function driveToken(env, force) {
+  const enc = await getSettingRaw(env, 'storage.gdrive.access_token_enc');
+  const exp = await getSettingRaw(env, 'storage.gdrive.access_expires_at');
+  if (!force && enc && exp && new Date(String(exp).replace(' ', 'T') + (String(exp).includes('Z') ? '' : 'Z')).getTime() > Date.now() + 60000) return decryptSetting(env, enc);
+  const refreshEnc = await getSettingRaw(env, 'storage.gdrive.refresh_token_enc');
+  if (!refreshEnc) throw new gdrive.GDriveError('Google Drive is not connected.', 'needs_reconnect');
+  try {
+    const r = await gdrive.refreshAccessToken(env, refreshEnc);
+    await setSettingRaw(env, 'storage.gdrive.access_token_enc', await encryptSetting(env, r.access_token), null);
+    await setSettingRaw(env, 'storage.gdrive.access_expires_at', new Date(Date.now() + (r.expires_in || 3000) * 1000).toISOString(), null);
+    return r.access_token;
+  } catch (e) {
+    if (e.code === 'invalid_grant') await setSettingRaw(env, 'storage.gdrive.status', 'needs_reconnect', null);
+    throw e;
+  }
+}
+
+// Run a Drive call; on an expired token refresh once and retry.
+async function withDrive(env, fn) {
+  let token = await driveToken(env, false);
+  try { return await fn(token); }
+  catch (e) {
+    if (e.code === 'invalid_token') return fn(await driveToken(env, true));
+    throw e;
+  }
+}
+
+async function driveFolderFor(env, token, projectId) {
+  const key = 'p:' + (projectId || 0);
+  const hit = await env.DB.prepare('SELECT drive_folder_id FROM drive_folders WHERE path_key = ?').bind(key).first();
+  if (hit) return hit.drive_folder_id;
+  const root = await getSettingRaw(env, 'storage.gdrive.root_folder_id');
+  const proj = projectId ? await env.DB.prepare('SELECT code FROM projects WHERE id = ?').bind(projectId).first() : null;
+  const name = proj ? proj.code : 'General';
+  const found = await gdrive.findDriveFolder(env, token, name, root);
+  const id = (found.files && found.files[0]) ? found.files[0].id : (await gdrive.createDriveFolder(env, token, name, root)).id;
+  await env.DB.prepare('INSERT OR IGNORE INTO drive_folders (path_key, project_id, drive_folder_id) VALUES (?, ?, ?)').bind(key, projectId || null, id).run();
+  return id;
+}
+
+async function driveUpload(env, file, projectId) {
+  const buf = await file.arrayBuffer();
+  return withDrive(env, async (token) => {
+    const folder = await driveFolderFor(env, token, projectId);
+    const session = await gdrive.resumableUploadInit(env, token, file.name || 'file', file.type, folder, buf.byteLength);
+    const meta = await gdrive.resumableUploadPut(env, token, session, buf, buf.byteLength, file.type);
+    return { fileId: meta.id, md5: meta.md5Checksum || null, folder };
+  });
+}
+
+async function driveResponse(env, doc, req, disposition) {
+  let upstream;
+  try {
+    upstream = await withDrive(env, (token) => gdrive.getDriveFile(env, token, doc.drive_file_id, req.headers.get('range')));
+  } catch (e) {
+    return new Response('Files from Google Drive are paused right now. Ask the Owner to reconnect Google Drive.', { status: 503 });
+  }
+  const h = new Headers({
+    'Content-Type': doc.mime || 'application/octet-stream',
+    'Content-Disposition': `${disposition}; filename*=UTF-8''${encodeURIComponent(doc.title)}`,
+    'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff',
+  });
+  for (const k of ['content-length', 'content-range', 'accept-ranges']) if (upstream.headers.get(k)) h.set(k, upstream.headers.get(k));
+  return new Response(upstream.body, { status: upstream.status, headers: h });
+}
+
+
+registerSalesOps(router, { withAuth, json, serverError, visibleProjectIds, userCan, getSetting, nowStr, encryptSetting, clientIp, checkRateLimit });
 
 // ---------- Branding routes ----------
 router.get('/api/branding', async (req, env) => {
@@ -2084,7 +1984,7 @@ router.get('/api/branding', async (req, env) => {
       br.pictures = await brandPictures(env, brandId);
       return json({ ok: true, data: { branding: row ? br : { brand_id: brandId, pictures: br.pictures } } });
     } catch (e) {
-      return json({ ok: false, error: 'branding: ' + e.message }, 500);
+      return serverError(e, 'branding');
     }
   });
 });
@@ -2179,7 +2079,7 @@ router.post('/api/branding', async (req, env) => {
       await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, ?, 'brand_profiles', ?, ?, ?)`).bind(user.user_id, 'create', 0, 'Updated company branding', now).run();
       return json({ ok: true });
     } catch (e) {
-      return json({ ok: false, error: 'branding-set: ' + e.message }, 500);
+      return serverError(e, 'branding-set');
     }
   });
 });
@@ -2191,7 +2091,7 @@ router.get('/api/share-links', async (req, env) => {
       const rows = await env.DB.prepare('SELECT sl.id, sl.recipient_label, sl.expires_at, sl.max_views, sl.view_count, sl.last_viewed_at, sl.created_at, d.title FROM share_links sl JOIN documents d ON d.id = sl.document_id WHERE sl.revoked_at IS NULL ORDER BY sl.created_at DESC LIMIT 50').all();
       return json({ ok: true, data: { links: rows.results } });
     } catch (e) {
-      return json({ ok: false, error: 'share-list: ' + e.message }, 500);
+      return serverError(e, 'share-list');
     }
   });
 });
@@ -2218,7 +2118,7 @@ router.post('/api/share-links', async (req, env) => {
       await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, ?, 'share_links', ?, ?, ?)`).bind(user.user_id, 'create', result.meta.last_row_id, `Created share link`, now).run();
       return json({ ok: true, data: { token: tokenB64, link: `/s/${tokenB64}` } });
     } catch (e) {
-      return json({ ok: false, error: 'share-create: ' + e.message }, 500);
+      return serverError(e, 'share-create');
     }
   });
 });
@@ -2291,7 +2191,7 @@ router.get('/api/email/log', async (req, env) => {
       const rows = await env.DB.prepare('SELECT * FROM email_log ORDER BY created_at DESC LIMIT 50').all();
       return json({ ok: true, data: { emails: rows.results } });
     } catch (e) {
-      return json({ ok: false, error: 'email-log: ' + e.message }, 500);
+      return serverError(e, 'email-log');
     }
   });
 });
@@ -2390,6 +2290,10 @@ router.post('/api/files/upload', async (req, env) => {
         try { driveInfo = await driveUpload(env, file, projectId ? Number(projectId) : null); }
         catch (e) { if (file.size > 1500000) return json({ ok: false, error: 'Google Drive is paused right now (ask the Owner to reconnect it). Files over 1.5 MB cannot be saved until then.' }, 503); }
       }
+      const head = new Uint8Array(await file.slice(0, 16).arrayBuffer());
+      if (!sniffOk(file.type, head, new Uint8Array(await file.slice(0, 1024).arrayBuffer()))) {
+        return json({ ok: false, error: 'The file contents do not match its type. Re-save it as a normal PDF, JPG or PNG and try again.' }, 400);
+      }
       const MAX_DB_BYTES = 1500000; // D1 rows top out near 2 MB; bigger files need Google Drive or a link
       if (!driveInfo && file.size > MAX_DB_BYTES) {
         return json({ ok: false, error: `This file is ${(file.size / 1048576).toFixed(1)} MB. Files stored in the database can be at most 1.5 MB. Photos are shrunk automatically; for large PDFs connect Google Drive or add a link instead.` }, 413);
@@ -2422,7 +2326,7 @@ router.post('/api/files/upload', async (req, env) => {
 
       return json({ ok: true, data: { id: docResult.meta.last_row_id } });
     } catch (e) {
-      return json({ ok: false, error: 'file-upload: ' + e.message }, 500);
+      return serverError(e, 'file-upload');
     }
   });
 });
@@ -2440,6 +2344,7 @@ router.get('/api/files/download/:docId', async (req, env) => {
       }
 
       if (doc.module === 'brochure' && doc.audience !== 'customer' && !['owner', 'pm'].includes(req.user.role)) return json({ ok: false, error: 'Not allowed.' }, 403); // internal brochures stay internal
+      if (!docVisible(req.user, doc)) return json({ ok: false, error: 'Not allowed.' }, 403);
       if (doc.store === 'gdrive') return driveResponse(env, doc, req, 'attachment');
       if (doc.store === 'd1' || doc.store === null) {
         const blob = await env.DB.prepare('SELECT * FROM file_blobs WHERE id = ?').bind(doc.blob_id).first();
@@ -2456,7 +2361,7 @@ router.get('/api/files/download/:docId', async (req, env) => {
 
       return json({ ok: false, error: 'File storage mode not yet implemented.' }, 501);
     } catch (e) {
-      return json({ ok: false, error: 'file-download: ' + e.message }, 500);
+      return serverError(e, 'file-download');
     }
   });
 });
@@ -2588,7 +2493,7 @@ router.get('/api/dashboard', async (req, env) => {
         },
       });
     } catch (e) {
-      return json({ ok: false, error: 'dashboard: ' + e.message }, 500);
+      return serverError(e, 'dashboard');
     }
   });
 });
@@ -2611,7 +2516,7 @@ router.get('/api/reports/receivables', async (req, env) => {
       ).bind(...ids).all();
       return json({ ok: true, data: { rows: rows.results } });
     } catch (e) {
-      return json({ ok: false, error: 'receivables: ' + e.message }, 500);
+      return serverError(e, 'receivables');
     }
   });
 });
@@ -2629,7 +2534,7 @@ router.get('/api/reports/purchase-register', async (req, env) => {
       ).bind(...ids).all();
       return json({ ok: true, data: { rows: rows.results } });
     } catch (e) {
-      return json({ ok: false, error: 'purchase: ' + e.message }, 500);
+      return serverError(e, 'purchase');
     }
   });
 });
@@ -2654,7 +2559,7 @@ router.post('/api/storage/google/start', async (req, env) => {
 
       return json({ ok: true, data: { authUrl } });
     } catch (e) {
-      return json({ ok: false, error: 'gdrive-start: ' + e.message }, 500);
+      return serverError(e, 'gdrive-start');
     }
   });
 });
@@ -2777,7 +2682,7 @@ router.post('/api/storage/google/disconnect', async (req, env) => {
       await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, 'disconnect', 'storage', 0, 'Google Drive disconnected', ?)`).bind(user.user_id, now).run();
       return json({ ok: true });
     } catch (e) {
-      return json({ ok: false, error: 'gdrive-disconnect: ' + e.message }, 500);
+      return serverError(e, 'gdrive-disconnect');
     }
   });
 });
@@ -2795,7 +2700,7 @@ router.post('/api/storage/driver', async (req, env) => {
       await setSettingRaw(env, 'storage.driver', driver, user.user_id);
       return json({ ok: true });
     } catch (e) {
-      return json({ ok: false, error: 'storage-driver: ' + e.message }, 500);
+      return serverError(e, 'storage-driver');
     }
   });
 });
@@ -2849,7 +2754,7 @@ router.get('/api/storage/status', async (req, env) => {
         },
       });
     } catch (e) {
-      return json({ ok: false, error: 'storage-status: ' + e.message }, 500);
+      return serverError(e, 'storage-status');
     }
   });
 });
@@ -2862,6 +2767,8 @@ router.get('/s/:token', async (req, env) => {
 // ---------- Customer share link file download ----------
 router.get('/s/:token/file', async (req, env) => {
   try {
+    const rl = await checkRateLimit(env, `share-ip:${clientIp(req)}`, 60, 10);
+    if (!rl.allowed) return new Response('Too many requests. Try again in a few minutes.', { status: 429 });
     const tokenB64 = req.params.token;
     const std = tokenB64.replace(/-/g, '+').replace(/_/g, '/');
     const tokenBytes = Uint8Array.from(atob(std + '='.repeat((4 - std.length % 4) % 4)), c => c.charCodeAt(0));
@@ -2911,6 +2818,28 @@ async function maskPan(env, v) {
   if (plain.startsWith('enc:')) { try { plain = await decryptSetting(env, plain.slice(4)); } catch (e) { return '••••'; } }
   return plain.length > 4 ? '••••' + plain.slice(-4) : '••••';
 }
+
+// Do the first bytes of an upload really look like what it claims to be?
+function sniffOk(type, h, body) {
+  const at = (i, ...b) => b.every((x, k) => h[i + k] === x);
+  switch (type) {
+    case 'application/pdf': return at(0, 0x25, 0x50, 0x44, 0x46);
+    case 'image/png': return at(0, 0x89, 0x50, 0x4e, 0x47);
+    case 'image/jpeg': return at(0, 0xff, 0xd8, 0xff);
+    case 'image/webp': return at(0, 0x52, 0x49, 0x46, 0x46) && at(8, 0x57, 0x45, 0x42, 0x50);
+    case 'image/heic': return at(4, 0x66, 0x74, 0x79, 0x70);
+    case 'application/vnd.openxmlformats-officedocument.wordprocessingml.document':
+    case 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': return at(0, 0x50, 0x4b);
+    case 'application/msword': case 'application/vnd.ms-excel': return at(0, 0xd0, 0xcf, 0x11, 0xe0);
+    case 'text/plain': case 'text/csv': return !body.includes(0);
+    default: return false;
+  }
+}
+
+// Buyer KYC, legal and agreement documents are for sales/accounts/PM/Owner only (site, purchase, HR, viewer never see them).
+const RESTRICTED_DOC_CATS = ['kyc', 'legal', 'agreement'];
+const canSeeRestricted = (user) => ['owner', 'pm', 'sales', 'accounts'].includes(user.role);
+const docVisible = (user, doc) => !RESTRICTED_DOC_CATS.includes(doc.category) || canSeeRestricted(user);
 
 // D1 returns BLOB columns as plain number arrays; turn them back into bytes before responding.
 function blobBytes(d) {
@@ -3083,6 +3012,7 @@ async function runCron(cron, env) {
     // Hourly: retry failed emails (max 3 attempts each)
     await retryFailedEmails(env);
     await leadSlaNudges(env);
+    await expireHolds(env, nowStr);
   } else if (cron === '30 2 * * *') {
     // 08:00 IST digest to every active Owner
     const owners = await env.DB.prepare("SELECT email FROM users WHERE role = 'owner' AND active = 1 AND deleted_at IS NULL").all();
@@ -3123,7 +3053,7 @@ export default {
       return env.ASSETS.fetch(request);
     } catch (err) {
       console.error('Worker error:', err);
-      return json({ ok: false, error: err.message || 'Internal error' }, 500);
+      return serverError(err, 'worker');
     }
   },
   scheduled,
