@@ -98,7 +98,8 @@ function sha256Sync(bytes) {
 export async function makeOAuthStartAsync(env, redirectUri, userId) {
   const verifierBytes = crypto.getRandomValues(new Uint8Array(32));
   const verifier = base64urlEncode(verifierBytes);
-  const challengeBytes = await sha256(verifierBytes);
+  // PKCE S256: hash the verifier STRING (ASCII), not the raw random bytes.
+  const challengeBytes = await sha256(new TextEncoder().encode(verifier));
   const challenge = base64urlEncode(challengeBytes);
   const stateBytes = crypto.getRandomValues(new Uint8Array(16));
   const state = base64urlEncode(stateBytes);
