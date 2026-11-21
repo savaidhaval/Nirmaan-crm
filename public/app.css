@@ -258,3 +258,9 @@ h1 + .help { margin: -8px 0 14px; }
 .stack { display: block; max-width: 680px; }
 .stack .card { margin-bottom: 14px; }
 select[data-cs] { min-height: 38px; padding: 4px 10px; border-radius: 10px; border: 1px solid var(--border); font: inherit; }
+
+.picker { max-width: 190px; min-height: 40px; padding: 4px 10px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); font: inherit; font-weight: 650; color: var(--text); }
+.picker[hidden] { display: none; }
+@media (max-width: 420px) { .picker { max-width: 120px; } }
+.brandbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 14px; }
+.brandbar select { min-height: 42px; padding: 4px 12px; border: 1px solid var(--border); border-radius: 10px; font: inherit; font-weight: 650; }

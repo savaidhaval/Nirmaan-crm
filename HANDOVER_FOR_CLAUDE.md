@@ -4,7 +4,7 @@
 NirmaanCRM is a modular CRM + project-management website for a Mumbai real-estate developer, built per the **NirmaanCRM_Claude_Build_Guide_v1.3.md** specification. It runs on Cloudflare's free tier (₹0/month), files live in Google Drive (Mode G), and uses vanilla HTML/CSS/JS with no framework.
 
 ## Live Deployment
-- **Production URL:** `https://nirmaan-crm.savai-dhaval.workers.dev`
+- **Production URL:** `https://crm.mysociety.tech` (the only address; workers.dev is off and any other hostname redirects here)
 - **Worker Version:** `dfddd4b0-46ce-41ec-b2dc-0d4a4629bee5`
 - **Cron Triggers Active:** 4 triggers (`30 2 * * *`, `30 13 * * *`, `30 * * * *`, `30 20 * * *`)
 

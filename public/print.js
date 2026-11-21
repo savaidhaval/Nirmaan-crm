@@ -26,9 +26,9 @@ function words(n) {
 const rupeeWords = (paise) => `Rupees ${words(Math.floor(paise / 100))}${paise % 100 ? ' and ' + words(paise % 100) + ' Paise' : ''} Only`;
 
 // Pictures come from signed-in-only endpoints (never public). Returns an object URL or null.
-async function asset(kind) {
+async function asset(kind, brandId) {
   try {
-    const r = await fetch('/api/print/asset/' + kind, { credentials: 'include' });
+    const r = await fetch('/api/print/asset/' + kind + (brandId ? '?brand=' + brandId : ''), { credentials: 'include' });
     if (!r.ok) return null;
     return URL.createObjectURL(await r.blob());
   } catch (err) { return null; }
@@ -47,7 +47,7 @@ async function letterhead(b, draft) {
   if (mode === 'bands') { if (has('header')) want.push('header'); if (has('footer')) want.push('footer'); }
   if (mode === 'generated' && has('logo')) want.push('logo');
   if (!draft) { if (has('signature')) want.push('signature'); if (has('stamp')) want.push('stamp'); }
-  await Promise.all(want.map(async (k) => { pics[k] = await asset(k); }));
+  await Promise.all(want.map(async (k) => { pics[k] = await asset(k, b.brand_id); }));
   let head = '', foot = '', bg = '', pad;
   if (mode === 'image' && pics.letterhead) {
     bg = `<img class="bg" src="${pics.letterhead}" alt="">`;
@@ -120,6 +120,6 @@ async function render(d) {
 document.getElementById('btn-print').addEventListener('click', () => window.print());
 document.getElementById('btn-back').addEventListener('click', () => window.close());
 const load = kind === 'sample'
-  ? api('/api/branding').then((r) => ({ kind: 'sample', draft: true, brand: r.data.branding || {} }))
+  ? api('/api/branding?brand_id=' + (Number(q.get('brand')) || 0)).then((r) => ({ kind: 'sample', draft: true, brand: r.data.branding || {} }))
   : api(`/api/print/${kind}/${id}`).then((r) => r.data);
 load.then(render).catch((err) => { sheet.textContent = err.message; });

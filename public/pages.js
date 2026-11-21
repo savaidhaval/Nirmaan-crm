@@ -256,6 +256,22 @@ function paintChrome() {
   }
 }
 
+let brandList = [];
+async function fillProjectPicker() {
+  const sel = $('project-picker'); if (!sel || !currentUser) return;
+  let projects = [];
+  try { projects = await getProjects(); } catch (e) { sel.hidden = true; return; }
+  try { brandList = (await api('/api/brands')).data.brands; } catch (e) { brandList = []; }
+  if (projects.length < 2) { sel.hidden = true; if (scopeProject) { setScopeProject(0); } return; }
+  if (scopeProject && !projects.some((p) => p.id === scopeProject)) setScopeProject(0);
+  const opt = (p) => `<option value="${p.id}"${p.id === scopeProject ? ' selected' : ''}>${esc(p.name)}</option>`;
+  const groups = brandList.length > 1 ? brandList.map((b) => ({ b, ps: projects.filter((p) => p.brand_id === b.id) })).filter((g) => g.ps.length) : null;
+  sel.innerHTML = `<option value="0">All projects</option>` + (groups ? groups.map((g) => `<optgroup label="${esc(g.b.name)}">${g.ps.map(opt).join('')}</optgroup>`).join('') : projects.map(opt).join(''));
+  sel.value = String(scopeProject || 0);
+  sel.hidden = false;
+  sel.onchange = () => { setScopeProject(sel.value); renderApp(); };
+}
+
 function renderApp() {
   const main = $('app-main');
   if (!currentUser) { renderLogin(); return; }
@@ -282,6 +298,8 @@ function renderApp() {
       nav.appendChild(a);
     });
   }
+  // project picker (grouped by brand when there are several)
+  fillProjectPicker();
   // top bar
   $('avatar').textContent = (currentUser.name || '?').split(/\s+/).map((w) => w[0]).slice(0, 2).join('').toUpperCase();
   $('um-name').textContent = currentUser.name; $('um-role').textContent = `${currentUser.role} · ${currentUser.email}`;
@@ -1037,7 +1055,7 @@ async function bookingDetail(id) {
 async function loadSales() {
   try {
     const [leads, bookings, projects] = await Promise.all([api('/api/sales/leads'), api('/api/sales/bookings'), getProjects()]);
-    const inv = (await Promise.all(projects.map((p) => api('/api/sales/inventory?project_id=' + p.id).then((r) => r.data.inventory.map((u) => ({ ...u, project: p.name }))).catch(() => [])))).flat();
+    const inv = (await Promise.all(projects.filter((p) => !scopeProject || p.id === scopeProject).map((p) => api('/api/sales/inventory?project_id=' + p.id).then((r) => r.data.inventory.map((u) => ({ ...u, project: p.name }))).catch(() => [])))).flat();
     let html = '<h3>Flats</h3>' + (inv.map((u) => `<div class="card"><div class="row"><div><b>${esc(u.wing ? u.wing + '-' : '')}${esc(u.unit_no)}</b> · ${esc(u.type || '')}<p class="muted">${esc(u.project)} · ${moneyP(u.price_paise)}</p></div>${statusChip(u.status)}</div>${u.status === 'available' && userCanClient('sales', 'C') ? `<button class="btn small" data-book="${u.id}">Book this flat</button>` : ''}</div>`).join('') || '<p class="muted">No flats added yet.</p>');
     html += '<h3>Bookings</h3>' + (bookings.data.bookings.map((b) => `<div class="card clickable" data-bk="${b.id}"><div class="row"><div><b>${esc(b.customer_name)}</b> · ${esc(b.wing || '')}-${esc(b.unit_no)}<p class="muted">${moneyP(b.collected_paise)} of ${moneyP(b.agreed_price_paise)} collected</p></div>${statusChip(b.status)}</div></div>`).join('') || '<p class="muted">No bookings yet.</p>');
     html += '<h3>Leads</h3>' + (leads.data.leads.map((l) => `<div class="card"><div class="row"><div><b>${esc(l.name)}</b><p class="muted"><a href="tel:${esc(l.phone)}">${esc(l.phone)}</a> · ${esc(l.source || '')}</p></div>${statusChip(l.status)}</div></div>`).join('') || '<p class="muted">No leads yet.</p>');

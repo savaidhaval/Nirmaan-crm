@@ -76,7 +76,7 @@ export function userCan(user, module, action) {
 }
 
 // Project-scoped visibility: which project IDs can this user see?
-export async function visibleProjectIds(env, user) {
+async function allVisibleProjectIds(env, user) {
   if (!user) return [];
   if (user.role === 'owner') {
     // Owner is never limited
@@ -96,6 +96,12 @@ export async function visibleProjectIds(env, user) {
     WHERE pm.user_id = ? AND pm.removed_at IS NULL AND p.deleted_at IS NULL AND COALESCE(p.status, '') != 'archived'
   `, [user.user_id ?? user.id]);
   return rows.results.map((r) => r.project_id);
+}
+
+// Same as above, narrowed to the picked project when the request carries ?project_id=N (GET only).
+export async function visibleProjectIds(env, user) {
+  const ids = await allVisibleProjectIds(env, user);
+  return user && user.scopeProject ? ids.filter((i) => i === user.scopeProject) : ids;
 }
 
 export async function getLimitRoles(env) {

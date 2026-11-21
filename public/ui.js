@@ -3,7 +3,19 @@
 
 const API_BASE = '';
 
+// The project picker: when set, list calls are narrowed to that project by the server (?project_id=N).
+let scopeProject = 0;
+try { scopeProject = Number(localStorage.getItem('nirmaan.project')) || 0; } catch (e) { /* storage blocked */ }
+function setScopeProject(id) {
+  scopeProject = Number(id) || 0;
+  try { scopeProject ? localStorage.setItem('nirmaan.project', String(scopeProject)) : localStorage.removeItem('nirmaan.project'); } catch (e) { /* ignore */ }
+}
+const SCOPED_PATHS = /^\/api\/(approvals|drawings|site\/|procurement\/(pos|rfqs|bills|grns|vendors\/\d+\/ledger)|sales\/(leads|bookings)|documents|brochures|dashboard)/;
+
 async function api(path, options = {}) {
+  if (scopeProject && (options.method || 'GET') === 'GET' && SCOPED_PATHS.test(path) && !/[?&]project_id=/.test(path)) {
+    path += (path.includes('?') ? '&' : '?') + 'project_id=' + scopeProject;
+  }
   const headers = {
     'Content-Type': 'application/json',
     'X-NirmaanCRM': '1',

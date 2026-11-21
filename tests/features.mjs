@@ -31,7 +31,8 @@ await o.call('POST', '/api/branding', { legal_name: 'Zz Co', trade_name: 'Zz', p
 const br = (await o.call('GET', '/api/branding')).data.branding;
 ok('owner sees masked PAN and account only', br.pan_masked === '••••234F' && br.bank_account_masked === '••••9012' && !br.pan_enc, JSON.stringify([br.pan_masked, br.bank_account_masked]));
 ok('hr cannot read branding', (await hr.call('GET', '/api/branding')).status === 403);
-const pic = async (k) => { const f = new FormData(); f.append('file', png(), k + '.png'); f.append('title', k); f.append('series_key', 'brand:' + k); return o.call('POST', '/api/files/upload', f); };
+const defBrand = (await o.call('GET', '/api/brands')).data.brands.find((b) => b.is_default).id;
+const pic = async (k) => { const f = new FormData(); f.append('file', png(), k + '.png'); f.append('title', k); f.append('series_key', `brand:${defBrand}:${k}`); return o.call('POST', '/api/files/upload', f); };
 ok('signature uploads', (await pic('signature')).status === 200);
 ok('signature replaceable (new version)', (await pic('signature')).status === 200);
 ok('signature served to signed-in staff', (await o.call('GET', '/api/print/asset/signature', null, true)).status === 200);
@@ -60,7 +61,7 @@ const sn = (await site.call('POST', '/api/site/snags', { project_id: pid, title:
 ok('site marks snag fixed', (await site.call('POST', `/api/site/snags/${sn}/status`, { status: 'fixed' })).status === 200);
 ok('site cannot verify own fix', (await site.call('POST', `/api/site/snags/${sn}/status`, { status: 'verified' })).status === 403);
 ok('owner verifies', (await o.call('POST', `/api/site/snags/${sn}/status`, { status: 'verified' })).status === 200);
-const phSeries = new FormData(); phSeries.append('file', png(), 'p.png'); phSeries.append('title', 'x'); phSeries.append('module', 'site'); phSeries.append('series_key', 'brand:logo');
+const phSeries = new FormData(); phSeries.append('file', png(), 'p.png'); phSeries.append('title', 'x'); phSeries.append('module', 'site'); phSeries.append('series_key', 'brand:1:logo');
 ok('site cannot hijack a brand picture', (await site.call('POST', '/api/files/upload', phSeries)).status === 403);
 
 // demand email

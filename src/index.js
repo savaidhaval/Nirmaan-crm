@@ -49,6 +49,11 @@ async function withAuth(req, env, module, action, handler, requireHeader = true)
   }
   req.user = user;
   req.env = env;
+  // The project picker: GET ?project_id=N narrows every project-scoped list to that project (permissions.visibleProjectIds).
+  if (req.method === 'GET') {
+    const pid = Number(new URL(req.url).searchParams.get('project_id'));
+    if (pid > 0) user.scopeProject = pid;
+  }
   return handler(req, env);
 }
 
@@ -56,6 +61,11 @@ async function withAuth(req, env, module, action, handler, requireHeader = true)
 router.get('/api/health', async (req, env) => {
   return json({ ok: true, env: env.ENVIRONMENT || 'production' });
 });
+
+// The one public address of this CRM (https://crm.example.com). Falls back to the request origin only when EXTERNAL_URL is unset (local dev).
+function publicBase(env, req) {
+  return String(env.EXTERNAL_URL || new URL(req.url).origin).replace(/\/+$/, '');
+}
 
 // ---------- Auth routes ----------
 router.post('/api/auth/login', async (req, env) => {
@@ -141,11 +151,13 @@ router.post('/api/projects', async (req, env) => {
       if (!name || !code) {
         return json({ ok: false, error: 'Project name and code are required.' }, 400);
       }
+      const wantBrand = Number(body.brand_id) || null;
+      const newBrand = wantBrand && (await env.DB.prepare('SELECT id FROM brands WHERE id = ? AND deleted_at IS NULL').bind(wantBrand).first()) ? wantBrand : await defaultBrandId(env);
       const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
       const result = await env.DB.prepare(`
-        INSERT INTO projects (name, code, address, ward, city, type, status, rera_no, rera_expiry, start_date, target_date, budget_paise, notes, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).bind(name, code, address || '', ward || '', city || 'Mumbai', type || 'new_build', status || 'planning', rera_no || '', rera_expiry || '', start_date || '', target_date || '', budget_paise || 0, notes || '', now).run();
+        INSERT INTO projects (name, code, address, ward, city, type, status, rera_no, rera_expiry, start_date, target_date, budget_paise, notes, brand_id, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).bind(name, code, address || '', ward || '', city || 'Mumbai', type || 'new_build', status || 'planning', rera_no || '', rera_expiry || '', start_date || '', target_date || '', budget_paise || 0, notes || '', newBrand, now).run();
       await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, ?, 'projects', ?, ?, ?)`).bind(user.user_id, 'create', result.meta.last_row_id, `Created project "${name}" (${code})`, now).run();
       return json({ ok: true, data: { id: result.meta.last_row_id } });
     } catch (e) {
@@ -178,7 +190,13 @@ router.put('/api/projects/:id', async (req, env) => {
     }
     const body = await req.json();
     const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
-    await env.DB.prepare(`UPDATE projects SET name = ?, code = ?, address = ?, ward = ?, city = ?, type = ?, status = ?, rera_no = ?, rera_expiry = ?, start_date = ?, target_date = ?, budget_paise = ?, notes = ? WHERE id = ? AND deleted_at IS NULL`).bind(body.name, body.code, body.address, body.ward, body.city, body.type, body.status, body.rera_no, body.rera_expiry, body.start_date, body.target_date, body.budget_paise, body.notes, id).run();
+    const n = (v) => (v === undefined ? null : v);
+    let brandId = null;
+    if (body.brand_id) {
+      if (!(await env.DB.prepare('SELECT id FROM brands WHERE id = ? AND deleted_at IS NULL').bind(Number(body.brand_id)).first())) return json({ ok: false, error: 'Unknown brand.' }, 400);
+      brandId = Number(body.brand_id);
+    }
+    await env.DB.prepare(`UPDATE projects SET name = COALESCE(?, name), code = COALESCE(?, code), address = COALESCE(?, address), ward = COALESCE(?, ward), city = COALESCE(?, city), type = COALESCE(?, type), status = COALESCE(?, status), rera_no = COALESCE(?, rera_no), rera_expiry = COALESCE(?, rera_expiry), start_date = COALESCE(?, start_date), target_date = COALESCE(?, target_date), budget_paise = COALESCE(?, budget_paise), notes = COALESCE(?, notes), brand_id = COALESCE(?, brand_id) WHERE id = ? AND deleted_at IS NULL`).bind(n(body.name), n(body.code), n(body.address), n(body.ward), n(body.city), n(body.type), n(body.status), n(body.rera_no), n(body.rera_expiry), n(body.start_date), n(body.target_date), n(body.budget_paise), n(body.notes), brandId, id).run();
     await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, ?, 'projects', ?, ?, ?)`).bind(user.user_id, 'edit', id, `Updated project ${id}`, now).run();
     return json({ ok: true, data: { id } });
   });
@@ -943,9 +961,10 @@ router.get('/api/sales/leads', async (req, env) => {
     try {
       const user = req.user;
       const seeAll = user.role === 'owner' || user.role === 'pm' || (await getSetting(env, 'sales.share_all_leads')) === 'on';
+      const scope = user.scopeProject ? ' AND project_id = ' + Number(user.scopeProject) : '';
       const rows = seeAll
-        ? await env.DB.prepare('SELECT * FROM sal_leads WHERE deleted_at IS NULL ORDER BY created_at DESC LIMIT 300').all()
-        : await env.DB.prepare('SELECT * FROM sal_leads WHERE deleted_at IS NULL AND assigned_to = ? ORDER BY created_at DESC LIMIT 300').bind(user.user_id).all();
+        ? await env.DB.prepare(`SELECT * FROM sal_leads WHERE deleted_at IS NULL${scope} ORDER BY created_at DESC LIMIT 300`).all()
+        : await env.DB.prepare(`SELECT * FROM sal_leads WHERE deleted_at IS NULL${scope} AND assigned_to = ? ORDER BY created_at DESC LIMIT 300`).bind(user.user_id).all();
       return json({ ok: true, data: { leads: rows.results } });
     } catch (e) {
       return json({ ok: false, error: 'lead-list: ' + e.message }, 500);
@@ -1469,16 +1488,34 @@ router.get('/api/procurement/vendors/:id/ledger', async (req, env) => {
 });
 
 // ---------- Print data (letterhead pages are rendered in the browser from this) ----------
+async function defaultBrandId(env) {
+  const r = await env.DB.prepare('SELECT id FROM brands WHERE is_default = 1 AND deleted_at IS NULL ORDER BY id LIMIT 1').first();
+  return r ? r.id : 1;
+}
+
+async function brandIdForProject(env, projectId) {
+  const p = projectId ? await env.DB.prepare('SELECT brand_id FROM projects WHERE id = ?').bind(projectId).first() : null;
+  return (p && p.brand_id) || (await defaultBrandId(env));
+}
+
+// Pictures uploaded for one brand, e.g. ['logo', 'signature']
+async function brandPictures(env, brandId) {
+  const rows = await env.DB.prepare("SELECT series_key FROM documents WHERE series_key LIKE ? AND is_latest = 1 AND deleted_at IS NULL").bind(`brand:${brandId}:%`).all();
+  return rows.results.map((r) => r.series_key.split(':')[2]);
+}
+
+// Brand for a project: the project's brand profile, then project-level overrides field by field.
 async function printBrand(env, projectId) {
-  const rows = await env.DB.prepare('SELECT * FROM brand_profiles WHERE project_id IS NULL OR project_id = ?').bind(projectId || 0).all();
+  const brandId = await brandIdForProject(env, projectId);
+  const rows = await env.DB.prepare('SELECT * FROM brand_profiles WHERE (brand_id = ? AND project_id IS NULL) OR project_id = ?').bind(brandId, projectId || 0).all();
   const co = rows.results.find((r) => r.project_id === null) || {};
   const pr = rows.results.find((r) => r.project_id === projectId) || {};
   const out = {};
   for (const k of ['legal_name', 'trade_name', 'tagline', 'address', 'phone', 'email', 'website', 'gstin', 'cin_or_llpin', 'promoter_rera_ref', 'bank_account_name', 'bank_name', 'bank_branch', 'bank_ifsc', 'signatory_name', 'signatory_title', 'footer_text', 'colour_primary', 'letterhead_mode', 'margin_top_mm', 'margin_bottom_mm', 'margin_side_mm']) {
     out[k] = (pr[k] !== null && pr[k] !== undefined && pr[k] !== '') ? pr[k] : (co[k] ?? '');
   }
-  const pics = await env.DB.prepare("SELECT series_key FROM documents WHERE series_key LIKE 'brand:%' AND is_latest = 1 AND deleted_at IS NULL").all();
-  out.pictures = pics.results.map((r) => r.series_key.replace('brand:', ''));
+  out.brand_id = brandId;
+  out.pictures = await brandPictures(env, brandId);
   return out; // PAN and bank account number stay encrypted in the DB and are never printed from here
 }
 
@@ -1810,7 +1847,8 @@ router.get('/api/print/asset/:kind', async (req, env) => {
   return withAuth(req, env, 'branding', 'V', async (req, env) => {
     const kind = req.params.kind;
     if (!['logo', 'signature', 'stamp', 'letterhead', 'header', 'footer'].includes(kind)) return json({ ok: false, error: 'Unknown picture.' }, 404);
-    const row = await env.DB.prepare(`SELECT fb.data, fb.mime FROM documents d JOIN file_blobs fb ON fb.id = d.blob_id WHERE d.series_key = ? AND d.is_latest = 1 AND d.deleted_at IS NULL ORDER BY d.version DESC LIMIT 1`).bind('brand:' + kind).first();
+    const brandId = Number(new URL(req.url).searchParams.get('brand')) || (await defaultBrandId(env));
+    const row = await env.DB.prepare(`SELECT fb.data, fb.mime FROM documents d JOIN file_blobs fb ON fb.id = d.blob_id WHERE d.series_key = ? AND d.is_latest = 1 AND d.deleted_at IS NULL ORDER BY d.version DESC LIMIT 1`).bind(`brand:${brandId}:${kind}`).first();
     if (!row) return json({ ok: false, error: 'Not uploaded.' }, 404);
     return new Response(blobBytes(row.data), { headers: { 'Content-Type': row.mime || 'image/png', 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff' } });
   });
@@ -1860,25 +1898,77 @@ router.get('/api/attachments', async (req, env) => {
 router.get('/api/branding', async (req, env) => {
   return withAuth(req, env, 'branding', 'V', async (req, env) => {
     try {
-      const pid = new URL(req.url).searchParams.get('project_id');
-      const rows = pid
-        ? await env.DB.prepare('SELECT * FROM brand_profiles WHERE project_id = ?').bind(Number(pid)).all()
-        : await env.DB.prepare('SELECT * FROM brand_profiles WHERE project_id IS NULL').all();
-      const br = rows.results[0] ? { ...rows.results[0] } : null;
-      if (br) {
-        const last4 = async (enc) => { try { const v = enc ? await decryptSetting(env, enc) : ''; return v ? '••••' + v.slice(-4) : ''; } catch (e) { return ''; } };
-        // PAN and bank account number: only the Owner sees even the masked form (§4.5); ciphertext never leaves the server.
-        br.pan_masked = req.user.role === 'owner' ? await last4(br.pan_enc) : null;
-        br.bank_account_masked = req.user.role === 'owner' ? await last4(br.bank_account_enc) : null;
-        delete br.pan_enc; delete br.bank_account_enc;
-        if (!['owner', 'accounts'].includes(req.user.role)) { br.bank_name = ''; br.bank_branch = ''; br.bank_ifsc = ''; br.bank_account_name = ''; }
-        const pics = await env.DB.prepare("SELECT series_key FROM documents WHERE series_key LIKE 'brand:%' AND is_latest = 1 AND deleted_at IS NULL").all();
-        br.pictures = pics.results.map((r) => r.series_key.replace('brand:', ''));
-      }
-      return json({ ok: true, data: { branding: br } });
+      const u = new URL(req.url);
+      const brandId = Number(u.searchParams.get('brand_id')) || (await defaultBrandId(env));
+      const pid = Number(u.searchParams.get('override_project_id')) || null;
+      const row = pid
+        ? await env.DB.prepare('SELECT * FROM brand_profiles WHERE project_id = ?').bind(pid).first()
+        : await env.DB.prepare('SELECT * FROM brand_profiles WHERE brand_id = ? AND project_id IS NULL').bind(brandId).first();
+      const br = row ? { ...row } : { brand_id: brandId };
+      br.brand_id = brandId;
+      const last4 = async (enc) => { try { const v = enc ? await decryptSetting(env, enc) : ''; return v ? '••••' + v.slice(-4) : ''; } catch (e) { return ''; } };
+      // PAN and bank account number: only the Owner sees even the masked form (§4.5); ciphertext never leaves the server.
+      br.pan_masked = req.user.role === 'owner' ? await last4(br.pan_enc) : null;
+      br.bank_account_masked = req.user.role === 'owner' ? await last4(br.bank_account_enc) : null;
+      delete br.pan_enc; delete br.bank_account_enc;
+      if (!['owner', 'accounts'].includes(req.user.role)) { br.bank_name = ''; br.bank_branch = ''; br.bank_ifsc = ''; br.bank_account_name = ''; }
+      br.pictures = await brandPictures(env, brandId);
+      return json({ ok: true, data: { branding: row ? br : { brand_id: brandId, pictures: br.pictures } } });
     } catch (e) {
       return json({ ok: false, error: 'branding: ' + e.message }, 500);
     }
+  });
+});
+
+// ---------- Brands (several brands in one CRM) ----------
+router.get('/api/brands', async (req, env) => {
+  return withAuth(req, env, 'branding', 'V', async (req, env) => {
+    const rows = await env.DB.prepare(`SELECT b.id, b.name, b.is_default, (SELECT COUNT(*) FROM projects p WHERE p.brand_id = b.id AND p.deleted_at IS NULL) AS projects FROM brands b WHERE b.deleted_at IS NULL ORDER BY b.is_default DESC, b.name`).all();
+    return json({ ok: true, data: { brands: rows.results } });
+  });
+});
+
+router.post('/api/brands', async (req, env) => {
+  return withAuth(req, env, 'branding', 'E', async (req, env) => {
+    if (req.user.role !== 'owner') return json({ ok: false, error: 'Only the Owner can add a brand.' }, 403);
+    const name = String((await req.json()).name || '').trim();
+    if (!name) return json({ ok: false, error: 'Brand name is required.' }, 400);
+    try {
+      const r = await env.DB.prepare('INSERT INTO brands (name, created_at) VALUES (?, ?)').bind(name, nowStr()).run();
+      await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, 'create', 'brands', ?, ?, ?)`).bind(req.user.user_id, r.meta.last_row_id, `Added brand ${name}`, nowStr()).run();
+      return json({ ok: true, data: { id: r.meta.last_row_id } });
+    } catch (e) {
+      return json({ ok: false, error: /UNIQUE/.test(e.message) ? 'A brand with that name already exists.' : 'brand-create: ' + e.message }, /UNIQUE/.test(e.message) ? 400 : 500);
+    }
+  });
+});
+
+router.put('/api/brands/:id', async (req, env) => {
+  return withAuth(req, env, 'branding', 'E', async (req, env) => {
+    if (req.user.role !== 'owner') return json({ ok: false, error: 'Only the Owner can change a brand.' }, 403);
+    const id = Number(req.params.id);
+    const b = await req.json();
+    const cur = await env.DB.prepare('SELECT * FROM brands WHERE id = ? AND deleted_at IS NULL').bind(id).first();
+    if (!cur) return json({ ok: false, error: 'Brand not found.' }, 404);
+    const stmts = [];
+    if (b.name) stmts.push(env.DB.prepare('UPDATE brands SET name = ? WHERE id = ?').bind(String(b.name).trim(), id));
+    if (b.is_default) { stmts.push(env.DB.prepare('UPDATE brands SET is_default = 0 WHERE id != ?').bind(id)); stmts.push(env.DB.prepare('UPDATE brands SET is_default = 1 WHERE id = ?').bind(id)); }
+    if (stmts.length) await env.DB.batch(stmts);
+    return json({ ok: true });
+  });
+});
+
+router.delete('/api/brands/:id', async (req, env) => {
+  return withAuth(req, env, 'branding', 'E', async (req, env) => {
+    if (req.user.role !== 'owner') return json({ ok: false, error: 'Only the Owner can remove a brand.' }, 403);
+    const id = Number(req.params.id);
+    const cur = await env.DB.prepare('SELECT * FROM brands WHERE id = ? AND deleted_at IS NULL').bind(id).first();
+    if (!cur) return json({ ok: false, error: 'Brand not found.' }, 404);
+    if (cur.is_default) return json({ ok: false, error: 'The default brand cannot be removed. Make another brand the default first.' }, 400);
+    const n = await env.DB.prepare('SELECT COUNT(*) AS n FROM projects WHERE brand_id = ? AND deleted_at IS NULL').bind(id).first();
+    if (Number(n.n) > 0) return json({ ok: false, error: 'Move this brand\'s projects to another brand first.' }, 400);
+    await env.DB.prepare('UPDATE brands SET deleted_at = ? WHERE id = ?').bind(nowStr(), id).run();
+    return json({ ok: true });
   });
 });
 
@@ -1898,9 +1988,11 @@ router.post('/api/branding', async (req, env) => {
       }
       const vals = fields.map((f) => (body[f] !== undefined && body[f] !== '' ? body[f] : (defaults[f] ?? '')));
       const projectId = body.project_id ? Number(body.project_id) : null;
+      const brandId = projectId ? await brandIdForProject(env, projectId) : (Number(body.brand_id) || (await defaultBrandId(env)));
+      if (!(await env.DB.prepare('SELECT id FROM brands WHERE id = ? AND deleted_at IS NULL').bind(brandId).first())) return json({ ok: false, error: 'Unknown brand.' }, 400);
       const existing = projectId
         ? await env.DB.prepare('SELECT id FROM brand_profiles WHERE project_id = ?').bind(projectId).first()
-        : await env.DB.prepare('SELECT id FROM brand_profiles WHERE project_id IS NULL').first();
+        : await env.DB.prepare('SELECT id FROM brand_profiles WHERE brand_id = ? AND project_id IS NULL').bind(brandId).first();
       if (!['generated', 'bands', 'image'].includes(vals[fields.indexOf('letterhead_mode')])) return json({ ok: false, error: 'Unknown letterhead style.' }, 400);
       if (!userCan(user, 'branding', 'E')) return json({ ok: false, error: 'Not allowed.' }, 403);
       const secret = {};
@@ -1912,8 +2004,8 @@ router.post('/api/branding', async (req, env) => {
         await env.DB.prepare(`UPDATE brand_profiles SET ${fields.map((f) => f + ' = ?').join(', ')}, updated_by = ?, updated_at = ? WHERE id = ?`)
           .bind(...vals, user.user_id, now, existing.id).run();
       } else {
-        await env.DB.prepare(`INSERT INTO brand_profiles (project_id, ${[...fields, ...sk].join(', ')}, updated_by, updated_at, created_at) VALUES (?, ${[...fields, ...sk].map(() => '?').join(', ')}, ?, ?, ?)`)
-          .bind(projectId, ...vals, ...sk.map((k) => secret[k]), user.user_id, now, now).run();
+        await env.DB.prepare(`INSERT INTO brand_profiles (project_id, brand_id, ${[...fields, ...sk].join(', ')}, updated_by, updated_at, created_at) VALUES (?, ?, ${[...fields, ...sk].map(() => '?').join(', ')}, ?, ?, ?)`)
+          .bind(projectId, brandId, ...vals, ...sk.map((k) => secret[k]), user.user_id, now, now).run();
       }
       await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, ?, 'brand_profiles', ?, ?, ?)`).bind(user.user_id, 'create', 0, 'Updated company branding', now).run();
       return json({ ok: true });
@@ -2098,7 +2190,11 @@ router.post('/api/files/upload', async (req, env) => {
       const audience = formData.get('audience') || 'internal';
       const language = formData.get('language') || null;
       const seriesKey = formData.get('series_key') || null;
-      if (seriesKey && String(seriesKey).startsWith('brand:') && !userCan(user, 'branding', 'E')) return json({ ok: false, error: 'Not allowed.' }, 403);
+      if (seriesKey && String(seriesKey).startsWith('brand:')) {
+        if (!userCan(user, 'branding', 'E')) return json({ ok: false, error: 'Not allowed.' }, 403);
+        const m = /^brand:(\d+):(logo|logo_icon|signature|stamp|letterhead|header|footer|favicon|pwa_192|pwa_512)$/.exec(String(seriesKey));
+        if (!m || !(await env.DB.prepare('SELECT id FROM brands WHERE id = ? AND deleted_at IS NULL').bind(Number(m[1])).first())) return json({ ok: false, error: 'Unknown brand picture.' }, 400);
+      }
 
       if (!file || !title) {
         return json({ ok: false, error: 'File and title are required.' }, 400);
@@ -2197,28 +2293,28 @@ router.get('/api/files/download/:docId', async (req, env) => {
 
 // ---------- Branding images (public) ----------
 router.get('/brand/logo.png', async (req, env) => {
-  return serveBrandingFile(env, 'brand:logo');
+  return serveBrandingFile(env, 'logo');
 });
 
 router.get('/brand/logo_icon.png', async (req, env) => {
-  return serveBrandingFile(env, 'brand:logo_icon');
+  return serveBrandingFile(env, 'logo_icon');
 });
 
 router.get('/brand/pwa_192.png', async (req, env) => {
-  return serveBrandingFile(env, 'brand:pwa_192');
+  return serveBrandingFile(env, 'pwa_192');
 });
 
 router.get('/brand/pwa_512.png', async (req, env) => {
-  return serveBrandingFile(env, 'brand:pwa_512');
+  return serveBrandingFile(env, 'pwa_512');
 });
 
 router.get('/brand/favicon.png', async (req, env) => {
-  return serveBrandingFile(env, 'brand:favicon');
+  return serveBrandingFile(env, 'favicon');
 });
 
 router.get('/brand/theme.css', async (req, env) => {
   try {
-    const row = await env.DB.prepare('SELECT * FROM brand_profiles WHERE project_id IS NULL').first();
+    const row = await env.DB.prepare('SELECT * FROM brand_profiles WHERE project_id IS NULL AND brand_id = ?').bind(await defaultBrandId(env)).first();
     if (!row) return new Response(':root { --brand: #1d4ed8; }', { headers: { 'Content-Type': 'text/css' } });
     const css = `:root { --brand: ${row.colour_primary || '#1d4ed8'}; --brand-secondary: ${row.colour_secondary || ''}; --brand-accent: ${row.colour_accent || ''}; }`;
     return new Response(css, { headers: { 'Content-Type': 'text/css' } });
@@ -2227,8 +2323,9 @@ router.get('/brand/theme.css', async (req, env) => {
   }
 });
 
-async function serveBrandingFile(env, seriesKey) {
+async function serveBrandingFile(env, kind) {
   try {
+    const seriesKey = `brand:${await defaultBrandId(env)}:${kind}`;
     const row = await env.DB.prepare(`
       SELECT d.*, fb.data, fb.mime FROM documents d
       JOIN file_blobs fb ON fb.id = d.blob_id
@@ -2370,7 +2467,7 @@ router.post('/api/storage/google/start', async (req, env) => {
       if (user.role !== 'owner') {
         return json({ ok: false, error: 'Only the Owner can connect Google Drive.' }, 403);
       }
-      const redirectUri = `${new URL(req.url).origin}/api/storage/google/callback`;
+      const redirectUri = `${publicBase(env, req)}/api/storage/google/callback`;
       const { authUrl, state, verifier, expiresAt, stateHash } = await gdrive.makeOAuthStartAsync(env, redirectUri, user.user_id);
 
       // Store state in oauth_states (single-use, CSRF + PKCE protection)
@@ -2419,7 +2516,7 @@ router.get('/api/storage/google/callback', async (req, env) => {
     }
 
     const verifier = await decryptSetting(env, row.verifier_enc);
-    const redirectUri = `${new URL(req.url).origin}/api/storage/google/callback`;
+    const redirectUri = `${publicBase(env, req)}/api/storage/google/callback`;
 
     const tokens = await gdrive.exchangeCode(env, code, verifier, redirectUri);
 
@@ -2466,7 +2563,7 @@ router.get('/api/storage/google/callback', async (req, env) => {
 
     await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, 'connect', 'storage', 0, 'Google Drive connected', ?)`).bind(user.id, now).run();
 
-    return Response.redirect(`${new URL(req.url).origin}/#drive=ok`, 302);
+    return Response.redirect(`${publicBase(env, req)}/#drive=ok`, 302);
   } catch (e) {
     return new Response(driveResultPage(false, 'Sign-in failed: ' + e.message), { status: 500, headers: { 'Content-Type': 'text/html; charset=utf-8' } });
   }
@@ -2786,6 +2883,12 @@ export default {
     const url = new URL(request.url);
     const path = url.pathname;
     try {
+      // Only one address serves the CRM: anything else (old workers.dev link, a bare IP, another domain) is sent to it.
+      if (env.EXTERNAL_URL) {
+        const want = new URL(env.EXTERNAL_URL);
+        const local = ['localhost', '127.0.0.1', '[::1]'].includes(url.hostname);
+        if (!local && url.hostname !== want.hostname) return Response.redirect(`${want.origin}${url.pathname}${url.search}`, 308);
+      }
       if (path === '/api/health') {
         return json({ ok: true, env: env.ENVIRONMENT || 'production' });
       }

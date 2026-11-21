@@ -12,13 +12,16 @@ Object.assign(PAGES, { brochures: renderBrochures, people: renderPeople, brandin
 // (pages.js openForm returns a single File for type 'file'; 'files' returns an array)
 const _origOpenForm = openForm;
 openForm = function (opts) {
+  // A form opened while a project is picked starts on that project.
+  const withScope = (f) => (f.name === 'project_id' && f.type === 'select' && f.value === undefined && scopeProject && (f.options || []).some((o) => String(o[0]) === String(scopeProject)) ? { ...f, value: scopeProject } : f);
   const multi = (opts.fields || []).filter((f) => f.type === 'files');
-  if (!multi.length) return _origOpenForm(opts);
-  const fields = opts.fields.map((f) => (f.type === 'files' ? { ...f, type: 'file', _multi: true } : f));
+  const fields = (opts.fields || []).map((f) => withScope(f.type === 'files' ? { ...f, type: 'file', _multi: true } : f));
   const p = _origOpenForm({ ...opts, fields });
-  // enable multi-select on the freshly rendered inputs, then collect all files on submit
-  setTimeout(() => { for (const f of multi) { const el = document.getElementById('f_' + f.name); if (el) { el.multiple = true; el.accept = f.accept || ''; if (f.capture) el.setAttribute('capture', 'environment'); } } }, 0);
-  return p.then((v) => v); // File lists are read below via the capture hook
+  if (multi.length) {
+    // enable multi-select on the freshly rendered inputs; the submit hook below collects every file
+    setTimeout(() => { for (const f of multi) { const el = document.getElementById('f_' + f.name); if (el) { el.multiple = true; el.accept = f.accept || ''; } } }, 0);
+  }
+  return p;
 };
 // Capture all selected files at submit time (the original handler only keeps the first).
 document.addEventListener('submit', (e) => {
@@ -274,10 +277,17 @@ loadProjects = async function () {
     const projects = await getProjects(true);
     const list = $('projects-list'); if (!list) return;
     const mgr = ['owner', 'pm'].includes(currentUser.role); const owner = currentUser.role === 'owner';
-    list.innerHTML = (projects.map((p) => `<div class="card"><div class="row"><div><h2>${esc(p.name)}</h2><p class="muted">${esc(p.code)} · ${esc(p.city || '')}${p.type === 'redevelopment' ? ' · Redevelopment' : ''}</p></div>${statusChip(p.status)}</div>
+    let brands = []; try { brands = (await api('/api/brands')).data.brands; } catch (e) { /* roles without branding access */ }
+    const bname = (id) => (brands.find((b) => b.id === id) || {}).name;
+    list.innerHTML = (projects.map((p) => `<div class="card"><div class="row"><div><h2>${esc(p.name)}</h2><p class="muted">${esc(p.code)} · ${esc(p.city || '')}${p.type === 'redevelopment' ? ' · Redevelopment' : ''}${brands.length > 1 && bname(p.brand_id) ? ' · ' + esc(bname(p.brand_id)) : ''}</p></div>${statusChip(p.status)}</div>
       ${p.address ? `<p class="muted">${esc(p.address)}</p>` : ''}
-      ${mgr ? `<div class="row-btns"><button class="btn small" data-tpl="${p.id}" data-redev="${p.type === 'redevelopment' ? 1 : 0}">Load Mumbai approvals checklist</button>${owner ? `<button class="btn small" data-arch="${p.id}" data-name="${esc(p.name)}">Archive</button>` : ''}</div>` : ''}</div>`).join('') || '<div class="empty-state"><p>No projects yet.</p></div>');
+      ${mgr ? `<div class="row-btns"><button class="btn small" data-tpl="${p.id}" data-redev="${p.type === 'redevelopment' ? 1 : 0}">Load Mumbai approvals checklist</button>${owner && brands.length > 1 ? `<button class="btn small" data-brand="${p.id}">Change brand</button>` : ''}${owner ? `<button class="btn small" data-arch="${p.id}" data-name="${esc(p.name)}">Archive</button>` : ''}</div>` : ''}</div>`).join('') || '<div class="empty-state"><p>No projects yet.</p></div>');
     list.querySelectorAll('[data-tpl]').forEach((b) => { b.onclick = async () => { const r = await act(api('/api/approvals/load-template', { method: 'POST', body: { project_id: Number(b.dataset.tpl), redevelopment: b.dataset.redev === '1' } })); if (r) { toast(`Added ${r.data.count} checklist items`); navigate('approvals'); } }; });
+    list.querySelectorAll('[data-brand]').forEach((b) => { b.onclick = async () => {
+      const proj = projects.find((x) => String(x.id) === b.dataset.brand);
+      const v = await openForm({ title: `Brand for ${proj.name}`, intro: 'Letters, receipts and POs for this project use this brand.', fields: [{ name: 'brand_id', label: 'Brand', type: 'select', options: brands.map((x) => [x.id, x.name]), value: proj.brand_id }] });
+      if (v && await act(api(`/api/projects/${proj.id}`, { method: 'PUT', body: { brand_id: Number(v.brand_id) } }), 'Brand changed')) { projectCache = null; renderProjects($('app-main')); }
+    }; });
     list.querySelectorAll('[data-arch]').forEach((b) => { b.onclick = async () => { if (!confirm(`Archive “${b.dataset.name}”? It disappears from every screen and its Drive folder moves to _archive. You can restore it.`)) return; const r = await act(api(`/api/projects/${b.dataset.arch}/archive`, { method: 'POST' })); if (r) { toast(r.data.note, 6000); projectCache = null; renderProjects($('app-main')); } }; });
     if (owner) {
       const arch = (await api('/api/projects-archived')).data.projects;
@@ -321,10 +331,26 @@ const contrastOnWhite = (hex) => { const m = /^#?([0-9a-f]{6})$/i.exec(hex || ''
 const PICS = [['logo', 'Logo', 'Shown in the app and on letters'], ['signature', 'Signature', 'Printed only on issued documents. Never shown publicly.'], ['stamp', 'Company stamp', 'Printed only on issued documents. Never shown publicly.'],
   ['letterhead', 'Full-page letterhead', 'Used when style is “Full-page image”'], ['header', 'Header band', 'Used when style is “Header + footer bands”'], ['footer', 'Footer band', 'Used when style is “Header + footer bands”']];
 
-function renderBranding(main) {
+let brandSel = 0;
+async function renderBranding(main) {
   const owner = currentUser.role === 'owner'; const canEdit = owner;
-  main.innerHTML = `<h1>Branding & letterhead</h1><div id="branding-form" class="stack">Loading...</div>`;
-  api('/api/branding').then((r) => {
+  main.innerHTML = `<h1>Branding & letterhead</h1><div id="brandbar" class="brandbar"></div><div id="branding-form" class="stack">Loading...</div>`;
+  let brands = [];
+  try { brands = (await api('/api/brands')).data.brands; } catch (e) { $('branding-form').innerHTML = `<div class="error">${esc(e.message)}</div>`; return; }
+  if (!brands.some((b) => b.id === brandSel)) brandSel = (brands.find((b) => b.is_default) || brands[0] || { id: 1 }).id;
+  const cur = brands.find((b) => b.id === brandSel) || {};
+  if (!$('brandbar')) return; // moved to another screen while loading
+  $('brandbar').innerHTML = `${brands.length > 1 || owner ? `<label for="brand-sel"><b>Brand</b></label><select id="brand-sel">${brands.map((b) => `<option value="${b.id}"${b.id === brandSel ? ' selected' : ''}>${esc(b.name)}${b.is_default ? ' (default)' : ''} — ${b.projects} project${b.projects === 1 ? '' : 's'}</option>`).join('')}</select>` : ''}
+    ${owner ? '<button class="btn small" id="brand-new">+ New brand</button><button class="btn small" id="brand-rename">Rename</button>' + (cur.is_default ? '' : '<button class="btn small" id="brand-default">Make default</button><button class="btn small" id="brand-del" style="color:#dc2626">Remove</button>') : ''}`;
+  if ($('brand-sel')) $('brand-sel').onchange = () => { brandSel = Number($('brand-sel').value); renderBranding(main); };
+  if (owner) {
+    $('brand-new').onclick = async () => { const v = await openForm({ title: 'New brand', intro: 'A brand has its own company details, bank, signature, stamp and letterhead. Assign projects to it under Projects → Change brand.', fields: [{ name: 'name', label: 'Brand name', required: true }] }); if (v) { const r = await act(api('/api/brands', { method: 'POST', body: v }), 'Brand added'); if (r) { brandSel = r.data.id; renderBranding(main); } } };
+    $('brand-rename').onclick = async () => { const v = await openForm({ title: 'Rename brand', fields: [{ name: 'name', label: 'Brand name', value: cur.name, required: true }] }); if (v && await act(api(`/api/brands/${brandSel}`, { method: 'PUT', body: v }), 'Renamed')) renderBranding(main); };
+    if ($('brand-default')) $('brand-default').onclick = async () => { if (await act(api(`/api/brands/${brandSel}`, { method: 'PUT', body: { is_default: true } }), 'Default brand changed')) { brandChrome = null; await loadBrandChrome(); paintChrome(); renderBranding(main); } };
+    if ($('brand-del')) $('brand-del').onclick = async () => { if (confirm(`Remove brand “${cur.name}”?`) && await act(api(`/api/brands/${brandSel}`, { method: 'DELETE' }), 'Removed')) { brandSel = 0; renderBranding(main); } };
+  }
+  api(`/api/branding?brand_id=${brandSel}`).then((r) => {
+    if (!$('branding-form')) return;
     const b = r.data.branding || {};
     const f = (id, label, val, type = 'text', help = '') => `<div class="field"><label for="b-${id}">${label}</label><input id="b-${id}" type="${type}" value="${esc(val == null ? '' : val)}"${canEdit ? '' : ' disabled'}>${help ? `<p class="help">${help}</p>` : ''}</div>`;
     $('branding-form').innerHTML = `
@@ -338,7 +364,7 @@ function renderBranding(main) {
         <div class="field"><label for="b-colour_primary">Main colour</label><input id="b-colour_primary" type="color" value="${esc(b.colour_primary || '#1d4ed8')}"${canEdit ? '' : ' disabled'}><p class="help" id="b-contrast"></p></div>
         <div class="field"><label for="b-letterhead_mode">Letter style</label><select id="b-letterhead_mode"${canEdit ? '' : ' disabled'}><option value="generated">Generated header (no artwork needed)</option><option value="bands">Header + footer bands (images)</option><option value="image">Full-page image (pre-designed letterhead)</option></select></div>
         ${f('margin_top_mm', 'Top margin (mm)', b.margin_top_mm || 45, 'number', 'Space left clear for your artwork on image styles.')}${f('margin_bottom_mm', 'Bottom margin (mm)', b.margin_bottom_mm || 30, 'number')}${f('margin_side_mm', 'Side margin (mm)', b.margin_side_mm || 20, 'number')}</div>
-      ${canEdit ? '<div class="row-btns"><button class="btn btn-primary" id="b-save">Save</button><a class="btn" href="/print.html?k=sample" target="_blank" rel="noopener">How your letters will look</a></div>' : ''}
+      ${canEdit ? '<div class="row-btns"><button class="btn btn-primary" id="b-save">Save</button><a class="btn" href="/print.html?k=sample&brand=${brandSel}" target="_blank" rel="noopener">How your letters will look</a></div>' : ''}
       <div class="card"><h2>6. Pictures</h2><p class="help">PNG, JPG or SVG (SVG is converted to PNG here). Signature and stamp are only ever shown to signed-in staff.</p>
         ${PICS.map(([k, l, h]) => `<div class="row" style="margin:12px 0"><div><b>${l}</b>${(b.pictures || []).includes(k) ? ' ' + chip('Uploaded', 'good') : ''}<p class="muted">${h}</p></div>${canEdit ? `<label class="btn small" style="cursor:pointer">Choose<input type="file" accept="image/png,image/jpeg,image/webp,image/svg+xml" data-pic="${k}" hidden></label>` : ''}</div>`).join('')}</div>`;
     $('b-letterhead_mode').value = b.letterhead_mode || 'generated';
@@ -347,7 +373,7 @@ function renderBranding(main) {
     if (canEdit) {
       $('b-save').onclick = async () => {
         const g = (id) => { const e = $('b-' + id); return e ? e.value : undefined; };
-        const body = {}; for (const k of ['legal_name', 'trade_name', 'tagline', 'address', 'phone', 'email', 'website', 'gstin', 'cin_or_llpin', 'promoter_rera_ref', 'pan', 'bank_account_name', 'bank_name', 'bank_branch', 'bank_ifsc', 'bank_account', 'signatory_name', 'signatory_title', 'footer_text', 'wa_intro_text', 'colour_primary', 'letterhead_mode', 'margin_top_mm', 'margin_bottom_mm', 'margin_side_mm']) { const v = g(k); if (v !== undefined) body[k] = v; }
+        const body = { brand_id: brandSel }; for (const k of ['legal_name', 'trade_name', 'tagline', 'address', 'phone', 'email', 'website', 'gstin', 'cin_or_llpin', 'promoter_rera_ref', 'pan', 'bank_account_name', 'bank_name', 'bank_branch', 'bank_ifsc', 'bank_account', 'signatory_name', 'signatory_title', 'footer_text', 'wa_intro_text', 'colour_primary', 'letterhead_mode', 'margin_top_mm', 'margin_bottom_mm', 'margin_side_mm']) { const v = g(k); if (v !== undefined) body[k] = v; }
         if (await act(api('/api/branding', { method: 'POST', body }), 'Saved')) { brandChrome = null; await loadBrandChrome(); paintChrome(); renderBranding($('app-main')); }
       };
       main.querySelectorAll('[data-pic]').forEach((inp) => {
@@ -357,13 +383,13 @@ function renderBranding(main) {
             if (file.type === 'image/svg+xml' || /\.svg$/i.test(file.name)) file = new File([await svgToPng(file)], file.name.replace(/\.svg$/i, '.png'), { type: 'image/png' });
             else file = await compressFile(file, 1800, 0.9);
             if (file.size > 1400000) { toast('That picture is too big (max about 1.4 MB). Use a smaller one.', 5000); return; }
-            const fd = new FormData(); fd.append('file', file, file.name || inp.dataset.pic + '.png'); fd.append('title', inp.dataset.pic); fd.append('series_key', 'brand:' + inp.dataset.pic); fd.append('category', 'brand');
+            const fd = new FormData(); fd.append('file', file, file.name || inp.dataset.pic + '.png'); fd.append('title', inp.dataset.pic); fd.append('series_key', `brand:${brandSel}:${inp.dataset.pic}`); fd.append('category', 'brand');
             if (await act(api('/api/files/upload', { method: 'POST', body: fd }), 'Picture saved')) { brandChrome = null; renderBranding($('app-main')); }
           } catch (e) { toast(e.message, 5000); }
         };
       });
     }
-  }).catch((e) => { $('branding-form').innerHTML = `<div class="error">${esc(e.message)}</div>`; });
+  }).catch((e) => { if ($('branding-form')) $('branding-form').innerHTML = `<div class="error">${esc(e.message)}</div>`; });
 }
 
 // ---------- Owner: "Finish setting up" checklist ----------
@@ -421,3 +447,22 @@ function translateTree(root) {
   if (root.querySelectorAll) root.querySelectorAll('[placeholder],[title]').forEach((el) => { for (const a of ['placeholder', 'title']) { const v = el.getAttribute(a); if (v && dict[v]) el.setAttribute(a, dict[v]); } });
 }
 new MutationObserver((muts) => { for (const m of muts) m.addedNodes.forEach((n) => { if (n.nodeType === 1) translateTree(n); else if (n.nodeType === 3 && n.parentNode) translateTree(n.parentNode); }); }).observe(document.body, { childList: true, subtree: true });
+
+newProject = async function () {
+  let brands = []; try { brands = (await api('/api/brands')).data.brands; } catch (e) { /* ignore */ }
+  const v = await openForm({
+    title: 'New project',
+    fields: [
+      { name: 'name', label: 'Project name', required: true },
+      { name: 'code', label: 'Short code', required: true, placeholder: 'e.g. SHIV-A', help: 'Used in PO numbers. Must be unique.' },
+      ...(brands.length > 1 && currentUser.role === 'owner' ? [{ name: 'brand_id', label: 'Brand', type: 'select', options: brands.map((b) => [b.id, b.name + (b.is_default ? ' (default)' : '')]) }] : []),
+      { name: 'address', label: 'Address' }, { name: 'ward', label: 'MCGM ward' }, { name: 'city', label: 'City', value: 'Mumbai' },
+      { name: 'type', label: 'Type', type: 'select', options: [['new_build', 'New build'], ['redevelopment', 'Redevelopment']] },
+      { name: 'rera_no', label: 'MahaRERA number' },
+    ],
+  });
+  if (!v) return;
+  if (v.brand_id) v.brand_id = Number(v.brand_id);
+  const r = await act(api('/api/projects', { method: 'POST', body: v }), 'Project created');
+  if (r) { projectCache = null; renderProjects($('app-main')); }
+};

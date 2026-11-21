@@ -3,9 +3,9 @@ main = "src/index.js"
 compatibility_date = "2025-09-01"
 compatibility_flags = ["nodejs_compat"]
 
-# Custom domain (zone mysociety.tech is on this Cloudflare account). workers.dev stays available.
+# The CRM is served only from this custom domain. The *.workers.dev address and preview URLs are switched off.
 routes = [{ pattern = "crm.mysociety.tech", custom_domain = true }]
-workers_dev = true      # keep the free *.workers.dev address as a fallback
+workers_dev = false
 preview_urls = false
 
 [[d1_databases]]
