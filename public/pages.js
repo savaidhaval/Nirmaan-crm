@@ -1080,6 +1080,7 @@ function renderLogin() {
         <div id="otp-enter" style="display:none;margin-top:12px"><div class="field"><label for="otp-code">6-digit code from your email</label><input id="otp-code" inputmode="numeric" maxlength="6" autocomplete="one-time-code"></div><button class="btn btn-primary btn-full" id="otp-verify">Sign in with code</button></div>
       </div>
       <p class="help" style="text-align:center;margin-top:18px">First time? Use the temporary password you were given. You will then choose your own.</p>
+      <p class="help" style="text-align:center"><a href="/privacy">Privacy</a> · <a href="/terms">Terms</a></p>
     </div>`;
   const err = (m) => { const e = $('login-error'); e.textContent = m; e.style.display = 'block'; };
   $('login-toggle').onclick = () => { const i = $('login-password'); i.type = i.type === 'password' ? 'text' : 'password'; };
