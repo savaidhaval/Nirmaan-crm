@@ -48,6 +48,15 @@ export async function verifyPassword(password, salt, hash) {
   return computed === hash;
 }
 
+function toUrlSafe(bytes) {
+  return bytesToBase64(bytes).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function fromUrlSafe(s) {
+  const std = s.replace(/-/g, '+').replace(/_/g, '/');
+  return base64ToBytes(std + '='.repeat((4 - (std.length % 4)) % 4));
+}
+
 export function makeSessionToken() {
   return crypto.getRandomValues(new Uint8Array(32));
 }
@@ -87,7 +96,8 @@ export async function createSession(env, userId, userAgent) {
     INSERT INTO sessions (id, user_id, expires_at, user_agent, created_at)
     VALUES (?, ?, ?, ?, ?)
   `).bind(tokenHash, userId, expiresAt, userAgent, now).run();
-  return { tokenHash, tokenBytes, expiresAt };
+  // The cookie carries the random token; only its SHA-256 is stored, so a database leak cannot be replayed as a login.
+  return { token: toUrlSafe(tokenBytes), tokenHash, tokenBytes, expiresAt };
 }
 
 export async function destroySession(env, tokenHash) {
@@ -187,7 +197,8 @@ export async function getCurrentUser(env, cookieHeader) {
   if (!cookieHeader) return null;
   const match = cookieHeader.match(new RegExp(`(?:^|; )${COOKIE_NAME}=([^;]+)`));
   if (!match) return null;
-  const tokenHash = match[1];
+  let tokenHash;
+  try { tokenHash = await hashToken(fromUrlSafe(match[1])); } catch (e) { return null; } // malformed cookie
   return getSession(env, tokenHash);
 }
 

@@ -81,7 +81,7 @@ router.post('/api/auth/login', async (req, env) => {
   try {
     const { user, session } = await loginPassword(env, email, password, req.headers.get('user-agent') || '');
     const res = json({ ok: true, data: { user: safeUser(user), must_change_password: !!user.must_change_password } });
-    setSessionCookie(res, session.tokenHash, session.expiresAt);
+    setSessionCookie(res, session.token, session.expiresAt);
     return res;
   } catch (e) {
     return json({ ok: false, error: e.message }, /Too many/.test(e.message) ? 429 : 401);
@@ -151,7 +151,7 @@ router.post('/api/projects', async (req, env) => {
       if (!name || !code) {
         return json({ ok: false, error: 'Project name and code are required.' }, 400);
       }
-      const wantBrand = Number(body.brand_id) || null;
+      const wantBrand = req.user.role === 'owner' ? (Number(body.brand_id) || null) : null; // only the Owner picks a brand
       const newBrand = wantBrand && (await env.DB.prepare('SELECT id FROM brands WHERE id = ? AND deleted_at IS NULL').bind(wantBrand).first()) ? wantBrand : await defaultBrandId(env);
       const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
       const result = await env.DB.prepare(`
@@ -191,6 +191,8 @@ router.put('/api/projects/:id', async (req, env) => {
     const body = await req.json();
     const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
     const n = (v) => (v === undefined ? null : v);
+    if (body.status === 'archived') return json({ ok: false, error: 'Use Archive on the Projects screen (Owner only).' }, 400);
+    if (body.brand_id && user.role !== 'owner') return json({ ok: false, error: 'Only the Owner can change a project\'s brand.' }, 403);
     let brandId = null;
     if (body.brand_id) {
       if (!(await env.DB.prepare('SELECT id FROM brands WHERE id = ? AND deleted_at IS NULL').bind(Number(body.brand_id)).first())) return json({ ok: false, error: 'Unknown brand.' }, 400);
@@ -1200,6 +1202,7 @@ router.get('/api/sales/bookings', async (req, env) => {
     if (!ids.length) return json({ ok: true, data: { bookings: [] } });
     const rows = await env.DB.prepare(`SELECT b.*, i.unit_no, i.wing, (SELECT COALESCE(SUM(amount_paise + tds_paise), 0) FROM sal_receipts r WHERE r.booking_id = b.id AND r.reversed_at IS NULL) AS collected_paise
       FROM sal_bookings b JOIN sal_inventory i ON i.id = b.unit_id WHERE b.deleted_at IS NULL AND b.project_id IN (${ids.map(() => '?').join(',')}) ORDER BY b.id DESC LIMIT 200`).bind(...ids).all();
+    for (const r of rows.results) r.pan = await maskPan(env, r.pan);
     return json({ ok: true, data: { bookings: rows.results } });
   });
 });
@@ -1211,6 +1214,7 @@ router.get('/api/sales/bookings/:id', async (req, env) => {
     if (!(await visibleProjectIds(env, req.user)).includes(b.project_id)) return json({ ok: false, error: 'Not allowed.' }, 403);
     const demands = await env.DB.prepare('SELECT * FROM sal_demands WHERE booking_id = ? ORDER BY id').bind(b.id).all();
     const receipts = await env.DB.prepare('SELECT * FROM sal_receipts WHERE booking_id = ? ORDER BY received_on, id').bind(b.id).all();
+    b.pan = await maskPan(env, b.pan);
     return json({ ok: true, data: { booking: b, demands: demands.results, receipts: receipts.results } });
   });
 });
@@ -1233,7 +1237,7 @@ router.post('/api/sales/bookings', async (req, env) => {
       const now = nowStr();
       const ins = await env.DB.prepare(`INSERT INTO sal_bookings (project_id, unit_id, lead_id, customer_name, phone, email, address, pan, token_paise, agreed_price_paise, gst_bp, status, booking_date, created_by, created_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'token', ?, ?, ?)`)
-        .bind(unit.project_id, unit.id, b.lead_id || null, b.customer_name, b.phone || '', b.email || '', b.address || '', b.pan || '', token, price, gstBp, now.substring(0, 10), req.user.user_id, now).run();
+        .bind(unit.project_id, unit.id, b.lead_id || null, b.customer_name, b.phone || '', b.email || '', b.address || '', b.pan ? 'enc:' + (await encryptSetting(env, String(b.pan).trim().toUpperCase())) : '', token, price, gstBp, now.substring(0, 10), req.user.user_id, now).run();
       const bookingId = ins.meta.last_row_id;
       const stmts = [env.DB.prepare("UPDATE sal_inventory SET status = 'booked', blocked_till = NULL WHERE id = ?").bind(unit.id)];
       let allocated = 0;
@@ -1587,6 +1591,7 @@ async function buildExport(env) {
     'sal_leads', 'sal_activities', 'sal_visits', 'sal_inventory', 'sal_partners', 'sal_bookings', 'sal_plan_stages', 'sal_demands', 'sal_receipts', 'documents', 'audit_log'];
   const out = { exported_at: new Date().toISOString(), tables: {} };
   for (const t of tables) out.tables[t] = (await env.DB.prepare(`SELECT * FROM ${t}`).all()).results;
+  for (const r of out.tables.sal_bookings) r.pan = await maskPan(env, r.pan); // never export a customer's PAN
   out.tables.users = (await env.DB.prepare('SELECT id, name, email, phone, role, lang, active, created_at FROM users').all()).results;
   return out;
 }
@@ -2164,7 +2169,7 @@ router.post('/api/auth/otp/verify', async (req, env) => {
     const session = await createSession(env, user.id, req.headers.get('user-agent') || '');
     await env.DB.prepare('UPDATE users SET last_login_at = ? WHERE id = ?').bind(nowStr(), user.id).run();
     const res = json({ ok: true, data: { user: safeUser({ user_id: user.id, ...user }), must_change_password: !!user.must_change_password } });
-    setSessionCookie(res, session.tokenHash, session.expiresAt);
+    setSessionCookie(res, session.token, session.expiresAt);
     return res;
   } catch (e) {
     return json({ ok: false, error: 'Could not check the code.' }, 500);
@@ -2270,6 +2275,7 @@ router.get('/api/files/download/:docId', async (req, env) => {
         return json({ ok: false, error: 'Not allowed.' }, 403);
       }
 
+      if (doc.module === 'brochure' && doc.audience !== 'customer' && !['owner', 'pm'].includes(req.user.role)) return json({ ok: false, error: 'Not allowed.' }, 403); // internal brochures stay internal
       if (doc.store === 'gdrive') return driveResponse(env, doc, req, 'attachment');
       if (doc.store === 'd1' || doc.store === null) {
         const blob = await env.DB.prepare('SELECT * FROM file_blobs WHERE id = ?').bind(doc.blob_id).first();
@@ -2728,6 +2734,14 @@ router.get('/s/:token/file', async (req, env) => {
     return new Response('Error: ' + e.message, { status: 500 });
   }
 });
+
+// Customer PAN: stored encrypted (enc: prefix), shown and exported only as ••••1234.
+async function maskPan(env, v) {
+  if (!v) return '';
+  let plain = String(v);
+  if (plain.startsWith('enc:')) { try { plain = await decryptSetting(env, plain.slice(4)); } catch (e) { return '••••'; } }
+  return plain.length > 4 ? '••••' + plain.slice(-4) : '••••';
+}
 
 // D1 returns BLOB columns as plain number arrays; turn them back into bytes before responding.
 function blobBytes(d) {

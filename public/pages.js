@@ -257,11 +257,12 @@ function paintChrome() {
 }
 
 let brandList = [];
+let brandsLoaded = false; // refreshed after any brand or project-brand change
 async function fillProjectPicker() {
   const sel = $('project-picker'); if (!sel || !currentUser) return;
   let projects = [];
   try { projects = await getProjects(); } catch (e) { sel.hidden = true; return; }
-  try { brandList = (await api('/api/brands')).data.brands; } catch (e) { brandList = []; }
+  if (!brandsLoaded) { try { brandList = (await api('/api/brands')).data.brands; } catch (e) { brandList = []; } brandsLoaded = true; }
   if (projects.length < 2) { sel.hidden = true; if (scopeProject) { setScopeProject(0); } return; }
   if (scopeProject && !projects.some((p) => p.id === scopeProject)) setScopeProject(0);
   const opt = (p) => `<option value="${p.id}"${p.id === scopeProject ? ' selected' : ''}>${esc(p.name)}</option>`;

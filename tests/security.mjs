@@ -153,6 +153,24 @@ const bk = (await owner.call('GET', `/api/sales/bookings/${b1.data.data.id}`)).d
 ok('demands add up to the price to the paisa', bk.demands.reduce((t, d) => t + d.amount_paise, 0) === bk.booking.agreed_price_paise);
 ok('bad payment plan refused', (await owner.call('POST', '/api/sales/plan-stages', { project_id: pid, stages: [{ stage_name: 'x', pct_bp: 9000 }] })).status === 400);
 
+// --- review fixes
+{
+  const pm = await mk('pm', []);
+  await pm.c.call('POST', '/api/auth/change-password', { currentPassword: pm.temp, newPassword: 'ZzStrongPass-' + run });
+  ok('PM cannot archive via project PUT', (await pm.c.call('PUT', `/api/projects/${pid}`, { status: 'archived' })).status === 400);
+  ok('PM cannot change a project brand', (await pm.c.call('PUT', `/api/projects/${pid}`, { brand_id: 1 })).status === 403);
+  const bkp = await owner.call('POST', '/api/sales/inventory', { project_id: pid, unit_no: 'P' + run.slice(-3), price_paise: 1000000 });
+  const bb = await owner.call('POST', '/api/sales/bookings', { unit_id: bkp.data.data.id, customer_name: 'zz pan', pan: 'ABCDE1234F' });
+  const one = (await owner.call('GET', `/api/sales/bookings/${bb.data.data.id}`)).data.data.booking;
+  ok('customer PAN returned masked only', one.pan === '••••234F', one.pan);
+  const exp = JSON.stringify((await owner.call('GET', '/api/export-all')).data);
+  ok('customer PAN never in the export', !exp.includes('ABCDE1234F'));
+  const bro = new FormData(); bro.append('file', new Blob(['secret prices'], { type: 'text/plain' }), 'p.txt'); bro.append('title', 'prices-' + run); bro.append('module', 'brochure'); bro.append('project_id', String(pid)); bro.append('audience', 'internal'); bro.append('series_key', 'price_list:p-' + run);
+  const bd = (await owner.call('POST', '/api/files/upload', bro)).data.data;
+  ok('sales cannot download an internal brochure by id', (await sales.c.call('GET', `/api/files/download/${bd.id}`, null, { raw: true })).status === 403);
+  ok('owner can still download it', (await owner.call('GET', `/api/files/download/${bd.id}`, null, { raw: true })).status === 200);
+}
+
 // --- PO maker-checker
 const vend = (await owner.call('POST', '/api/procurement/vendors', { name: 'zz vendor ' + run })).data.data.id;
 const po = (await owner.call('POST', '/api/procurement/pos', { project_id: pid, vendor_id: vend, items: [{ description: 'x', qty: 1, rate_paise: 100000 }] })).data.data.id;

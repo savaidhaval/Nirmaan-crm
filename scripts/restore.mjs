@@ -31,12 +31,11 @@ const lit = (v) => {
 const order = ['users', 'projects', 'documents', 'apr_items', 'apr_events', 'drw_drawings', 'drw_revisions', 'site_milestones', 'site_dprs', 'site_snags',
   'pro_vendors', 'pro_rfqs', 'pro_quotes', 'pro_pos', 'pro_po_items', 'pro_grns', 'pro_bills', 'sal_leads', 'sal_activities', 'sal_visits', 'sal_inventory',
   'sal_partners', 'sal_bookings', 'sal_plan_stages', 'sal_demands', 'sal_receipts', 'audit_log'];
-const out = ['PRAGMA foreign_keys = OFF;'];
+const out = ['PRAGMA defer_foreign_keys = true;'];
 for (const t of order) {
   for (const row of tables[t] || []) {
     const cols = Object.keys(row);
     out.push(`INSERT OR REPLACE INTO ${t} (${cols.join(', ')}) VALUES (${cols.map((c) => lit(row[c])).join(', ')});`);
   }
 }
-out.push('PRAGMA foreign_keys = ON;');
 console.log(out.join('\n'));

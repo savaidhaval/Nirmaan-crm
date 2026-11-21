@@ -61,7 +61,7 @@ ok('stamp not served for default brand', (await o.call('GET', `/api/print/asset/
 // project picker scope
 await o.call('POST', '/api/approvals', { project_id: p1, name: 'zz appr one' });
 await o.call('POST', '/api/approvals', { project_id: p2, name: 'zz appr two' });
-const all = (await o.call('GET', '/api/approvals')).data.items.filter((a) => a.name.startsWith('zz appr'));
+const all = (await o.call('GET', '/api/approvals')).data.items.filter((a) => a.project_id === p1 || a.project_id === p2);
 const only2 = (await o.call('GET', `/api/approvals?project_id=${p2}`)).data.items;
 ok('without a pick, both projects show', all.length === 2);
 ok('picking project 2 shows only its items', only2.length === 1 && only2[0].name === 'zz appr two');

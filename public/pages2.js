@@ -286,14 +286,14 @@ loadProjects = async function () {
     list.querySelectorAll('[data-brand]').forEach((b) => { b.onclick = async () => {
       const proj = projects.find((x) => String(x.id) === b.dataset.brand);
       const v = await openForm({ title: `Brand for ${proj.name}`, intro: 'Letters, receipts and POs for this project use this brand.', fields: [{ name: 'brand_id', label: 'Brand', type: 'select', options: brands.map((x) => [x.id, x.name]), value: proj.brand_id }] });
-      if (v && await act(api(`/api/projects/${proj.id}`, { method: 'PUT', body: { brand_id: Number(v.brand_id) } }), 'Brand changed')) { projectCache = null; renderProjects($('app-main')); }
+      if (v && await act(api(`/api/projects/${proj.id}`, { method: 'PUT', body: { brand_id: Number(v.brand_id) } }), 'Brand changed')) { projectCache = null; brandsLoaded = false; renderProjects($('app-main')); }
     }; });
-    list.querySelectorAll('[data-arch]').forEach((b) => { b.onclick = async () => { if (!confirm(`Archive “${b.dataset.name}”? It disappears from every screen and its Drive folder moves to _archive. You can restore it.`)) return; const r = await act(api(`/api/projects/${b.dataset.arch}/archive`, { method: 'POST' })); if (r) { toast(r.data.note, 6000); projectCache = null; renderProjects($('app-main')); } }; });
+    list.querySelectorAll('[data-arch]').forEach((b) => { b.onclick = async () => { if (!confirm(`Archive “${b.dataset.name}”? It disappears from every screen and its Drive folder moves to _archive. You can restore it.`)) return; const r = await act(api(`/api/projects/${b.dataset.arch}/archive`, { method: 'POST' })); if (r) { toast(r.data.note, 6000); projectCache = null; brandsLoaded = false; renderProjects($('app-main')); } }; });
     if (owner) {
       const arch = (await api('/api/projects-archived')).data.projects;
       if (arch.length) {
         list.insertAdjacentHTML('beforeend', `<h3>Archived</h3>${arch.map((p) => `<div class="card"><div class="row"><div><b>${esc(p.name)}</b><p class="muted">${esc(p.code)}</p></div><button class="btn small" data-rest="${p.id}">Restore</button></div></div>`).join('')}`);
-        list.querySelectorAll('[data-rest]').forEach((b) => { b.onclick = async () => { if (await act(api(`/api/projects/${b.dataset.rest}/restore`, { method: 'POST' }), 'Restored')) { projectCache = null; renderProjects($('app-main')); } }; });
+        list.querySelectorAll('[data-rest]').forEach((b) => { b.onclick = async () => { if (await act(api(`/api/projects/${b.dataset.rest}/restore`, { method: 'POST' }), 'Restored')) { projectCache = null; brandsLoaded = false; renderProjects($('app-main')); } }; });
       }
     }
   } catch (e) { const l = $('projects-list'); if (l) l.innerHTML = `<div class="error">${esc(e.message)}</div>`; }
@@ -344,10 +344,10 @@ async function renderBranding(main) {
     ${owner ? '<button class="btn small" id="brand-new">+ New brand</button><button class="btn small" id="brand-rename">Rename</button>' + (cur.is_default ? '' : '<button class="btn small" id="brand-default">Make default</button><button class="btn small" id="brand-del" style="color:#dc2626">Remove</button>') : ''}`;
   if ($('brand-sel')) $('brand-sel').onchange = () => { brandSel = Number($('brand-sel').value); renderBranding(main); };
   if (owner) {
-    $('brand-new').onclick = async () => { const v = await openForm({ title: 'New brand', intro: 'A brand has its own company details, bank, signature, stamp and letterhead. Assign projects to it under Projects → Change brand.', fields: [{ name: 'name', label: 'Brand name', required: true }] }); if (v) { const r = await act(api('/api/brands', { method: 'POST', body: v }), 'Brand added'); if (r) { brandSel = r.data.id; renderBranding(main); } } };
-    $('brand-rename').onclick = async () => { const v = await openForm({ title: 'Rename brand', fields: [{ name: 'name', label: 'Brand name', value: cur.name, required: true }] }); if (v && await act(api(`/api/brands/${brandSel}`, { method: 'PUT', body: v }), 'Renamed')) renderBranding(main); };
+    $('brand-new').onclick = async () => { const v = await openForm({ title: 'New brand', intro: 'A brand has its own company details, bank, signature, stamp and letterhead. Assign projects to it under Projects → Change brand.', fields: [{ name: 'name', label: 'Brand name', required: true }] }); if (v) { const r = await act(api('/api/brands', { method: 'POST', body: v }), 'Brand added'); if (r) { brandSel = r.data.id; brandsLoaded = false; renderBranding(main); } } };
+    $('brand-rename').onclick = async () => { const v = await openForm({ title: 'Rename brand', fields: [{ name: 'name', label: 'Brand name', value: cur.name, required: true }] }); if (v && await act(api(`/api/brands/${brandSel}`, { method: 'PUT', body: v }), 'Renamed')) { brandsLoaded = false; renderBranding(main); } };
     if ($('brand-default')) $('brand-default').onclick = async () => { if (await act(api(`/api/brands/${brandSel}`, { method: 'PUT', body: { is_default: true } }), 'Default brand changed')) { brandChrome = null; await loadBrandChrome(); paintChrome(); renderBranding(main); } };
-    if ($('brand-del')) $('brand-del').onclick = async () => { if (confirm(`Remove brand “${cur.name}”?`) && await act(api(`/api/brands/${brandSel}`, { method: 'DELETE' }), 'Removed')) { brandSel = 0; renderBranding(main); } };
+    if ($('brand-del')) $('brand-del').onclick = async () => { if (confirm(`Remove brand “${cur.name}”?`) && await act(api(`/api/brands/${brandSel}`, { method: 'DELETE' }), 'Removed')) { brandSel = 0; brandsLoaded = false; renderBranding(main); } };
   }
   api(`/api/branding?brand_id=${brandSel}`).then((r) => {
     if (!$('branding-form')) return;
@@ -464,5 +464,5 @@ newProject = async function () {
   if (!v) return;
   if (v.brand_id) v.brand_id = Number(v.brand_id);
   const r = await act(api('/api/projects', { method: 'POST', body: v }), 'Project created');
-  if (r) { projectCache = null; renderProjects($('app-main')); }
+  if (r) { projectCache = null; brandsLoaded = false; renderProjects($('app-main')); }
 };
