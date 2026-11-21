@@ -3,6 +3,9 @@ main = "src/index.js"
 compatibility_date = "2025-09-01"
 compatibility_flags = ["nodejs_compat"]
 
+# Custom domain (zone mysociety.tech is on this Cloudflare account). workers.dev stays available.
+routes = [{ pattern = "crm.mysociety.tech", custom_domain = true }]
+
 [[d1_databases]]
 binding = "DB"
 database_name = "nirmaan-db"
