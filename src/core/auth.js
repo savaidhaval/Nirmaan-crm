@@ -163,11 +163,12 @@ export async function loginPassword(env, email, password, userAgent) {
     const salt = makeSalt();
     const hash = await hashPassword(password, salt);
     const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
-    await env.DB.prepare('UPDATE users SET password_hash = ?, password_salt = ?, password_changed_at = ? WHERE id = ?').bind(hash, bytesToBase64(salt), now, user.id).run();
+    await env.DB.prepare('UPDATE users SET password_hash = ?, password_salt = ?, password_changed_at = ?, must_change_password = 1 WHERE id = ?').bind(hash, bytesToBase64(salt), now, user.id).run();
   } else {
     throw new Error('Invalid email or password.');
   }
 
+  await env.DB.prepare('DELETE FROM rate_limits WHERE key = ?').bind(rateKey).run(); // only failed attempts count
   // Update last login
   const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
   await env.DB.prepare('UPDATE users SET last_login_at = ? WHERE id = ?').bind(now, user.id).run();

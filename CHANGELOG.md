@@ -1,6 +1,8 @@
 # Changelog
 
 ## Unreleased
+- Fix: cron triggers never ran (`scheduled` was not on the default export). Failed logins only count towards the lockout.
+- New: letterhead print views, RFQ quotes, GRN, vendor bills/ledger, offline queue, Hindi/Marathi site flow, CSV + JSON exports, nightly Drive backup, Drive upload/download routing (untested against Google).
 - Fix: blank page caused by `const API_BASE` declared twice; `api()` now JSON-encodes object bodies.
 - Fix: dashboard, receivables, branding, approval events, documents, share links, PO numbering SQL errors.
 - Fix: file/brand downloads returned comma-separated numbers; `/s/*` and `/brand/*` now reach the Worker.

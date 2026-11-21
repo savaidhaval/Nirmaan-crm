@@ -1270,6 +1270,321 @@ router.post('/api/sales/bookings/:id/cancel', async (req, env) => {
   });
 });
 
+// ---------- Google Drive storage routing (Mode G) ----------
+async function driveReady(env) {
+  return (await getSettingRaw(env, 'storage.driver')) === 'gdrive' && (await getSettingRaw(env, 'storage.gdrive.status')) === 'connected';
+}
+
+async function driveToken(env, force) {
+  const enc = await getSettingRaw(env, 'storage.gdrive.access_token_enc');
+  const exp = await getSettingRaw(env, 'storage.gdrive.access_expires_at');
+  if (!force && enc && exp && new Date(String(exp).replace(' ', 'T') + (String(exp).includes('Z') ? '' : 'Z')).getTime() > Date.now() + 60000) return decryptSetting(env, enc);
+  const refreshEnc = await getSettingRaw(env, 'storage.gdrive.refresh_token_enc');
+  if (!refreshEnc) throw new gdrive.GDriveError('Google Drive is not connected.', 'needs_reconnect');
+  try {
+    const r = await gdrive.refreshAccessToken(env, refreshEnc);
+    await setSettingRaw(env, 'storage.gdrive.access_token_enc', await encryptSetting(env, r.access_token), null);
+    await setSettingRaw(env, 'storage.gdrive.access_expires_at', new Date(Date.now() + (r.expires_in || 3000) * 1000).toISOString(), null);
+    return r.access_token;
+  } catch (e) {
+    if (e.code === 'invalid_grant') await setSettingRaw(env, 'storage.gdrive.status', 'needs_reconnect', null);
+    throw e;
+  }
+}
+
+// Run a Drive call; on an expired token refresh once and retry.
+async function withDrive(env, fn) {
+  let token = await driveToken(env, false);
+  try { return await fn(token); }
+  catch (e) {
+    if (e.code === 'invalid_token') return fn(await driveToken(env, true));
+    throw e;
+  }
+}
+
+async function driveFolderFor(env, token, projectId) {
+  const key = 'p:' + (projectId || 0);
+  const hit = await env.DB.prepare('SELECT drive_folder_id FROM drive_folders WHERE path_key = ?').bind(key).first();
+  if (hit) return hit.drive_folder_id;
+  const root = await getSettingRaw(env, 'storage.gdrive.root_folder_id');
+  const proj = projectId ? await env.DB.prepare('SELECT code FROM projects WHERE id = ?').bind(projectId).first() : null;
+  const name = proj ? proj.code : 'General';
+  const found = await gdrive.findDriveFolder(env, token, name, root);
+  const id = (found.files && found.files[0]) ? found.files[0].id : (await gdrive.createDriveFolder(env, token, name, root)).id;
+  await env.DB.prepare('INSERT OR IGNORE INTO drive_folders (path_key, project_id, drive_folder_id) VALUES (?, ?, ?)').bind(key, projectId || null, id).run();
+  return id;
+}
+
+async function driveUpload(env, file, projectId) {
+  const buf = await file.arrayBuffer();
+  return withDrive(env, async (token) => {
+    const folder = await driveFolderFor(env, token, projectId);
+    const session = await gdrive.resumableUploadInit(env, token, file.name || 'file', file.type, folder, buf.byteLength);
+    const meta = await gdrive.resumableUploadPut(env, token, session, buf, buf.byteLength, file.type);
+    return { fileId: meta.id, md5: meta.md5Checksum || null, folder };
+  });
+}
+
+async function driveResponse(env, doc, req, disposition) {
+  let upstream;
+  try {
+    upstream = await withDrive(env, (token) => gdrive.getDriveFile(env, token, doc.drive_file_id, req.headers.get('range')));
+  } catch (e) {
+    return new Response('Files from Google Drive are paused right now. Ask the Owner to reconnect Google Drive.', { status: 503 });
+  }
+  const h = new Headers({
+    'Content-Type': doc.mime || 'application/octet-stream',
+    'Content-Disposition': `${disposition}; filename*=UTF-8''${encodeURIComponent(doc.title)}`,
+    'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff',
+  });
+  for (const k of ['content-length', 'content-range', 'accept-ranges']) if (upstream.headers.get(k)) h.set(k, upstream.headers.get(k));
+  return new Response(upstream.body, { status: upstream.status, headers: h });
+}
+
+// ---------- Procurement: quotes, GRN, bills, vendor ledger ----------
+router.get('/api/procurement/rfqs/:id/quotes', async (req, env) => {
+  return withAuth(req, env, 'procurement', 'V', async (req, env) => {
+    const rfq = await env.DB.prepare('SELECT * FROM pro_rfqs WHERE id = ? AND deleted_at IS NULL').bind(Number(req.params.id)).first();
+    if (!rfq) return json({ ok: false, error: 'RFQ not found.' }, 404);
+    if (rfq.project_id && !(await visibleProjectIds(env, req.user)).includes(rfq.project_id)) return json({ ok: false, error: 'Not allowed.' }, 403);
+    const rows = await env.DB.prepare('SELECT q.*, v.name AS vendor FROM pro_quotes q JOIN pro_vendors v ON v.id = q.vendor_id WHERE q.rfq_id = ? ORDER BY q.amount_paise').bind(rfq.id).all();
+    const last = rfq.title ? await env.DB.prepare(`SELECT i.rate_paise, i.unit, p.po_no FROM pro_po_items i JOIN pro_pos p ON p.id = i.po_id WHERE p.status IN ('approved','received','part_received') AND lower(i.description) LIKE lower(?) ORDER BY p.id DESC LIMIT 1`).bind('%' + String(rfq.material || rfq.title).slice(0, 40) + '%').first() : null;
+    return json({ ok: true, data: { rfq, quotes: rows.results, last_paid: last } });
+  });
+});
+
+router.post('/api/procurement/rfqs/:id/quotes', async (req, env) => {
+  return withAuth(req, env, 'procurement', 'C', async (req, env) => {
+    const rfq = await env.DB.prepare('SELECT * FROM pro_rfqs WHERE id = ? AND deleted_at IS NULL').bind(Number(req.params.id)).first();
+    if (!rfq) return json({ ok: false, error: 'RFQ not found.' }, 404);
+    if (rfq.project_id && !(await visibleProjectIds(env, req.user)).includes(rfq.project_id)) return json({ ok: false, error: 'Not allowed.' }, 403);
+    const b = await req.json();
+    const amount = Math.round(Number(b.amount_paise) || 0);
+    if (!b.vendor_id || !(amount > 0)) return json({ ok: false, error: 'Vendor and amount are required.' }, 400);
+    const r = await env.DB.prepare('INSERT INTO pro_quotes (rfq_id, vendor_id, rate_paise, amount_paise, delivery_days, terms, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .bind(rfq.id, Number(b.vendor_id), Math.round(Number(b.rate_paise) || 0), amount, b.delivery_days ?? null, b.terms || '', nowStr()).run();
+    return json({ ok: true, data: { id: r.meta.last_row_id } });
+  });
+});
+
+router.post('/api/procurement/quotes/:id/select', async (req, env) => {
+  return withAuth(req, env, 'procurement', 'E', async (req, env) => {
+    const q = await env.DB.prepare('SELECT * FROM pro_quotes WHERE id = ?').bind(Number(req.params.id)).first();
+    if (!q) return json({ ok: false, error: 'Quote not found.' }, 404);
+    await env.DB.batch([
+      env.DB.prepare('UPDATE pro_quotes SET selected = 0 WHERE rfq_id = ?').bind(q.rfq_id),
+      env.DB.prepare('UPDATE pro_quotes SET selected = 1 WHERE id = ?').bind(q.id),
+      env.DB.prepare("UPDATE pro_rfqs SET status = 'awarded' WHERE id = ?").bind(q.rfq_id),
+    ]);
+    return json({ ok: true });
+  });
+});
+
+// GRN: site can create (procurement 'C'). Idempotent on client_uuid so offline retries never duplicate.
+router.post('/api/procurement/pos/:id/grn', async (req, env) => {
+  return withAuth(req, env, 'procurement', 'C', async (req, env) => {
+    const po = await env.DB.prepare('SELECT * FROM pro_pos WHERE id = ? AND deleted_at IS NULL').bind(Number(req.params.id)).first();
+    if (!po) return json({ ok: false, error: 'PO not found.' }, 404);
+    if (!(await visibleProjectIds(env, req.user)).includes(po.project_id)) return json({ ok: false, error: 'Not allowed.' }, 403);
+    if (!['approved', 'part_received'].includes(po.status)) return json({ ok: false, error: 'Material can only be received against an approved PO.' }, 400);
+    const b = await req.json();
+    if (b.client_uuid) {
+      const dup = await env.DB.prepare('SELECT id FROM pro_grns WHERE client_uuid = ?').bind(b.client_uuid).first();
+      if (dup) return json({ ok: true, data: { id: dup.id, duplicate: true } });
+    }
+    const now = nowStr();
+    const r = await env.DB.prepare('INSERT INTO pro_grns (po_id, received_on, qty_note, challan_no, received_by, client_uuid, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .bind(po.id, b.received_on || now.substring(0, 10), b.qty_note || '', b.challan_no || '', req.user.user_id, b.client_uuid || null, now).run();
+    await env.DB.prepare('UPDATE pro_pos SET status = ? WHERE id = ?').bind(b.full ? 'received' : 'part_received', po.id).run();
+    return json({ ok: true, data: { id: r.meta.last_row_id } });
+  });
+});
+
+router.get('/api/procurement/grns', async (req, env) => {
+  return withAuth(req, env, 'procurement', 'V', async (req, env) => {
+    const ids = await visibleProjectIds(env, req.user);
+    if (!ids.length) return json({ ok: true, data: { grns: [] } });
+    const rows = await env.DB.prepare(`SELECT g.*, p.po_no FROM pro_grns g JOIN pro_pos p ON p.id = g.po_id WHERE g.deleted_at IS NULL AND p.project_id IN (${ids.map(() => '?').join(',')}) ORDER BY g.id DESC LIMIT 100`).bind(...ids).all();
+    return json({ ok: true, data: { grns: rows.results } });
+  });
+});
+
+router.get('/api/procurement/bills', async (req, env) => {
+  return withAuth(req, env, 'procurement', 'V', async (req, env) => {
+    if (req.user.role === 'site') return json({ ok: false, error: 'Not allowed.' }, 403);
+    const ids = await visibleProjectIds(env, req.user);
+    if (!ids.length) return json({ ok: true, data: { bills: [] } });
+    const rows = await env.DB.prepare(`SELECT b.*, v.name AS vendor, p.po_no FROM pro_bills b JOIN pro_vendors v ON v.id = b.vendor_id LEFT JOIN pro_pos p ON p.id = b.po_id
+      WHERE (p.id IS NULL OR p.project_id IN (${ids.map(() => '?').join(',')})) ORDER BY b.status = 'paid', b.due_date LIMIT 200`).bind(...ids).all();
+    return json({ ok: true, data: { bills: rows.results } });
+  });
+});
+
+router.post('/api/procurement/bills', async (req, env) => {
+  return withAuth(req, env, 'procurement', 'E', async (req, env) => {
+    const b = await req.json();
+    const amount = Math.round(Number(b.amount_paise) || 0);
+    if (!b.vendor_id || !(amount > 0)) return json({ ok: false, error: 'Vendor and amount are required.' }, 400);
+    if (b.po_id) {
+      const po = await env.DB.prepare('SELECT project_id FROM pro_pos WHERE id = ?').bind(Number(b.po_id)).first();
+      if (!po || !(await visibleProjectIds(env, req.user)).includes(po.project_id)) return json({ ok: false, error: 'Not allowed.' }, 403);
+    }
+    const r = await env.DB.prepare('INSERT INTO pro_bills (po_id, vendor_id, bill_no, amount_paise, due_date, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+      .bind(b.po_id ? Number(b.po_id) : null, Number(b.vendor_id), b.bill_no || '', amount, b.due_date || null, nowStr()).run();
+    await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, 'create', 'pro_bills', ?, ?, ?)`).bind(req.user.user_id, r.meta.last_row_id, `Recorded bill ${b.bill_no || ''} ₹${(amount / 100).toLocaleString('en-IN')}`, nowStr()).run();
+    return json({ ok: true, data: { id: r.meta.last_row_id } });
+  });
+});
+
+router.post('/api/procurement/bills/:id/pay', async (req, env) => {
+  return withAuth(req, env, 'procurement', 'E', async (req, env) => {
+    const b = await req.json();
+    const bill = await env.DB.prepare('SELECT * FROM pro_bills WHERE id = ?').bind(Number(req.params.id)).first();
+    if (!bill) return json({ ok: false, error: 'Bill not found.' }, 404);
+    await env.DB.prepare("UPDATE pro_bills SET status = 'paid', paid_on = ?, payment_ref = ? WHERE id = ?").bind(b.paid_on || nowStr().substring(0, 10), b.payment_ref || '', bill.id).run();
+    await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, 'pay', 'pro_bills', ?, ?, ?)`).bind(req.user.user_id, bill.id, `Marked bill ${bill.bill_no || bill.id} paid`, nowStr()).run();
+    return json({ ok: true });
+  });
+});
+
+router.get('/api/procurement/vendors/:id/ledger', async (req, env) => {
+  return withAuth(req, env, 'procurement', 'V', async (req, env) => {
+    if (req.user.role === 'site') return json({ ok: false, error: 'Not allowed.' }, 403);
+    const id = Number(req.params.id);
+    const ids = await visibleProjectIds(env, req.user);
+    if (!ids.length) return json({ ok: true, data: { pos: [], bills: [] } });
+    const ph = ids.map(() => '?').join(',');
+    const pos = await env.DB.prepare(`SELECT po_no, total_paise, status, created_at FROM pro_pos WHERE vendor_id = ? AND deleted_at IS NULL AND project_id IN (${ph}) ORDER BY id DESC`).bind(id, ...ids).all();
+    const bills = await env.DB.prepare(`SELECT b.bill_no, b.amount_paise, b.status, b.due_date, b.paid_on FROM pro_bills b LEFT JOIN pro_pos p ON p.id = b.po_id WHERE b.vendor_id = ? AND (p.id IS NULL OR p.project_id IN (${ph})) ORDER BY b.id DESC`).bind(id, ...ids).all();
+    return json({ ok: true, data: { pos: pos.results, bills: bills.results } });
+  });
+});
+
+// ---------- Print data (letterhead pages are rendered in the browser from this) ----------
+async function printBrand(env, projectId) {
+  const rows = await env.DB.prepare('SELECT * FROM brand_profiles WHERE project_id IS NULL OR project_id = ?').bind(projectId || 0).all();
+  const co = rows.results.find((r) => r.project_id === null) || {};
+  const pr = rows.results.find((r) => r.project_id === projectId) || {};
+  const out = {};
+  for (const k of ['legal_name', 'trade_name', 'tagline', 'address', 'phone', 'email', 'website', 'gstin', 'cin_or_llpin', 'promoter_rera_ref', 'bank_account_name', 'bank_name', 'bank_branch', 'bank_ifsc', 'signatory_name', 'signatory_title', 'footer_text', 'colour_primary', 'letterhead_mode', 'margin_top_mm', 'margin_bottom_mm', 'margin_side_mm']) {
+    out[k] = (pr[k] !== null && pr[k] !== undefined && pr[k] !== '') ? pr[k] : (co[k] ?? '');
+  }
+  return out; // PAN and bank account number stay encrypted in the DB and are never printed from here
+}
+
+router.get('/api/print/po/:id', async (req, env) => {
+  return withAuth(req, env, 'procurement', 'V', async (req, env) => {
+    const po = await env.DB.prepare('SELECT p.*, v.name AS vendor, v.address AS vendor_address, v.gstin AS vendor_gstin, v.phone AS vendor_phone, pr.name AS project_name, pr.address AS project_address FROM pro_pos p JOIN pro_vendors v ON v.id = p.vendor_id JOIN projects pr ON pr.id = p.project_id WHERE p.id = ? AND p.deleted_at IS NULL').bind(Number(req.params.id)).first();
+    if (!po) return json({ ok: false, error: 'PO not found.' }, 404);
+    if (!(await visibleProjectIds(env, req.user)).includes(po.project_id)) return json({ ok: false, error: 'Not allowed.' }, 403);
+    const items = await env.DB.prepare('SELECT * FROM pro_po_items WHERE po_id = ? ORDER BY id').bind(po.id).all();
+    const issued = ['approved', 'part_received', 'received'].includes(po.status);
+    return json({ ok: true, data: { kind: 'po', draft: !issued, po, items: items.results, brand: await printBrand(env, po.project_id) } });
+  });
+});
+
+router.get('/api/print/demand/:id', async (req, env) => {
+  return withAuth(req, env, 'sales', 'V', async (req, env) => {
+    const d = await env.DB.prepare(`SELECT d.*, b.customer_name, b.address AS customer_address, b.project_id, b.gst_bp, i.unit_no, i.wing, pr.name AS project_name, pr.rera_no FROM sal_demands d JOIN sal_bookings b ON b.id = d.booking_id JOIN sal_inventory i ON i.id = b.unit_id JOIN projects pr ON pr.id = b.project_id WHERE d.id = ?`).bind(Number(req.params.id)).first();
+    if (!d) return json({ ok: false, error: 'Demand not found.' }, 404);
+    if (!(await visibleProjectIds(env, req.user)).includes(d.project_id)) return json({ ok: false, error: 'Not allowed.' }, 403);
+    return json({ ok: true, data: { kind: 'demand', draft: d.status === 'scheduled', demand: d, brand: await printBrand(env, d.project_id) } });
+  });
+});
+
+router.get('/api/print/receipt/:id', async (req, env) => {
+  return withAuth(req, env, 'sales', 'V', async (req, env) => {
+    const r = await env.DB.prepare(`SELECT r.*, b.customer_name, b.project_id, i.unit_no, i.wing, pr.name AS project_name, d.label AS demand_label FROM sal_receipts r JOIN sal_bookings b ON b.id = r.booking_id JOIN sal_inventory i ON i.id = b.unit_id JOIN projects pr ON pr.id = b.project_id LEFT JOIN sal_demands d ON d.id = r.demand_id WHERE r.id = ?`).bind(Number(req.params.id)).first();
+    if (!r) return json({ ok: false, error: 'Receipt not found.' }, 404);
+    if (!(await visibleProjectIds(env, req.user)).includes(r.project_id)) return json({ ok: false, error: 'Not allowed.' }, 403);
+    return json({ ok: true, data: { kind: 'receipt', draft: !!r.reversed_at, receipt: r, brand: await printBrand(env, r.project_id) } });
+  });
+});
+
+// ---------- CSV exports (UTF-8 BOM, Excel-friendly) ----------
+function csvResponse(name, headers, rows) {
+  const cell = (v) => { let s = v == null ? '' : String(v); if (/^[=+\-@]/.test(s)) s = "'" + s; return /[",\n\r]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
+  const body = '﻿' + [headers.join(','), ...rows.map((r) => r.map(cell).join(','))].join('\r\n');
+  return new Response(body, { headers: { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="${name}"`, 'Cache-Control': 'no-store' } });
+}
+const rupees = (p) => ((Number(p) || 0) / 100).toFixed(2);
+
+router.get('/api/export/:what', async (req, env) => {
+  return withAuth(req, env, 'reports', 'X', async (req, env) => {
+    const ids = await visibleProjectIds(env, req.user);
+    if (!ids.length) return json({ ok: false, error: 'Nothing to export.' }, 404);
+    const ph = ids.map(() => '?').join(',');
+    const what = req.params.what;
+    if (what === 'receipts') {
+      const rows = await env.DB.prepare(`SELECT r.received_on, b.customer_name, pr.name AS project, i.wing, i.unit_no, r.amount_paise, r.tds_paise, r.mode, r.ref_no, r.reversed_at FROM sal_receipts r JOIN sal_bookings b ON b.id = r.booking_id JOIN sal_inventory i ON i.id = b.unit_id JOIN projects pr ON pr.id = b.project_id WHERE b.project_id IN (${ph}) ORDER BY r.received_on`).bind(...ids).all();
+      return csvResponse('receipts.csv', ['Date', 'Customer', 'Project', 'Wing', 'Flat', 'Amount (INR)', 'TDS (INR)', 'Mode', 'Reference', 'Reversed'], rows.results.map((r) => [r.received_on, r.customer_name, r.project, r.wing, r.unit_no, rupees(r.amount_paise), rupees(r.tds_paise), r.mode, r.ref_no, r.reversed_at ? 'Yes' : '']));
+    }
+    if (what === 'receivables') {
+      const rows = await env.DB.prepare(`SELECT b.customer_name, pr.name AS project, i.wing, i.unit_no, b.agreed_price_paise, b.status, (SELECT COALESCE(SUM(amount_paise + tds_paise), 0) FROM sal_receipts r WHERE r.booking_id = b.id AND r.reversed_at IS NULL) AS collected FROM sal_bookings b JOIN sal_inventory i ON i.id = b.unit_id JOIN projects pr ON pr.id = b.project_id WHERE b.deleted_at IS NULL AND b.project_id IN (${ph}) ORDER BY b.id`).bind(...ids).all();
+      return csvResponse('receivables.csv', ['Customer', 'Project', 'Wing', 'Flat', 'Agreed price (INR)', 'Collected (INR)', 'Balance (INR)', 'Status'], rows.results.map((r) => [r.customer_name, r.project, r.wing, r.unit_no, rupees(r.agreed_price_paise), rupees(r.collected), rupees(r.agreed_price_paise - r.collected), r.status]));
+    }
+    if (what === 'purchases') {
+      const rows = await env.DB.prepare(`SELECT p.po_no, v.name AS vendor, pr.name AS project, p.amount_paise, p.gst_paise, p.total_paise, p.status, p.created_at FROM pro_pos p JOIN pro_vendors v ON v.id = p.vendor_id JOIN projects pr ON pr.id = p.project_id WHERE p.deleted_at IS NULL AND p.project_id IN (${ph}) ORDER BY p.id`).bind(...ids).all();
+      return csvResponse('purchase-register.csv', ['PO', 'Vendor', 'Project', 'Amount (INR)', 'GST (INR)', 'Total (INR)', 'Status', 'Created'], rows.results.map((r) => [r.po_no, r.vendor, r.project, rupees(r.amount_paise), rupees(r.gst_paise), rupees(r.total_paise), r.status, r.created_at]));
+    }
+    if (what === 'leads') {
+      const rows = await env.DB.prepare('SELECT name, phone, source, status, config_pref, created_at FROM sal_leads WHERE deleted_at IS NULL ORDER BY id').all();
+      return csvResponse('leads.csv', ['Name', 'Mobile', 'Source', 'Status', 'Wants', 'Created'], rows.results.map((r) => [r.name, r.phone, r.source, r.status, r.config_pref, r.created_at]));
+    }
+    return json({ ok: false, error: 'Unknown export.' }, 404);
+  });
+});
+
+async function buildExport(env) {
+  const tables = ['projects', 'apr_items', 'apr_events', 'drw_drawings', 'drw_revisions', 'site_milestones', 'site_dprs', 'site_snags', 'pro_vendors', 'pro_rfqs', 'pro_quotes', 'pro_pos', 'pro_po_items', 'pro_grns', 'pro_bills',
+    'sal_leads', 'sal_activities', 'sal_visits', 'sal_inventory', 'sal_partners', 'sal_bookings', 'sal_plan_stages', 'sal_demands', 'sal_receipts', 'documents', 'audit_log'];
+  const out = { exported_at: new Date().toISOString(), tables: {} };
+  for (const t of tables) out.tables[t] = (await env.DB.prepare(`SELECT * FROM ${t}`).all()).results;
+  out.tables.users = (await env.DB.prepare('SELECT id, name, email, phone, role, lang, active, created_at FROM users').all()).results;
+  return out;
+}
+
+// Nightly backup (02:00 IST): JSON export saved to the connected Google Drive under /Backups. Only the Owner's Drive holds it.
+async function nightlyBackup(env) {
+  const log = await env.DB.prepare("INSERT INTO backup_log (kind, status, started_at) VALUES ('nightly', 'running', ?)").bind(nowStr()).run();
+  const id = log.meta.last_row_id;
+  try {
+    if (!(await driveReady(env))) throw new Error('Google Drive is not connected, so no backup was saved.');
+    const body = new TextEncoder().encode(JSON.stringify(await buildExport(env)));
+    const day = new Date(Date.now() + 19800000).toISOString().substring(0, 10);
+    await withDrive(env, async (token) => {
+      const root = await getSettingRaw(env, 'storage.gdrive.root_folder_id');
+      const found = await gdrive.findDriveFolder(env, token, 'Backups', root);
+      const folder = (found.files && found.files[0]) ? found.files[0].id : (await gdrive.createDriveFolder(env, token, 'Backups', root)).id;
+      const session = await gdrive.resumableUploadInit(env, token, `nirmaan-backup-${day}.json`, 'application/json', folder, body.byteLength);
+      await gdrive.resumableUploadPut(env, token, session, body, body.byteLength, 'application/json');
+    });
+    await env.DB.prepare("UPDATE backup_log SET status = 'ok', bytes = ?, files_written = 1, finished_at = ? WHERE id = ?").bind(body.byteLength, nowStr(), id).run();
+  } catch (e) {
+    await env.DB.prepare("UPDATE backup_log SET status = 'failed', note = ?, finished_at = ? WHERE id = ?").bind(String(e.message).slice(0, 300), nowStr(), id).run();
+    const owners = await env.DB.prepare("SELECT id FROM users WHERE role = 'owner' AND active = 1").all();
+    for (const o of owners.results) await env.DB.prepare('INSERT INTO notifications (user_id, title, body, link, created_at) VALUES (?, ?, ?, ?, ?)').bind(o.id, 'Nightly backup did not run', String(e.message).slice(0, 200), 'storage', nowStr()).run();
+  }
+}
+
+// Owner-only full data export (JSON). Secrets, sessions, OTP codes and file contents are left out.
+router.get('/api/export-all', async (req, env) => {
+  return withAuth(req, env, 'users_settings', 'E', async (req, env) => {
+    if (req.user.role !== 'owner') return json({ ok: false, error: 'Owner only.' }, 403);
+    const out = await buildExport(env);
+    return new Response(JSON.stringify(out), { headers: { 'Content-Type': 'application/json', 'Content-Disposition': 'attachment; filename="nirmaan-export.json"', 'Cache-Control': 'no-store' } });
+  });
+});
+
+router.post('/api/auth/lang', async (req, env) => {
+  return withAuth(req, env, 'projects', 'V', async (req, env) => {
+    const { lang } = await req.json();
+    if (!['en', 'hi', 'mr'].includes(lang)) return json({ ok: false, error: 'Unknown language.' }, 400);
+    await env.DB.prepare('UPDATE users SET lang = ? WHERE id = ?').bind(lang, req.user.user_id).run();
+    return json({ ok: true });
+  });
+});
+
 // ---------- Branding routes ----------
 router.get('/api/branding', async (req, env) => {
   return withAuth(req, env, 'branding', 'V', async (req, env) => {
@@ -1510,17 +1825,25 @@ router.post('/api/files/upload', async (req, env) => {
         return json({ ok: false, error: 'Not allowed.' }, 403);
       }
 
+      const maxMb = Number(await getSetting(env, 'files.brochure_max_mb')) || 25;
+      if (file.size > maxMb * 1048576) return json({ ok: false, error: `This file is bigger than the ${maxMb} MB limit.` }, 413);
+      let driveInfo = null;
+      if (await driveReady(env) && !(seriesKey && String(seriesKey).startsWith('brand:'))) {
+        try { driveInfo = await driveUpload(env, file, projectId ? Number(projectId) : null); }
+        catch (e) { if (file.size > 1500000) return json({ ok: false, error: 'Google Drive is paused right now (ask the Owner to reconnect it). Files over 1.5 MB cannot be saved until then.' }, 503); }
+      }
       const MAX_DB_BYTES = 1500000; // D1 rows top out near 2 MB; bigger files need Google Drive or a link
-      if (file.size > MAX_DB_BYTES) {
+      if (!driveInfo && file.size > MAX_DB_BYTES) {
         return json({ ok: false, error: `This file is ${(file.size / 1048576).toFixed(1)} MB. Files stored in the database can be at most 1.5 MB. Photos are shrunk automatically; for large PDFs connect Google Drive or add a link instead.` }, 413);
       }
-      const arrayBuffer = await file.arrayBuffer();
-      const bytes = new Uint8Array(arrayBuffer);
-      const sizeBytes = bytes.length;
-
+      const sizeBytes = file.size;
       const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
-      const blobResult = await env.DB.prepare(`INSERT INTO file_blobs (mime, size_bytes, data, created_at) VALUES (?, ?, ?, ?)`).bind(file.type, sizeBytes, bytes, now).run();
-      const blobId = blobResult.meta.last_row_id;
+      let blobId = null;
+      if (!driveInfo) {
+        const bytes = new Uint8Array(await file.arrayBuffer());
+        const blobResult = await env.DB.prepare(`INSERT INTO file_blobs (mime, size_bytes, data, created_at) VALUES (?, ?, ?, ?)`).bind(file.type, sizeBytes, bytes, now).run();
+        blobId = blobResult.meta.last_row_id;
+      }
 
       // A new upload in an existing series becomes the latest version; older ones stay as history.
       let version = 1;
@@ -1533,9 +1856,9 @@ router.post('/api/files/upload', async (req, env) => {
         }
       }
       const docResult = await env.DB.prepare(`
-        INSERT INTO documents (project_id, title, category, kind, module, entity, entity_id, mime, size_bytes, store, blob_id, audience, language, series_key, version, is_latest, supersedes_id, uploaded_by, created_at)
-        VALUES (?, ?, ?, 'file', ?, ?, ?, ?, ?, 'd1', ?, ?, ?, ?, ?, 1, ?, ?, ?)
-      `).bind(projectId || null, title, category, module || null, entity || null, entityId || null, file.type, sizeBytes, blobId, audience, language, seriesKey, version, supersedes, user.user_id, now).run();
+        INSERT INTO documents (project_id, title, category, kind, module, entity, entity_id, mime, size_bytes, store, blob_id, drive_file_id, drive_folder_id, md5, audience, language, series_key, version, is_latest, supersedes_id, uploaded_by, created_at)
+        VALUES (?, ?, ?, 'file', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?, ?, ?)
+      `).bind(projectId || null, title, category, module || null, entity || null, entityId || null, file.type, sizeBytes, driveInfo ? 'gdrive' : 'd1', blobId, driveInfo ? driveInfo.fileId : null, driveInfo ? driveInfo.folder : null, driveInfo ? driveInfo.md5 : null, audience, language, seriesKey, version, supersedes, user.user_id, now).run();
 
       await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, ?, 'documents', ?, ?, ?)`).bind(user.user_id, 'create', docResult.meta.last_row_id, `Uploaded file "${title}"`, now).run();
 
@@ -1558,6 +1881,7 @@ router.get('/api/files/download/:docId', async (req, env) => {
         return json({ ok: false, error: 'Not allowed.' }, 403);
       }
 
+      if (doc.store === 'gdrive') return driveResponse(env, doc, req, 'attachment');
       if (doc.store === 'd1' || doc.store === null) {
         const blob = await env.DB.prepare('SELECT * FROM file_blobs WHERE id = ?').bind(doc.blob_id).first();
         if (!blob) return json({ ok: false, error: 'File data not found.' }, 404);
@@ -1971,6 +2295,7 @@ router.get('/s/:token/file', async (req, env) => {
 
     await env.DB.prepare('UPDATE share_links SET view_count = view_count + 1, last_viewed_at = datetime(\'now\') WHERE id = ?').bind(link.id).run();
 
+    if (doc.store === 'gdrive') return driveResponse(env, doc, req, 'inline');
     if (doc.store === 'd1' || doc.store === null) {
       const blob = await env.DB.prepare('SELECT * FROM file_blobs WHERE id = ?').bind(doc.blob_id).first();
       if (!blob) return new Response('File data not found.', { status: 410 });
@@ -2113,11 +2438,11 @@ async function visibleProjectIds(env, user) {
 }
 
 // ---------- Cron handler (§7.8 note 6) ----------
-export async function scheduled(event, env, ctx) {
+async function scheduled(event, env, ctx) {
   if (env.ENVIRONMENT === 'staging') return; // staging guard
   const cron = event.cron;
 
-  ctx.waitUntil(runCron(cron, env));
+  ctx.waitUntil(runCron(cron, env).catch((e) => console.error('cron failed', cron, e.message)));
 }
 
 async function runCron(cron, env) {
@@ -2143,6 +2468,7 @@ async function runCron(cron, env) {
     // 02:00 IST: housekeeping — expired sessions, OTP codes and rate-limit rows
     await env.DB.prepare("DELETE FROM sessions WHERE expires_at < datetime('now')").run();
     await env.DB.prepare("DELETE FROM otp_codes WHERE expires_at < datetime('now')").run();
+    await nightlyBackup(env);
   }
 }
 
@@ -2165,4 +2491,5 @@ export default {
       return json({ ok: false, error: err.message || 'Internal error' }, 500);
     }
   },
+  scheduled,
 };

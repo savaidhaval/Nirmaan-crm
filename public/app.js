@@ -167,6 +167,7 @@ async function loadDashboard() {
   try {
     const data = await api('/api/dashboard');
     const d = data.data;
+    if (!document.getElementById('val-money-in')) return; // user moved to another screen
     document.getElementById('val-money-in').textContent = moneyP(d.moneyIn);
     document.getElementById('val-overdue').textContent = moneyP(d.overdueReceivables.total);
     document.getElementById('sub-overdue').textContent = d.overdueReceivables.cnt + ' customers';
@@ -177,7 +178,8 @@ async function loadDashboard() {
     document.getElementById('val-snags').textContent = d.highSnags;
     document.getElementById('val-leads').textContent = d.newLeads;
   } catch (e) {
-    document.getElementById('dashboard-grid').innerHTML = '<div class="error">Error loading dashboard: ' + e.message + '</div>';
+    const g = document.getElementById('dashboard-grid');
+    if (g) g.innerHTML = '<div class="error">Error loading dashboard: ' + esc(e.message) + '</div>';
   }
 }
 

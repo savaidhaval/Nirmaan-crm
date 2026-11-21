@@ -241,23 +241,23 @@ export async function createDriveFolder(env, accessToken, name, parentId) {
 }
 
 export async function findDriveFolder(env, accessToken, name, parentId) {
-  const q = encodeURIComponent(`mimeType = 'application/vnd.google-apps.folder' AND name = '${name}'${parentId ? ` AND '${parentId}' in parents` : ''} AND trashed = false`);
+  const q = encodeURIComponent(`mimeType = 'application/vnd.google-apps.folder' AND name = '${String(name).replace(/[\\']/g, '')}'${parentId ? ` AND '${parentId}' in parents` : ''} AND trashed = false`);
   return driveRequest(env, accessToken, 'GET', `/files?q=${q}&fields=files(id,name)`);
 }
 
-export async function resumableUploadInit(env, accessToken, fileName, mimeType, parentId) {
+export async function resumableUploadInit(env, accessToken, fileName, mimeType, parentId, size) {
   const metadata = {
     name: fileName,
     ...(parentId ? { parents: [parentId] } : {}),
   };
 
-  const res = await fetch(`${DRIVE_API}/files/upload?uploadType=resumable`, {
+  const res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id,md5Checksum,size', {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${accessToken}`,
       'Content-Type': 'application/json',
       'X-Upload-Content-Type': mimeType,
-      'X-Upload-Content-Length': '0', // will be set on the PUT
+      'X-Upload-Content-Length': String(size),
     },
     body: JSON.stringify(metadata),
   });

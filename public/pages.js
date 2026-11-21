@@ -10,7 +10,18 @@ const today = () => new Date(Date.now() + 19800000).toISOString().substring(0, 1
 
 let projectCache = null;
 async function getProjects(force) {
-  if (!projectCache || force) projectCache = (await api('/api/projects')).data.projects;
+  if (!projectCache || force) {
+    try {
+      projectCache = (await api('/api/projects')).data.projects;
+      try { localStorage.setItem('nirmaan.projects', JSON.stringify(projectCache)); } catch (e) { /* ignore */ }
+    } catch (e) {
+      // Offline: fall back to the last list this phone saw, so site staff can still file reports.
+      let saved = null;
+      try { saved = JSON.parse(localStorage.getItem('nirmaan.projects') || 'null'); } catch (e2) { /* ignore */ }
+      if (!saved) throw e;
+      projectCache = saved;
+    }
+  }
   return projectCache;
 }
 async function projectOptions() {
@@ -40,7 +51,7 @@ function openForm({ title, fields, submit = 'Save', intro = '' }) {
       }
       return `<div class="field">${f.type === 'checkbox' ? '' : `<label for="${id}">${esc(f.label)}${f.required ? ' *' : ''}</label>`}${input}${f.help ? `<p class="help">${esc(f.help)}</p>` : ''}</div>`;
     }).join('');
-    ov.innerHTML = `<div class="modal"><h2>${esc(title)}</h2>${intro ? `<p class="help">${esc(intro)}</p>` : ''}<form id="modal-form">${rows}<div class="error" id="modal-error" style="display:none"></div><div class="modal-actions"><button type="button" class="btn" id="modal-cancel">Cancel</button><button type="submit" class="btn btn-primary">${esc(submit)}</button></div></form></div>`;
+    ov.innerHTML = `<div class="modal"><h2>${esc(title)}</h2>${intro ? `<p class="help">${esc(intro)}</p>` : ''}<form id="modal-form">${rows}<div class="error" id="modal-error" style="display:none"></div><div class="modal-actions"><button type="button" class="btn" id="modal-cancel">${esc(t('Cancel'))}</button><button type="submit" class="btn btn-primary">${esc(submit)}</button></div></form></div>`;
     document.body.appendChild(ov);
     const close = (val) => { ov.remove(); document.removeEventListener('keydown', onKey); resolve(val); };
     const onKey = (e) => { if (e.key === 'Escape') close(null); };
@@ -54,7 +65,7 @@ function openForm({ title, fields, submit = 'Save', intro = '' }) {
         const el = $('f_' + f.name);
         let v = f.type === 'checkbox' ? el.checked : (f.type === 'file' ? (el.files[0] || '') : el.value.trim());
         if (f.required && (v === '' || v === false)) {
-          const er = $('modal-error'); er.textContent = `Please fill in: ${f.label}`; er.style.display = 'block'; el.focus(); return;
+          const er = $('modal-error'); er.textContent = `${t('Please fill in')}: ${f.label}`; er.style.display = 'block'; el.focus(); return;
         }
         if (f.type === 'money') v = rupeesToPaise(v);
         else if (f.type === 'number' && v !== '') v = Number(v);
@@ -87,6 +98,67 @@ const statusChip = (s) => chip(String(s || '').replace(/_/g, ' '), STATUS_TONE[s
 function copyText(t) {
   if (navigator.clipboard) navigator.clipboard.writeText(t).then(() => toast('Copied'), () => toast('Copy failed'));
 }
+
+
+// ---------- Language (en / hi / mr) ----------
+const I18N = {
+  hi: { 'Home': 'होम', 'Drawings': 'ड्रॉइंग', 'Site': 'साइट', 'More': 'और', 'Projects': 'प्रोजेक्ट', 'Approvals': 'मंज़ूरियाँ', 'Sales': 'बिक्री', 'Procurement': 'खरीद',
+    'Site work': 'साइट का काम', "Today's work report": 'आज की कार्य रिपोर्ट', 'Raise a snag': 'समस्या दर्ज करें', 'Milestones': 'माइलस्टोन', 'Recent reports': 'हाल की रिपोर्ट', 'Snags': 'समस्याएँ',
+    'Done today': 'आज पूरा', 'Project': 'प्रोजेक्ट', 'Date': 'तारीख', 'What work happened today?': 'आज क्या काम हुआ?', 'Labour on site': 'साइट पर मज़दूर', 'Problems / delays': 'समस्या / देरी',
+    'Save': 'सेव करें', 'Cancel': 'रद्द करें', 'What is wrong?': 'क्या गड़बड़ है?', 'Where (wing / floor)': 'कहाँ (विंग / मंज़िल)', 'How serious?': 'कितनी गंभीर?', 'Low': 'कम', 'Medium': 'मध्यम', 'High': 'ज़्यादा',
+    'Report saved': 'रिपोर्ट सेव हुई', 'Snag raised': 'समस्या दर्ज हुई', 'Latest drawings': 'नवीनतम ड्रॉइंग', 'Hello': 'नमस्ते', 'Language': 'भाषा', 'Log out': 'लॉग आउट', 'Documents': 'दस्तावेज़',
+    'Notifications': 'सूचनाएँ', 'Help': 'सहायता', 'Change password': 'पासवर्ड बदलें', 'Please fill in': 'कृपया भरें', 'Waiting to send': 'भेजना बाकी', 'Saved on this phone. It will be sent when you are online.': 'फ़ोन में सेव हुआ। नेट आने पर भेज दिया जाएगा।', 'Send now': 'अभी भेजें' },
+  mr: { 'Home': 'होम', 'Drawings': 'ड्रॉइंग्ज', 'Site': 'साइट', 'More': 'अधिक', 'Projects': 'प्रकल्प', 'Approvals': 'मंजुरी', 'Sales': 'विक्री', 'Procurement': 'खरेदी',
+    'Site work': 'साइटचे काम', "Today's work report": 'आजचा कामाचा अहवाल', 'Raise a snag': 'अडचण नोंदवा', 'Milestones': 'टप्पे', 'Recent reports': 'अलीकडील अहवाल', 'Snags': 'अडचणी',
+    'Done today': 'आज पूर्ण', 'Project': 'प्रकल्प', 'Date': 'तारीख', 'What work happened today?': 'आज कोणते काम झाले?', 'Labour on site': 'साइटवरील कामगार', 'Problems / delays': 'अडचणी / उशीर',
+    'Save': 'जतन करा', 'Cancel': 'रद्द करा', 'What is wrong?': 'काय चुकले आहे?', 'Where (wing / floor)': 'कुठे (विंग / मजला)', 'How serious?': 'किती गंभीर?', 'Low': 'कमी', 'Medium': 'मध्यम', 'High': 'जास्त',
+    'Report saved': 'अहवाल जतन झाला', 'Snag raised': 'अडचण नोंदवली', 'Latest drawings': 'ताजी ड्रॉइंग्ज', 'Hello': 'नमस्कार', 'Language': 'भाषा', 'Log out': 'लॉग आउट', 'Documents': 'कागदपत्रे',
+    'Notifications': 'सूचना', 'Help': 'मदत', 'Change password': 'पासवर्ड बदला', 'Please fill in': 'कृपया भरा', 'Waiting to send': 'पाठवायचे बाकी', 'Saved on this phone. It will be sent when you are online.': 'फोनमध्ये जतन झाले. नेट आल्यावर पाठवले जाईल.', 'Send now': 'आता पाठवा' },
+};
+function t(s) {
+  const lang = (currentUser && currentUser.lang) || 'en';
+  return (I18N[lang] && I18N[lang][s]) || s;
+}
+
+// ---------- Offline queue (text only; photos are not queued) ----------
+const QKEY = 'nirmaan.queue.v1';
+const readQueue = () => { try { return JSON.parse(localStorage.getItem(QKEY) || '[]'); } catch (e) { return []; } };
+const writeQueue = (q) => { try { localStorage.setItem(QKEY, JSON.stringify(q)); } catch (e) { /* storage full or blocked */ } };
+
+// POST that survives a dead network: queued on this phone, retried on reconnect. Every item carries a client_uuid so retries never duplicate.
+async function postOrQueue(url, body, okMsg) {
+  body.client_uuid = body.client_uuid || crypto.randomUUID();
+  try {
+    const r = await api(url, { method: 'POST', body });
+    if (okMsg) toast(okMsg);
+    return r;
+  } catch (e) {
+    if (e instanceof TypeError || !navigator.onLine) {
+      const q = readQueue(); q.push({ url, body, at: Date.now() }); writeQueue(q);
+      toast(t('Saved on this phone. It will be sent when you are online.'), 6000);
+      return { queued: true };
+    }
+    toast(e.message, 5000);
+    return null;
+  }
+}
+
+let syncing = false;
+async function syncQueue() {
+  if (syncing || !currentUser) return;
+  syncing = true;
+  try {
+    let q = readQueue();
+    const keep = [];
+    for (const item of q) {
+      try { await api(item.url, { method: 'POST', body: item.body }); }
+      catch (e) { if (e instanceof TypeError || !navigator.onLine) { keep.push(item); } /* server said no: drop, it will never succeed */ }
+    }
+    writeQueue(keep);
+    if (q.length && !keep.length) toast('Offline items sent');
+  } finally { syncing = false; }
+}
+window.addEventListener('online', syncQueue);
 
 // ---------- Navigation ----------
 function getBottomNavItems(role) {
@@ -124,7 +196,7 @@ function renderApp() {
       const a = document.createElement('a');
       a.className = 'nav-item' + (item.route === currentPage ? ' active' : '');
       a.href = '#';
-      a.textContent = item.label;
+      a.textContent = t(item.label);
       a.onclick = (e) => { e.preventDefault(); navigate(item.route); };
       nav.appendChild(a);
     });
@@ -139,6 +211,8 @@ async function loadUser() {
     if (data.data.must_change_password) { renderChangePassword($('app-main'), true); return; }
     renderApp();
     refreshBell();
+    syncQueue();
+    getProjects(true).catch(() => {}); // keep a copy for offline use
   } catch (e) {
     currentUser = null;
     renderLogin();
@@ -191,7 +265,7 @@ function renderHome(main) {
     purchase: [['🛒', 'Procurement', 'procurement'], ['📐', 'Drawings', 'drawings']],
     hr: [], viewer: [['🏗', 'Projects', 'projects']],
   }[currentUser.role] || [];
-  main.innerHTML = `<h1>Hello, ${esc(currentUser.name)}</h1><p class="help">${esc(currentUser.role)}</p>
+  main.innerHTML = `<h1>${esc(t('Hello'))}, ${esc(currentUser.name)}</h1><p class="help">${esc(currentUser.role)}</p>
     <div class="grid">${tiles.map(([i, l, r]) => `<button class="btn btn-full tile-btn" data-go="${r}"><span style="font-size:28px">${i}</span><br>${esc(l)}</button>`).join('') || '<div class="empty-state"><p>Nothing here yet.</p></div>'}</div>`;
   main.querySelectorAll('[data-go]').forEach((b) => { b.onclick = () => navigate(b.dataset.go); });
 }
@@ -206,8 +280,13 @@ function renderMore(main) {
     ['Storage (Google Drive)', 'storage', o], ['Email settings', 'email', o], ['Settings', 'settings', o],
     ['Help', 'help', true], ['Change password', 'password', true],
   ].filter((x) => x[2]);
-  main.innerHTML = `<h1>More</h1>${items.map(([l, r]) => `<button class="btn btn-full" style="margin-bottom:10px;text-align:left" data-go="${r}">${esc(l)}</button>`).join('')}
-    <button class="btn btn-full" style="margin-top:12px;color:#dc2626" id="more-logout">Log out</button>`;
+  const canCsv = ['owner', 'pm', 'accounts', 'viewer'].includes(currentUser.role);
+  main.innerHTML = `<h1>${esc(t('More'))}</h1>${items.map(([l, r]) => `<button class="btn btn-full" style="margin-bottom:10px;text-align:left" data-go="${r}">${esc(t(l))}</button>`).join('')}
+    ${canCsv ? `<div class="card"><b>Download for Excel</b><div class="row-btns"><a class="btn small" href="/api/export/receipts">Receipts</a><a class="btn small" href="/api/export/receivables">Receivables</a><a class="btn small" href="/api/export/purchases">Purchases</a><a class="btn small" href="/api/export/leads">Leads</a>${o ? '<a class="btn small" href="/api/export-all">Everything (backup)</a>' : ''}</div></div>` : ''}
+    <div class="field"><label>${esc(t('Language'))}</label><select id="more-lang"><option value="en">English</option><option value="hi">हिन्दी</option><option value="mr">मराठी</option></select></div>
+    <button class="btn btn-full" style="margin-top:12px;color:#dc2626" id="more-logout">${esc(t('Log out'))}</button>`;
+  $('more-lang').value = currentUser.lang || 'en';
+  $('more-lang').onchange = async () => { if (await act(api('/api/auth/lang', { method: 'POST', body: { lang: $('more-lang').value } }))) { currentUser.lang = $('more-lang').value; renderApp(); } };
   main.querySelectorAll('[data-go]').forEach((b) => { b.onclick = () => navigate(b.dataset.go); });
   $('more-logout').onclick = logout;
 }
@@ -607,34 +686,36 @@ async function drawingDetail(d) {
 
 // ---------- Site ----------
 function renderSite(main) {
-  main.innerHTML = `<h1>Site work</h1><div class="grid">
-    <button class="btn btn-primary btn-full" id="s-dpr">📷 Today's work report</button>
-    <button class="btn btn-full" id="s-snag">⚠ Raise a snag</button>
+  const pending = readQueue().length;
+  main.innerHTML = `<h1>${esc(t('Site work'))}</h1>${pending ? `<div class="card" style="background:#fffbeb;border-color:#f59e0b">${esc(t('Waiting to send'))}: <b>${pending}</b> <button class="btn small" id="s-sync">${esc(t('Send now'))}</button></div>` : ''}<div class="grid">
+    <button class="btn btn-primary btn-full" id="s-dpr">📷 ${esc(t("Today's work report"))}</button>
+    <button class="btn btn-full" id="s-snag">⚠ ${esc(t('Raise a snag'))}</button>
     ${userCanClient('site', 'C') && currentUser.role !== 'site' ? '<button class="btn btn-full" id="s-ms">📐 Add milestone</button>' : ''}</div><div id="site-list">Loading...</div>`;
   $('s-dpr').onclick = newDpr; $('s-snag').onclick = newSnag;
+  if ($('s-sync')) $('s-sync').onclick = async () => { await syncQueue(); renderSite(main); };
   if ($('s-ms')) $('s-ms').onclick = newMilestone;
   loadSite();
 }
 
 async function newDpr() {
-  const v = await openForm({ title: "Today's work report", fields: [
-    { name: 'project_id', label: 'Project', type: 'select', options: await projectOptions() },
-    { name: 'report_date', label: 'Date', type: 'date', value: today() },
-    { name: 'work_summary', label: 'What work happened today?', type: 'textarea', required: true },
-    { name: 'labour_count', label: 'Labour on site', type: 'number' }, { name: 'issues', label: 'Problems / delays', type: 'textarea' }] });
+  const v = await openForm({ title: t("Today's work report"), submit: t('Save'), fields: [
+    { name: 'project_id', label: t('Project'), type: 'select', options: await projectOptions() },
+    { name: 'report_date', label: t('Date'), type: 'date', value: today() },
+    { name: 'work_summary', label: t('What work happened today?'), type: 'textarea', required: true },
+    { name: 'labour_count', label: t('Labour on site'), type: 'number' }, { name: 'issues', label: t('Problems / delays'), type: 'textarea' }] });
   if (!v) return;
-  v.project_id = Number(v.project_id); v.client_uuid = crypto.randomUUID();
-  if (await act(api('/api/site/dprs', { method: 'POST', body: v }), 'Report saved')) loadSite();
+  v.project_id = Number(v.project_id);
+  if (await postOrQueue('/api/site/dprs', v, t('Report saved'))) renderSite($('app-main'));
 }
 
 async function newSnag() {
-  const v = await openForm({ title: 'Raise a snag', fields: [
-    { name: 'project_id', label: 'Project', type: 'select', options: await projectOptions() },
-    { name: 'title', label: 'What is wrong?', required: true }, { name: 'location', label: 'Where (wing / floor)' },
-    { name: 'severity', label: 'How serious?', type: 'select', options: [['low', 'Low'], ['medium', 'Medium'], ['high', 'High']], value: 'medium' }] });
+  const v = await openForm({ title: t('Raise a snag'), submit: t('Save'), fields: [
+    { name: 'project_id', label: t('Project'), type: 'select', options: await projectOptions() },
+    { name: 'title', label: t('What is wrong?'), required: true }, { name: 'location', label: t('Where (wing / floor)') },
+    { name: 'severity', label: t('How serious?'), type: 'select', options: [['low', t('Low')], ['medium', t('Medium')], ['high', t('High')]], value: 'medium' }] });
   if (!v) return;
-  v.project_id = Number(v.project_id); v.client_uuid = crypto.randomUUID();
-  if (await act(api('/api/site/snags', { method: 'POST', body: v }), 'Snag raised')) loadSite();
+  v.project_id = Number(v.project_id);
+  if (await postOrQueue('/api/site/snags', v, t('Snag raised'))) renderSite($('app-main'));
 }
 
 async function newMilestone() {
@@ -649,11 +730,13 @@ async function newMilestone() {
 }
 
 async function loadSite() {
+  if (!$('site-list')) return;
   try {
     const [dprs, snags, ms] = await Promise.all([api('/api/site/dprs'), api('/api/site/snags'), api('/api/site/milestones')]);
-    let html = '<h3>Milestones</h3>' + (ms.data.milestones.map((m) => `<div class="card"><div class="row"><div><b>${esc(m.name)}</b>${m.wing ? ' · ' + esc(m.wing) : ''}<p class="muted">Planned ${esc(m.planned_date || '—')}${m.actual_date ? ' · Done ' + esc(String(m.actual_date).substring(0, 10)) : ''}</p></div>${m.status === 'done' ? statusChip('done') : (userCanClient('site', 'C') ? `<button class="btn small" data-done="${m.id}">Done today</button>` : statusChip('pending'))}</div></div>`).join('') || '<p class="muted">No milestones yet.</p>');
-    html += '<h3>Recent reports</h3>' + (dprs.data.dprs.map((d) => `<div class="card"><b>${esc(d.report_date)}</b> · ${esc(d.labour_count || 0)} labour<p>${esc(d.work_summary)}</p></div>`).join('') || '<p class="muted">No reports yet.</p>');
-    html += '<h3>Snags</h3>' + (snags.data.snags.map((s) => `<div class="card"><div class="row"><div><b>${esc(s.title)}</b><p class="muted">${esc(s.location || '')}</p></div><div>${chip(s.severity, s.severity === 'high' ? 'bad' : s.severity === 'medium' ? 'warn' : '')} ${statusChip(s.status)}</div></div></div>`).join('') || '<p class="muted">No open snags.</p>');
+    let html = `<h3>${esc(t('Milestones'))}</h3>` + (ms.data.milestones.map((m) => `<div class="card"><div class="row"><div><b>${esc(m.name)}</b>${m.wing ? ' · ' + esc(m.wing) : ''}<p class="muted">Planned ${esc(m.planned_date || '—')}${m.actual_date ? ' · Done ' + esc(String(m.actual_date).substring(0, 10)) : ''}</p></div>${m.status === 'done' ? statusChip('done') : (userCanClient('site', 'C') ? `<button class="btn small" data-done="${m.id}">${esc(t('Done today'))}</button>` : statusChip('pending'))}</div></div>`).join('') || '<p class="muted">No milestones yet.</p>');
+    html += `<h3>${esc(t('Recent reports'))}</h3>` + (dprs.data.dprs.map((d) => `<div class="card"><b>${esc(d.report_date)}</b> · ${esc(d.labour_count || 0)} labour<p>${esc(d.work_summary)}</p></div>`).join('') || '<p class="muted">No reports yet.</p>');
+    html += `<h3>${esc(t('Snags'))}</h3>` + (snags.data.snags.map((s) => `<div class="card"><div class="row"><div><b>${esc(s.title)}</b><p class="muted">${esc(s.location || '')}</p></div><div>${chip(s.severity, s.severity === 'high' ? 'bad' : s.severity === 'medium' ? 'warn' : '')} ${statusChip(s.status)}</div></div></div>`).join('') || '<p class="muted">No open snags.</p>');
+    if (!$('site-list')) return;
     $('site-list').innerHTML = html;
     $('site-list').querySelectorAll('[data-done]').forEach((b) => {
       b.onclick = async () => {
@@ -663,7 +746,10 @@ async function loadSite() {
         if (r) { toast(r.data.demands_ready ? `Done. ${r.data.demands_ready} customer payment demand(s) are now ready.` : 'Marked done'); loadSite(); }
       };
     });
-  } catch (e) { $('site-list').innerHTML = `<div class="error">${esc(e.message)}</div>`; }
+  } catch (e) {
+    const el = $('site-list');
+    if (el) el.innerHTML = `<div class="error">${esc(e instanceof TypeError ? 'You are offline. Reports you file now are saved on this phone and sent later.' : e.message)}</div>`;
+  }
 }
 
 // ---------- Procurement ----------
@@ -702,19 +788,71 @@ async function newPo() {
   if (await act(api('/api/procurement/pos', { method: 'POST', body }), 'PO created as draft')) loadProcurement();
 }
 
+const openPrint = (k, id) => window.open(`/print.html?k=${k}&id=${id}`, '_blank', 'noopener');
+
 async function loadProcurement() {
   try {
-    const [vendors, pos, rfqs] = await Promise.all([api('/api/procurement/vendors'), api('/api/procurement/pos'), api('/api/procurement/rfqs')]);
-    const canA = userCanClient('procurement', 'A');
+    const noBills = currentUser.role === 'site';
+    const [vendors, pos, rfqs, bills] = await Promise.all([api('/api/procurement/vendors'), api('/api/procurement/pos'), api('/api/procurement/rfqs'), noBills ? { data: { bills: [] } } : api('/api/procurement/bills')]);
+    const canA = userCanClient('procurement', 'A'), canE = userCanClient('procurement', 'E');
     let html = '<h3>Purchase orders</h3>' + (pos.data.pos.map((p) => `<div class="card"><div class="row"><div><b>${esc(p.po_no)}</b><p class="muted">Total ${moneyP(p.total_paise)}</p></div>${statusChip(p.status)}</div>
-      <div class="row-btns">${p.status === 'draft' ? `<button class="btn small" data-po="submit" data-id="${p.id}">Send for approval</button>` : ''}${p.status === 'pending_approval' && canA ? `<button class="btn small btn-primary" data-po="approve" data-id="${p.id}">Approve</button><button class="btn small" data-po="reject" data-id="${p.id}">Reject</button>` : ''}</div></div>`).join('') || '<p class="muted">No purchase orders yet.</p>');
-    html += '<h3>RFQs</h3>' + (rfqs.data.rfqs.map((r) => `<div class="card"><b>${esc(r.title)}</b> ${statusChip(r.status)}</div>`).join('') || '<p class="muted">No RFQs.</p>');
-    html += '<h3>Vendors</h3>' + (vendors.data.vendors.map((v) => `<div class="card"><b>${esc(v.name)}</b><p class="muted">${esc(v.category || '')}${v.phone ? ' · ' : ''}${v.phone ? `<a href="tel:${esc(v.phone)}">${esc(v.phone)}</a>` : ''}</p></div>`).join('') || '<p class="muted">No vendors yet.</p>');
-    $('procurement-list').innerHTML = html;
-    $('procurement-list').querySelectorAll('[data-po]').forEach((b) => {
-      b.onclick = async () => { if (await act(api(`/api/procurement/pos/${b.dataset.id}/${b.dataset.po}`, { method: 'POST' }), 'Done')) loadProcurement(); };
-    });
+      <div class="row-btns">${p.status === 'draft' && canE ? `<button class="btn small" data-po="submit" data-id="${p.id}">Send for approval</button>` : ''}${p.status === 'pending_approval' && canA ? `<button class="btn small btn-primary" data-po="approve" data-id="${p.id}">Approve</button><button class="btn small" data-po="reject" data-id="${p.id}">Reject</button>` : ''}
+      ${['approved', 'part_received'].includes(p.status) ? `<button class="btn small btn-primary" data-grn="${p.id}">Material received</button>` : ''}${!noBills && canE && ['approved', 'part_received', 'received'].includes(p.status) ? `<button class="btn small" data-bill="${p.id}" data-vendor="${p.vendor_id}">Add bill</button>` : ''}
+      ${!noBills ? `<button class="btn small" data-print="${p.id}">Print</button>` : ''}</div></div>`).join('') || '<p class="muted">No purchase orders yet.</p>');
+    if (!noBills) html += '<h3>Bills</h3>' + (bills.data.bills.map((b) => `<div class="card"><div class="row"><div><b>${esc(b.vendor)}</b> · ${esc(b.bill_no || '')}<p class="muted">${moneyP(b.amount_paise)}${b.due_date ? ' · due ' + esc(b.due_date) : ''}${b.po_no ? ' · ' + esc(b.po_no) : ''}</p></div>${statusChip(b.status === 'received' ? 'open' : b.status)}</div>${b.status !== 'paid' && canE ? `<button class="btn small" data-pay="${b.id}">Mark paid</button>` : ''}</div>`).join('') || '<p class="muted">No bills yet.</p>');
+    html += '<h3>RFQs</h3>' + (rfqs.data.rfqs.map((r) => `<div class="card clickable" data-rfq="${r.id}"><div class="row"><b>${esc(r.title)}</b>${statusChip(r.status)}</div></div>`).join('') || '<p class="muted">No RFQs.</p>');
+    html += '<h3>Vendors</h3>' + (vendors.data.vendors.map((v) => `<div class="card ${noBills ? '' : 'clickable'}" data-vendor-led="${v.id}"><b>${esc(v.name)}</b><p class="muted">${esc(v.category || '')}${v.phone ? ' · ' : ''}${v.phone ? `<a href="tel:${esc(v.phone)}">${esc(v.phone)}</a>` : ''}</p></div>`).join('') || '<p class="muted">No vendors yet.</p>');
+    const el = $('procurement-list'); el.innerHTML = html;
+    el.querySelectorAll('[data-po]').forEach((b) => { b.onclick = async () => { if (await act(api(`/api/procurement/pos/${b.dataset.id}/${b.dataset.po}`, { method: 'POST' }), 'Done')) loadProcurement(); }; });
+    el.querySelectorAll('[data-print]').forEach((b) => { b.onclick = () => openPrint('po', b.dataset.print); });
+    el.querySelectorAll('[data-grn]').forEach((b) => { b.onclick = () => receiveMaterial(b.dataset.grn); });
+    el.querySelectorAll('[data-bill]').forEach((b) => { b.onclick = () => addBill(b.dataset.bill, b.dataset.vendor); });
+    el.querySelectorAll('[data-pay]').forEach((b) => { b.onclick = async () => { const v = await openForm({ title: 'Mark bill paid', fields: [{ name: 'paid_on', label: 'Paid on', type: 'date', value: today() }, { name: 'payment_ref', label: 'Payment reference' }] }); if (v && await act(api(`/api/procurement/bills/${b.dataset.pay}/pay`, { method: 'POST', body: v }), 'Marked paid')) loadProcurement(); }; });
+    el.querySelectorAll('[data-rfq]').forEach((b) => { b.onclick = () => rfqDetail(b.dataset.rfq); });
+    if (!noBills) el.querySelectorAll('[data-vendor-led]').forEach((b) => { b.onclick = () => vendorLedger(b.dataset.vendorLed); });
   } catch (e) { $('procurement-list').innerHTML = `<div class="error">${esc(e.message)}</div>`; }
+}
+
+async function receiveMaterial(poId) {
+  const v = await openForm({ title: 'Material received', fields: [
+    { name: 'received_on', label: 'Date', type: 'date', value: today() }, { name: 'challan_no', label: 'Challan / delivery note no.' },
+    { name: 'qty_note', label: 'What came? (quantity, condition)', type: 'textarea', required: true }, { name: 'full', type: 'checkbox', label: 'Complete', checkLabel: 'This completes the order (nothing more is due)' }] });
+  if (!v) return;
+  if (await postOrQueue(`/api/procurement/pos/${poId}/grn`, v, 'Receipt recorded')) loadProcurement();
+}
+
+async function addBill(poId, vendorId) {
+  const v = await openForm({ title: 'Add vendor bill', fields: [{ name: 'bill_no', label: 'Bill number' }, { name: 'amount_paise', label: 'Amount (₹, with GST)', type: 'money', required: true }, { name: 'due_date', label: 'Due date', type: 'date' }] });
+  if (v && await act(api('/api/procurement/bills', { method: 'POST', body: { ...v, po_id: Number(poId), vendor_id: Number(vendorId) } }), 'Bill recorded')) loadProcurement();
+}
+
+async function vendorLedger(id) {
+  const d = (await api(`/api/procurement/vendors/${id}/ledger`)).data;
+  const owed = d.bills.filter((b) => b.status !== 'paid').reduce((t, b) => t + b.amount_paise, 0);
+  const ov = document.createElement('div'); ov.className = 'modal-overlay';
+  ov.innerHTML = `<div class="modal"><h2>Vendor ledger</h2><p><b>Unpaid bills: ${moneyP(owed)}</b></p>
+    <h3>POs</h3>${d.pos.map((p) => `<p>${esc(p.po_no)} · ${moneyP(p.total_paise)} · ${esc(p.status)}</p>`).join('') || '<p class="muted">None</p>'}
+    <h3>Bills</h3>${d.bills.map((b) => `<p>${esc(b.bill_no || '—')} · ${moneyP(b.amount_paise)} · ${esc(b.status)}</p>`).join('') || '<p class="muted">None</p>'}
+    <div class="modal-actions"><button class="btn btn-primary" id="vl-close">Close</button></div></div>`;
+  document.body.appendChild(ov); $('vl-close').onclick = () => ov.remove();
+}
+
+async function rfqDetail(id) {
+  const d = (await api(`/api/procurement/rfqs/${id}/quotes`)).data;
+  const lowest = d.quotes.length ? Math.min(...d.quotes.map((q) => q.amount_paise)) : 0;
+  const fastest = d.quotes.filter((q) => q.delivery_days != null).length ? Math.min(...d.quotes.filter((q) => q.delivery_days != null).map((q) => q.delivery_days)) : null;
+  const ov = document.createElement('div'); ov.className = 'modal-overlay';
+  ov.innerHTML = `<div class="modal"><h2>${esc(d.rfq.title)}</h2>
+    <p class="muted">${d.quotes.length} quote${d.quotes.length === 1 ? '' : 's'} received${d.quotes.length < 3 ? ' — get at least 3 if you can' : ''}.${d.last_paid ? ` Last paid: ${moneyP(d.last_paid.rate_paise)}/${esc(d.last_paid.unit || 'unit')} (${esc(d.last_paid.po_no)}).` : ''}</p>
+    ${d.quotes.map((q) => `<div class="card"><div class="row"><div><b>${esc(q.vendor)}</b> ${q.selected ? chip('Chosen', 'good') : ''}<p class="muted">${moneyP(q.amount_paise)}${q.delivery_days != null ? ' · ' + esc(q.delivery_days) + ' days' : ''}</p></div><div>${q.amount_paise === lowest ? chip('Lowest', 'good') : ''} ${q.delivery_days != null && q.delivery_days === fastest ? chip('Fastest', 'info') : ''}</div></div>${q.terms ? `<p class="muted">${esc(q.terms)}</p>` : ''}${!q.selected && userCanClient('procurement', 'E') ? `<button class="btn small" data-sel="${q.id}">Choose this quote</button>` : ''}</div>`).join('')}
+    <div class="modal-actions">${userCanClient('procurement', 'C') ? '<button class="btn" id="rq-add">Add quote</button>' : ''}<button class="btn btn-primary" id="rq-close">Close</button></div></div>`;
+  document.body.appendChild(ov); $('rq-close').onclick = () => ov.remove();
+  ov.querySelectorAll('[data-sel]').forEach((b) => { b.onclick = async () => { if (await act(api(`/api/procurement/quotes/${b.dataset.sel}/select`, { method: 'POST' }), 'Quote chosen')) { ov.remove(); rfqDetail(id); loadProcurement(); } }; });
+  if ($('rq-add')) $('rq-add').onclick = async () => {
+    const vendors = (await api('/api/procurement/vendors')).data.vendors;
+    const v = await openForm({ title: 'Add quote', fields: [{ name: 'vendor_id', label: 'Vendor', type: 'select', options: vendors.map((x) => [x.id, x.name]) }, { name: 'rate_paise', label: 'Rate per unit (₹)', type: 'money' }, { name: 'amount_paise', label: 'Total (₹)', type: 'money', required: true }, { name: 'delivery_days', label: 'Delivery in (days)', type: 'number' }, { name: 'terms', label: 'Terms', type: 'textarea' }] });
+    if (v && await act(api(`/api/procurement/rfqs/${id}/quotes`, { method: 'POST', body: { ...v, vendor_id: Number(v.vendor_id) } }), 'Quote added')) { ov.remove(); rfqDetail(id); }
+  };
 }
 
 // ---------- Sales ----------
@@ -774,11 +912,13 @@ async function bookingDetail(id) {
   const ov = document.createElement('div');
   ov.className = 'modal-overlay';
   ov.innerHTML = `<div class="modal"><h2>${esc(d.booking.customer_name)}</h2><p class="muted">${esc(d.booking.wing || '')}-${esc(d.booking.unit_no)} · ${moneyP(d.booking.agreed_price_paise)}</p>
-    <h3>Demands</h3>${d.demands.map((x) => `<div class="card"><div class="row"><div><b>${esc(x.label)}</b><p class="muted">${moneyP(x.amount_paise)} + GST ${moneyP(x.gst_paise)}${x.due_date ? ' · due ' + esc(x.due_date) : ''}</p></div>${statusChip(x.status)}</div>${['ready', 'partial', 'scheduled'].includes(x.status) && userCanClient('sales', 'E') ? `<button class="btn small" data-rcpt="${x.id}">Record receipt</button>` : ''}</div>`).join('')}
-    <h3>Receipts</h3>${d.receipts.map((r) => `<p>${esc(r.received_on)} · ${moneyP(r.amount_paise)}${r.tds_paise ? ' + TDS ' + moneyP(r.tds_paise) : ''} · ${esc(r.mode || '')}</p>`).join('') || '<p class="muted">None yet.</p>'}
+    <h3>Demands</h3>${d.demands.map((x) => `<div class="card"><div class="row"><div><b>${esc(x.label)}</b><p class="muted">${moneyP(x.amount_paise)} + GST ${moneyP(x.gst_paise)}${x.due_date ? ' · due ' + esc(x.due_date) : ''}</p></div>${statusChip(x.status)}</div><div class="row-btns">${['ready', 'partial', 'scheduled'].includes(x.status) && userCanClient('sales', 'E') ? `<button class="btn small" data-rcpt="${x.id}">Record receipt</button>` : ''}<button class="btn small" data-pdem="${x.id}">Print demand letter</button></div></div>`).join('')}
+    <h3>Receipts</h3>${d.receipts.map((r) => `<p>${esc(r.received_on)} · ${moneyP(r.amount_paise)}${r.tds_paise ? ' + TDS ' + moneyP(r.tds_paise) : ''} · ${esc(r.mode || '')} <button class="btn small" data-prcp="${r.id}">Print</button></p>`).join('') || '<p class="muted">None yet.</p>'}
     <div class="modal-actions">${d.booking.status !== 'cancelled' && userCanClient('sales', 'A') ? '<button class="btn" id="bk-cancel" style="color:#dc2626">Cancel booking</button>' : ''}<button class="btn btn-primary" id="bk-close">Close</button></div></div>`;
   document.body.appendChild(ov);
   $('bk-close').onclick = () => ov.remove();
+  ov.querySelectorAll('[data-pdem]').forEach((b) => { b.onclick = () => openPrint('demand', b.dataset.pdem); });
+  ov.querySelectorAll('[data-prcp]').forEach((b) => { b.onclick = () => openPrint('receipt', b.dataset.prcp); });
   if ($('bk-cancel')) $('bk-cancel').onclick = async () => {
     const v = await openForm({ title: 'Cancel booking', intro: 'The flat goes back to available.', fields: [{ name: 'reason', label: 'Reason', required: true }], submit: 'Cancel booking' });
     if (v && await act(api(`/api/sales/bookings/${id}/cancel`, { method: 'POST', body: v }), 'Cancelled')) { ov.remove(); loadSales(); }

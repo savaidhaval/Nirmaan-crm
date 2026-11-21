@@ -87,13 +87,20 @@ approval with PM limit, sales inventory / payment plan / bookings (paise-exact) 
 demands ready, documents upload + links, customer share links with revoke, Email settings screen + OTP login + digest,
 notification bell, CSP (no inline scripts), XSS-safe rendering.
 
+## Also built (second pass)
+Letterhead print views (`/print.html?k=po|demand|receipt&id=`, DRAFT watermark until issued, amount in words), RFQ quote comparison
+(lowest/fastest, last paid rate), GRN (idempotent), vendor bills + ledger, offline queue for site reports / snags / GRN (text only),
+Hindi + Marathi for the site flow, CSV exports + owner JSON export, nightly Drive backup, Drive routing for uploads/downloads,
+**cron triggers now actually fire** (`scheduled` was never exported before), login limiter counts only failures.
+
 ## Still to do
-1. **Google Drive** — needs your OAuth client: add redirect URI `https://nirmaan-crm.savai-dhaval.workers.dev/api/storage/google/callback`,
-   then Settings → Storage → Connect. Upload/download routing to Drive is NOT wired yet; files go to the database (1.5 MB cap).
-2. **Email** — More → Email settings: enter SMTP (465/SSL), Save, "Send test email". OTP login switches on after a successful test.
-3. Not built yet: offline DPR queue, RFQ quote comparison, GRN + bills, print views on letterhead (PO / demand letter / receipt),
-   Hindi/Marathi dictionaries, reports CSV export, nightly backup job, people/HR module screens, Phase 13 drills.
-4. Deploy: `npm install` (wrangler 4), `npx wrangler deploy`. No new migrations in this session.
+1. **Needs you:** Google OAuth redirect URI `https://nirmaan-crm.savai-dhaval.workers.dev/api/storage/google/callback`, then More → Storage → Connect.
+   Drive upload / download / nightly backup are written but UNTESTED against real Google. Test with a 20 MB PDF after connecting.
+2. **Needs you:** More → Email settings → SMTP details → Send test. SMTP protocol is tested against a scripted server only.
+3. Not built: site photo queue (IndexedDB), signature/stamp images on printed letters, pre-printed letterhead image modes beyond margins,
+   demand-letter email attachment, brochure library UI + versions, HR/people screens, bulk Hindi/Marathi for non-site screens,
+   Archive-old-project tool, Phase 13 drills (restore drill, negative tests) and role cheat sheets.
+4. Deploy: `npm install`, `npx wrangler deploy`. No new migrations.
 
 ## How to Run Locally
 ```powershell
