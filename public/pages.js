@@ -1053,6 +1053,7 @@ document.addEventListener('DOMContentLoaded', () => {
   $('btn-bell').onclick = () => navigate('notifications');
   $('btn-help').onclick = () => navigate('help');
   $('menu-password').onclick = () => { $('user-menu').style.display = 'none'; navigate('password'); };
+  if (location.hash === '#drive=ok' || location.hash === '#storage') { currentPage = 'storage'; if (location.hash === '#drive=ok') setTimeout(() => toast('Google Drive connected'), 800); history.replaceState(null, '', location.pathname); }
 });
 
 if ('serviceWorker' in navigator) {
@@ -1100,6 +1101,51 @@ function renderLogin() {
     try { await api('/api/auth/otp/verify', { method: 'POST', body: { email: $('login-email').value.trim(), code: $('otp-code').value.trim() } }); await loadUser(); }
     catch (e) { err(e.message); }
   };
+}
+
+// ---------- Storage (Google Drive) ----------
+function renderStorage(main) {
+  main.innerHTML = `<h1>Storage</h1>
+    <div class="card" id="drv-card" style="max-width:640px">Loading...</div>
+    <div class="card" style="max-width:640px"><h2>Where new files go</h2>
+      <label class="check"><input type="radio" name="sd" value="gdrive" id="sd-gdrive"> Google Drive (recommended, big files)</label>
+      <label class="check" style="margin-top:8px"><input type="radio" name="sd" value="d1" id="sd-d1"> Database (small files only, max 1.5 MB)</label></div>`;
+  $('sd-gdrive').onchange = () => saveDriver('gdrive'); $('sd-d1').onchange = () => saveDriver('d1');
+  loadStorageStatus();
+}
+
+async function saveDriver(driver) {
+  if (await act(api('/api/storage/driver', { method: 'POST', body: { driver } }), 'Saved')) loadStorageStatus();
+}
+
+async function loadStorageStatus() {
+  const card = $('drv-card'); if (!card) return;
+  try {
+    const d = (await api('/api/storage/status')).data;
+    $('sd-gdrive').checked = d.driver === 'gdrive'; $('sd-d1').checked = d.driver === 'd1';
+    const gb = (n) => (n / 1073741824).toFixed(1);
+    if (d.gdriveStatus === 'connected') {
+      card.innerHTML = `<div class="row"><div><h2>Google Drive</h2><p class="muted">Connected as <b>${esc(d.accountEmail || 'your Google account')}</b></p></div>${chip('Connected', 'good')}</div>
+        ${d.quota ? `<p style="margin-top:10px">Account storage: <b>${gb(d.quota.usage)} GB</b> of ${gb(d.quota.limit)} GB (${d.quota.percent}%)</p>` : '<p class="muted" style="margin-top:10px">Storage meter unavailable.</p>'}
+        <div class="row-btns"><button class="btn btn-primary" id="drv-test">Test upload</button><button class="btn" id="drv-off" style="color:#dc2626">Disconnect</button></div><div id="drv-result"></div>`;
+      $('drv-test').onclick = async () => {
+        $('drv-result').innerHTML = '<p class="muted">Testing...</p>';
+        try { const r = await api('/api/storage/test', { method: 'POST' }); $('drv-result').innerHTML = `<p style="color:#15803d"><b>Works.</b> ${esc(r.data.steps.join(' → '))}</p>`; }
+        catch (e) { $('drv-result').innerHTML = `<div class="error">${esc(e.message)}</div>`; }
+      };
+      $('drv-off').onclick = async () => { if (confirm('Disconnect Google Drive? Files stay in Drive, but the CRM cannot open them until you reconnect.') && await act(api('/api/storage/google/disconnect', { method: 'POST' }), 'Disconnected')) loadStorageStatus(); };
+    } else {
+      const re = d.gdriveStatus === 'needs_reconnect';
+      card.innerHTML = `<div class="row"><div><h2>Google Drive</h2><p class="muted">${re ? 'Google asked us to sign in again.' : 'Not connected. New files are saved in the database (max 1.5 MB each).'}</p></div>${chip(re ? 'Reconnect needed' : 'Not connected', re ? 'bad' : '')}</div>
+        <p class="help">You will be sent to Google to sign in with the account that should hold the files, then brought back here. The CRM only sees files it creates itself.</p>
+        <div class="row-btns"><button class="btn btn-primary" id="drv-on">${re ? 'Reconnect' : 'Connect'} Google Drive</button></div><div id="drv-result"></div>`;
+      $('drv-on').onclick = async () => {
+        $('drv-on').disabled = true;
+        try { const r = await api('/api/storage/google/start', { method: 'POST' }); location.href = r.data.authUrl; }
+        catch (e) { $('drv-on').disabled = false; $('drv-result').innerHTML = `<div class="error">${esc(e.message)}</div>`; }
+      };
+    }
+  } catch (e) { card.innerHTML = `<div class="error">${esc(e.message)}</div>`; }
 }
 
 // ---------- Email settings ----------

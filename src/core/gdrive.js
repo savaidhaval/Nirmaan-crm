@@ -225,7 +225,7 @@ async function driveRequest(env, accessToken, method, path, body, headers = {}) 
 }
 
 export async function getDriveAbout(env, accessToken) {
-  const fields = 'storageQuota,emailAddress';
+  const fields = 'storageQuota,user(emailAddress)';
   return driveRequest(env, accessToken, 'GET', `/about?fields=${fields}`);
 }
 

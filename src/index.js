@@ -2094,6 +2094,12 @@ router.post('/api/storage/google/start', async (req, env) => {
   });
 });
 
+function driveResultPage(ok, msg) {
+  const e = (v) => String(v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  return `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><body style="font-family:system-ui,sans-serif;max-width:520px;margin:12vh auto;padding:0 20px;text-align:center">
+    <h2>${ok ? 'Google Drive connected' : 'Google Drive was not connected'}</h2><p>${e(msg)}</p><p><a href="/#storage">Back to NirmaanCRM</a></p></body>`;
+}
+
 router.get('/api/storage/google/callback', async (req, env) => {
   try {
     const url = new URL(req.url);
@@ -2102,7 +2108,7 @@ router.get('/api/storage/google/callback', async (req, env) => {
     const error = url.searchParams.get('error');
 
     if (error) {
-      return new Response('Google Drive sign-in was cancelled.', { status: 400, headers: { 'Content-Type': 'text/html' } });
+      return new Response(driveResultPage(false, 'Google said: ' + error + '. If it says access_denied, add your Gmail under Test users on the OAuth consent screen.'), { status: 400, headers: { 'Content-Type': 'text/html; charset=utf-8' } });
     }
     if (!code || !state) {
       return new Response('Missing sign-in parameters.', { status: 400, headers: { 'Content-Type': 'text/html' } });
@@ -2111,7 +2117,7 @@ router.get('/api/storage/google/callback', async (req, env) => {
     const stateHash = base64urlEncode(await sha256Bytes(new TextEncoder().encode(state)));
     const row = await env.DB.prepare('SELECT * FROM oauth_states WHERE state_hash = ? AND purpose = \'gdrive\' AND used_at IS NULL AND expires_at > datetime(\'now\')').bind(stateHash).first();
     if (!row) {
-      return new Response('This sign-in link is no longer valid.', { status: 410, headers: { 'Content-Type': 'text/html' } });
+      return new Response(driveResultPage(false, 'This sign-in link is no longer valid. Go back and press Connect again.'), { status: 410, headers: { 'Content-Type': 'text/html; charset=utf-8' } });
     }
 
     const user = await env.DB.prepare('SELECT * FROM users WHERE id = ? AND deleted_at IS NULL').bind(row.user_id).first();
@@ -2128,7 +2134,7 @@ router.get('/api/storage/google/callback', async (req, env) => {
     let accountEmail = '';
     try {
       const about = await gdrive.getDriveAbout(env, tokens.access_token);
-      accountEmail = about.emailAddress || '';
+      accountEmail = (about.user && about.user.emailAddress) || about.emailAddress || '';
     } catch (e) {}
 
     // Encrypt and store tokens
@@ -2147,7 +2153,10 @@ router.get('/api/storage/google/callback', async (req, env) => {
         const created = await gdrive.createDriveFolder(env, tokens.access_token, 'NirmaanCRM', null);
         rootFolderId = created.id;
       }
-    } catch (e) {}
+    } catch (e) {
+      return new Response(driveResultPage(false, 'Connected to Google, but the NirmaanCRM folder could not be created: ' + e.message), { status: 500, headers: { 'Content-Type': 'text/html; charset=utf-8' } });
+    }
+    if (!rootFolderId) return new Response(driveResultPage(false, 'Google did not return a folder id.'), { status: 500, headers: { 'Content-Type': 'text/html; charset=utf-8' } });
 
     // Mark state as used
     await env.DB.prepare('UPDATE oauth_states SET used_at = ? WHERE id = ?').bind(now, row.id).run();
@@ -2162,19 +2171,34 @@ router.get('/api/storage/google/callback', async (req, env) => {
     await setSettingRaw(env, 'storage.gdrive.connected_at', now, user.user_id);
     await setSettingRaw(env, 'storage.driver', 'gdrive', user.user_id);
 
-    await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, ?, 'storage', 0, 'Google Drive connected', ?)`).bind(user.id, now).run();
+    await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, 'connect', 'storage', 0, 'Google Drive connected', ?)`).bind(user.id, now).run();
 
-    return new Response(`
-      <html><body style="font-family:sans-serif;text-align:center;padding:40px;">
-        <h2>✅ Google Drive Connected</h2>
-        <p>NirmaanCRM is now connected to <strong>${accountEmail || 'your Google account'}</strong>.</p>
-        <p>You can close this window and return to the CRM.</p>
-        <script>setTimeout(()=>window.close(),2000);</script>
-      </body></html>
-    `, { headers: { 'Content-Type': 'text/html' } });
+    return Response.redirect(`${new URL(req.url).origin}/#drive=ok`, 302);
   } catch (e) {
-    return new Response('Sign-in failed: ' + e.message, { status: 500, headers: { 'Content-Type': 'text/html' } });
+    return new Response(driveResultPage(false, 'Sign-in failed: ' + e.message), { status: 500, headers: { 'Content-Type': 'text/html; charset=utf-8' } });
   }
+});
+
+// Owner-only self-test: uploads a tiny file to Drive, reads it back, deletes it. Reports the exact failure if any.
+router.post('/api/storage/test', async (req, env) => {
+  return withAuth(req, env, 'users_settings', 'E', async (req, env) => {
+    if (req.user.role !== 'owner') return json({ ok: false, error: 'Only the Owner can test Google Drive.' }, 403);
+    if ((await getSettingRaw(env, 'storage.gdrive.status')) !== 'connected') return json({ ok: false, error: 'Google Drive is not connected.' }, 400);
+    const steps = [];
+    try {
+      const file = new File([`NirmaanCRM test ${new Date().toISOString()}`], 'nirmaan-test.txt', { type: 'text/plain' });
+      const up = await driveUpload(env, file, null);
+      steps.push('Uploaded a test file');
+      const back = await withDrive(env, (t) => gdrive.getDriveFile(env, t, up.fileId, null));
+      await back.text();
+      steps.push('Read it back');
+      await withDrive(env, (t) => gdrive.deleteDriveFile(env, t, up.fileId));
+      steps.push('Deleted it');
+      return json({ ok: true, data: { steps } });
+    } catch (e) {
+      return json({ ok: false, error: `${steps.length ? 'After "' + steps[steps.length - 1] + '": ' : ''}${e.message}`.slice(0, 400), data: { steps } }, 502);
+    }
+  });
 });
 
 router.post('/api/storage/google/disconnect', async (req, env) => {
