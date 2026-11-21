@@ -1,3 +1,4 @@
+import { appKeyBytes } from './settings.js';
 // core/gdrive.js — Google Drive integration (§3.4)
 // Plain fetch, no Google library. Scope: drive.file only.
 
@@ -36,7 +37,7 @@ async function sha256(bytes) {
 
 // AES-GCM encrypt/decrypt using APP_KEY (same approach as settings.js)
 async function appKeyRaw(env) {
-  return base64urlDecode(env.APP_KEY);
+  return appKeyBytes(env.APP_KEY);
 }
 
 async function encryptValue(env, plaintext) {
@@ -97,7 +98,8 @@ function sha256Sync(bytes) {
 export async function makeOAuthStartAsync(env, redirectUri, userId) {
   const verifierBytes = crypto.getRandomValues(new Uint8Array(32));
   const verifier = base64urlEncode(verifierBytes);
-  const challengeBytes = await sha256(verifierBytes);
+  // PKCE S256: hash the verifier STRING (ASCII), not the raw random bytes.
+  const challengeBytes = await sha256(new TextEncoder().encode(verifier));
   const challenge = base64urlEncode(challengeBytes);
   const stateBytes = crypto.getRandomValues(new Uint8Array(16));
   const state = base64urlEncode(stateBytes);
@@ -224,7 +226,7 @@ async function driveRequest(env, accessToken, method, path, body, headers = {}) 
 }
 
 export async function getDriveAbout(env, accessToken) {
-  const fields = 'storageQuota,emailAddress';
+  const fields = 'storageQuota,user(emailAddress)';
   return driveRequest(env, accessToken, 'GET', `/about?fields=${fields}`);
 }
 
@@ -240,23 +242,23 @@ export async function createDriveFolder(env, accessToken, name, parentId) {
 }
 
 export async function findDriveFolder(env, accessToken, name, parentId) {
-  const q = encodeURIComponent(`mimeType = 'application/vnd.google-apps.folder' AND name = '${name}'${parentId ? ` AND '${parentId}' in parents` : ''} AND trashed = false`);
+  const q = encodeURIComponent(`mimeType = 'application/vnd.google-apps.folder' AND name = '${String(name).replace(/[\\']/g, '')}'${parentId ? ` AND '${parentId}' in parents` : ''} AND trashed = false`);
   return driveRequest(env, accessToken, 'GET', `/files?q=${q}&fields=files(id,name)`);
 }
 
-export async function resumableUploadInit(env, accessToken, fileName, mimeType, parentId) {
+export async function resumableUploadInit(env, accessToken, fileName, mimeType, parentId, size) {
   const metadata = {
     name: fileName,
     ...(parentId ? { parents: [parentId] } : {}),
   };
 
-  const res = await fetch(`${DRIVE_API}/files/upload?uploadType=resumable`, {
+  const res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id,md5Checksum,size', {
     method: 'POST',
     headers: {
       Authorization: `Bearer ${accessToken}`,
       'Content-Type': 'application/json',
       'X-Upload-Content-Type': mimeType,
-      'X-Upload-Content-Length': '0', // will be set on the PUT
+      'X-Upload-Content-Length': String(size),
     },
     body: JSON.stringify(metadata),
   });

@@ -1,6 +1,19 @@
 // settings.js — get/set with AES-GCM encrypt/decrypt using APP_KEY (§4.4, §5)
 
 const PLAIN_PREFIX = 'plain:';
+
+// APP_KEY -> raw AES key bytes. A valid base64/base64url 16/24/32-byte key is used as-is
+// (so data encrypted earlier still decrypts); anything else is hashed to 32 bytes.
+export async function appKeyBytes(appKey) {
+  const raw = String(appKey || '');
+  if (!raw) throw new Error('APP_KEY secret is not set.');
+  try {
+    const std = raw.replace(/-/g, '+').replace(/_/g, '/');
+    const bin = atob(std + '='.repeat((4 - (std.length % 4)) % 4));
+    if ([16, 24, 32].includes(bin.length)) return Uint8Array.from(bin, (c) => c.charCodeAt(0));
+  } catch (e) { /* not base64 */ }
+  return new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(raw)));
+}
 const ENC_PREFIX = 'enc:';
 
 function isEncrypted(v) {
@@ -42,7 +55,7 @@ export async function deleteSetting(env, key) {
 async function encryptValue(appKeyB64, plaintext) {
   const key = await crypto.subtle.importKey(
     'raw',
-    base64ToBytes(appKeyB64),
+    await appKeyBytes(appKeyB64),
     { name: 'AES-GCM' },
     false,
     ['encrypt']
@@ -65,7 +78,7 @@ async function decryptValue(appKeyB64, ciphertextB64) {
   const enc = combined.slice(12);
   const key = await crypto.subtle.importKey(
     'raw',
-    base64ToBytes(appKeyB64),
+    await appKeyBytes(appKeyB64),
     { name: 'AES-GCM' },
     false,
     ['decrypt']

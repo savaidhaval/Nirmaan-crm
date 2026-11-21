@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>NirmaanCRM — role cheat sheets</title>
+  <link rel="stylesheet" href="legal.css">
+  <style>
+    .sheet { background: #fff; border: 1px solid #e2e8f0; border-radius: 12px; padding: 22px 26px; margin: 0 0 22px; page-break-after: always; break-after: page; }
+    .sheet h2 { margin-top: 0; font-size: 1.4rem; } .sheet ul { margin: 6px 0 12px; padding-left: 20px; }
+    .no { color: #b91c1c; } .bar { margin-bottom: 18px; }
+    @media print { body { background: #fff; } .bar { display: none; } .sheet { border: 0; padding: 0; } main { padding: 0; } }
+  </style>
+</head>
+<body>
+<main>
+  <div class="bar"><a href="/">← NirmaanCRM</a> · <a href="#" id="p">Print all</a></div>
+  <h1>NirmaanCRM — one-page cheat sheets</h1>
+  <p class="meta">Print one page per person. Address: <b>crm.mysociety.tech</b> · Add to Home Screen on your phone for an app icon.</p>
+
+  <div class="sheet"><h2>Owner</h2>
+    <b>Every morning</b><ul><li>Home: tap any tile (money in, overdue, bills due, POs waiting, site reports, snags, new leads).</li><li>Approve purchase orders: Procurement → Approve (you are the only approver above the PM limit).</li><li>Check Approvals for anything expiring within 30 days.</li></ul>
+    <b>Weekly</b><ul><li>Audit log and Shared links (cancel old customer links).</li><li>Users &amp; access: deactivate anyone who left.</li><li>Download “Everything (backup)” from More. A nightly copy also goes to Drive/Backups.</li></ul>
+    <b>Set up once</b><ul><li>Branding &amp; letterhead, Storage (Google Drive), Email, Users, Projects, payment plan, milestone keys.</li></ul>
+    <b class="no">Remember</b><ul><li>You cannot deactivate or demote yourself. Keep your password private. Confirm approval dates with your CA/architect.</li></ul></div>
+
+  <div class="sheet"><h2>Project manager</h2>
+    <ul><li><b>Approvals:</b> load the Mumbai checklist, mark Applied / Query / Approved with dates, set valid-till.</li><li><b>Drawings:</b> “Issue new revision” → Issued For Construction. The old one becomes SUPERSEDED automatically and site is told.</li><li><b>Site:</b> add milestones with a key (e.g. slab5); when site taps Done, matching customer payments become Ready.</li><li><b>Procurement:</b> approve POs up to your limit; above it the Owner approves. You cannot approve a PO you created.</li><li><b>Snags:</b> verify fixes after the engineer marks them fixed.</li></ul></div>
+
+  <div class="sheet"><h2>Site engineer</h2>
+    <ul><li><b>Daily (2 minutes):</b> Site → Today’s work report → what happened, labour, photos → Save. No signal? It saves on the phone and sends itself later. The orange box shows what is waiting.</li><li><b>Drawings:</b> you only see the latest “Issued For Construction” drawing. If it says SUPERSEDED, do not build from it.</li><li><b>Snag:</b> Site → Raise a snag, add photos. After fixing, tap Mark fixed.</li><li><b>Material arrived:</b> Procurement → Material received on the PO.</li><li><b>Language:</b> More → Language → मराठी / हिन्दी.</li></ul>
+    <b class="no">You cannot see</b><ul><li>Sales, money, other projects.</li></ul></div>
+
+  <div class="sheet"><h2>Sales</h2>
+    <ul><li><b>New lead:</b> Sales → New lead. Ask for consent. A duplicate mobile number is refused.</li><li><b>Book a flat:</b> Flats → Book this flat. A flat cannot be booked twice.</li><li><b>Send a brochure:</b> Brochures → Send to customer → WhatsApp. The link expires; the Owner can cancel it.</li><li><b>Receipt:</b> open the booking → Record receipt (add TDS if deducted) → Print.</li></ul>
+    <b class="no">You cannot see</b><ul><li>Internal price lists, purchasing, people records.</li></ul></div>
+
+  <div class="sheet"><h2>Accounts / Purchase</h2>
+    <ul><li><b>Purchase:</b> Vendors → RFQ → add quotes (lowest and fastest are marked) → choose → New purchase order.</li><li><b>Accounts:</b> Procurement → Add bill (due date), Mark paid. Vendor ledger: tap a vendor.</li><li><b>Reports:</b> More → Download for Excel (receipts, receivables, purchases).</li><li><b>Print:</b> PO, demand letter and receipt print on the company letterhead. DRAFT means not yet issued.</li></ul></div>
+
+  <div class="sheet"><h2>HR</h2>
+    <ul><li>People → Staff, Open positions, Interviews.</li><li>Open a position → add candidates → move them New → Screened → Interview (pick the time) → Offered → Hired. Hired people join Staff automatically.</li></ul>
+    <b class="no">Never store</b><ul><li>Full Aadhaar numbers.</li></ul></div>
+</main>
+<script src="legal.js"></script>
+</body>
+</html>

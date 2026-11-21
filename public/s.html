@@ -19,33 +19,6 @@
     <p class="help" id="msg" style="display:none;color:#dc2626;"></p>
   </div>
   <script src="ui.js"></script>
-  <script>
-    // Token is read from the URL path: /s/<token>
-    const token = location.pathname.split('/').pop();
-    const btn = document.getElementById('btn-open');
-    const msg = document.getElementById('msg');
-
-    btn.addEventListener('click', async () => {
-      try {
-        // /s/<token>/file returns a redirect to the file, or streams it
-        const res = await fetch('/s/' + encodeURIComponent(token) + '/file', {
-          credentials: 'include',
-          redirect: 'manual',
-        });
-        if (res.status === 302 || res.status === 301) {
-          location.href = res.headers.get('location');
-        } else if (res.ok) {
-          location.href = '/s/' + encodeURIComponent(token) + '/file';
-        } else {
-          msg.textContent = 'This link has expired or is no longer valid. Please ask the sender to share a new one.';
-          msg.style.display = 'block';
-          btn.style.display = 'none';
-        }
-      } catch (e) {
-        msg.textContent = 'Unable to open this link. Please try again.';
-        msg.style.display = 'block';
-      }
-    });
-  </script>
+  <script src="s.js"></script>
 </body>
 </html>

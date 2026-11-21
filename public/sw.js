@@ -1,35 +1,37 @@
-// sw.js — PWA service worker. Caches the static shell only, never API responses.
+// sw.js — PWA service worker. Caches the static shell only, never API or file responses.
+// Network-first so a new deploy is picked up immediately; cache is the offline fallback.
 
-const CACHE_NAME = 'nirmaan-shell-v1';
-const SHELL_URLS = [
-  '/',
-  '/login.html',
-  '/app.css',
-  '/ui.js',
-  '/i18n.js',
-  '/manifest.json',
-];
+const CACHE_NAME = 'nirmaan-shell-v3';
+const SHELL_URLS = ['/', '/login.html', '/app.css', '/ui.js', '/app.js', '/pages.js', '/pages2.js', '/manifest.json'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(SHELL_URLS))
+    caches.open(CACHE_NAME)
+      .then((cache) => Promise.all(SHELL_URLS.map((u) => cache.add(u).catch(() => {}))))
+      .then(() => self.skipWaiting())
   );
 });
 
 self.addEventListener('fetch', (event) => {
-  const url = new URL(event.request.url);
-  if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/files/')) {
-    return; // never cache API or file responses
-  }
+  const req = event.request;
+  const url = new URL(req.url);
+  if (req.method !== 'GET' || url.origin !== location.origin) return;
+  if (url.pathname.startsWith('/api/') || url.pathname.startsWith('/files/') || url.pathname.startsWith('/s/')) return;
   event.respondWith(
-    caches.match(event.request).then((cached) => cached || fetch(event.request))
+    fetch(req).then((res) => {
+      if (res.ok && SHELL_URLS.includes(url.pathname)) {
+        const copy = res.clone();
+        caches.open(CACHE_NAME).then((c) => c.put(req, copy));
+      }
+      return res;
+    }).catch(() => caches.match(req).then((hit) => hit || caches.match('/')))
   );
 });
 
 self.addEventListener('activate', (event) => {
   event.waitUntil(
-    caches.keys().then((keys) =>
-      Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k)))
-    )
+    caches.keys()
+      .then((keys) => Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k))))
+      .then(() => self.clients.claim())
   );
 });

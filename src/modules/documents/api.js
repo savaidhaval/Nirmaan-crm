@@ -14,7 +14,7 @@ import { audit } from '../../core/audit.js';
 async function listDocuments(req, env) {
   const user = req.user;
   const ids = await visibleProjectIds(env, user);
-  const projectId = req.url.searchParams.get('project_id');
+  const projectId = new URL(req.url).searchParams.get('project_id');
   if (projectId && !ids.includes(Number(projectId))) {
     return Response.json({ ok: false, error: 'Not allowed.' }, { status: 403 });
   }

@@ -1,7 +1,12 @@
 name = "nirmaan-crm"
 main = "src/index.js"
-compatibility_date = "2026-11-21"
-nodejs_compat = true
+compatibility_date = "2025-09-01"
+compatibility_flags = ["nodejs_compat"]
+
+# The CRM is served only from this custom domain. The *.workers.dev address and preview URLs are switched off.
+routes = [{ pattern = "crm.mysociety.tech", custom_domain = true }]
+workers_dev = false
+preview_urls = false
 
 [[d1_databases]]
 binding = "DB"
@@ -11,7 +16,7 @@ database_id = "8883b3cf-8ba3-49a1-b31e-72d7776b7e60"
 [assets]
 binding = "ASSETS"
 directory = "public"
-run_worker_first = ["/api/*", "/files/*", "/s/*", "/brand/*", "/manifest.webmanifest"]
+run_worker_first = ["/api/*", "/s/*", "/brand/*"]
 
 # Production crons — Phase 11
 [triggers]
@@ -19,9 +24,12 @@ crons = ["30 2 * * *", "30 13 * * *", "30 * * * *", "30 20 * * *"]
 
 [vars]
 ENVIRONMENT = "production"
+EXTERNAL_URL = "https://crm.mysociety.tech"
 
 [env.staging]
 name = "nirmaan-crm-staging"
+workers_dev = true      # staging has no custom domain; its workers.dev address is its only URL
+preview_urls = false
 
 [[env.staging.d1_databases]]
 binding = "DB"
@@ -31,7 +39,7 @@ database_id = "faea2f40-32a7-40b9-8d2e-57bfcf20da03"
 [env.staging.assets]
 binding = "ASSETS"
 directory = "public"
-run_worker_first = ["/api/*", "/files/*", "/s/*", "/brand/*", "/manifest.webmanifest"]
+run_worker_first = ["/api/*", "/s/*", "/brand/*"]
 
 [env.staging.triggers]
 crons = []

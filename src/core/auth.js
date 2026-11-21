@@ -48,6 +48,15 @@ export async function verifyPassword(password, salt, hash) {
   return computed === hash;
 }
 
+function toUrlSafe(bytes) {
+  return bytesToBase64(bytes).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+function fromUrlSafe(s) {
+  const std = s.replace(/-/g, '+').replace(/_/g, '/');
+  return base64ToBytes(std + '='.repeat((4 - (std.length % 4)) % 4));
+}
+
 export function makeSessionToken() {
   return crypto.getRandomValues(new Uint8Array(32));
 }
@@ -87,7 +96,8 @@ export async function createSession(env, userId, userAgent) {
     INSERT INTO sessions (id, user_id, expires_at, user_agent, created_at)
     VALUES (?, ?, ?, ?, ?)
   `).bind(tokenHash, userId, expiresAt, userAgent, now).run();
-  return { tokenHash, tokenBytes, expiresAt };
+  // The cookie carries the random token; only its SHA-256 is stored, so a database leak cannot be replayed as a login.
+  return { token: toUrlSafe(tokenBytes), tokenHash, tokenBytes, expiresAt };
 }
 
 export async function destroySession(env, tokenHash) {
@@ -163,11 +173,12 @@ export async function loginPassword(env, email, password, userAgent) {
     const salt = makeSalt();
     const hash = await hashPassword(password, salt);
     const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
-    await env.DB.prepare('UPDATE users SET password_hash = ?, password_salt = ?, password_changed_at = ? WHERE id = ?').bind(hash, bytesToBase64(salt), now, user.id).run();
+    await env.DB.prepare('UPDATE users SET password_hash = ?, password_salt = ?, password_changed_at = ?, must_change_password = 1 WHERE id = ?').bind(hash, bytesToBase64(salt), now, user.id).run();
   } else {
     throw new Error('Invalid email or password.');
   }
 
+  await env.DB.prepare('DELETE FROM rate_limits WHERE key = ?').bind(rateKey).run(); // only failed attempts count
   // Update last login
   const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
   await env.DB.prepare('UPDATE users SET last_login_at = ? WHERE id = ?').bind(now, user.id).run();
@@ -186,33 +197,42 @@ export async function getCurrentUser(env, cookieHeader) {
   if (!cookieHeader) return null;
   const match = cookieHeader.match(new RegExp(`(?:^|; )${COOKIE_NAME}=([^;]+)`));
   if (!match) return null;
-  const tokenHash = match[1];
+  let tokenHash;
+  try { tokenHash = await hashToken(fromUrlSafe(match[1])); } catch (e) { return null; } // malformed cookie
   return getSession(env, tokenHash);
 }
 
-// OTP endpoints (dormant until email works — Phase 11)
+// ---------- Email one-time codes (login without a password) ----------
+// code_hash = HMAC-SHA256(SESSION_SECRET, email|code); 6 digits, 10 minutes, 5 attempts.
+async function otpHash(env, email, code) {
+  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(env.SESSION_SECRET || env.APP_KEY || 'nirmaan'), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const sig = await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(`${email.toLowerCase()}|${code}`));
+  return bytesToBase64(new Uint8Array(sig));
+}
+
 export async function createOtpCode(env, email) {
-  const code = String(Math.floor(100000 + Math.random() * 900000));
-  const salt = makeSalt();
-  const hash = await hashPassword(code, salt);
-  const expiresAt = addDaysUtc(10 / 1440); // 10 minutes
+  const n = crypto.getRandomValues(new Uint32Array(1))[0] % 1000000;
+  const code = String(n).padStart(6, '0');
+  const expiresAt = new Date(Date.now() + 10 * 60 * 1000).toISOString().replace('T', ' ').substring(0, 19);
   const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
   await env.DB.prepare('DELETE FROM otp_codes WHERE email = ?').bind(email).run();
-  await env.DB.prepare('INSERT INTO otp_codes (email, code_hash, expires_at, attempts, created_at) VALUES (?, ?, ?, 0, ?)').bind(email, hash, expiresAt, now).run();
+  await env.DB.prepare('INSERT INTO otp_codes (email, code_hash, expires_at, attempts, created_at) VALUES (?, ?, ?, 0, ?)').bind(email, await otpHash(env, email, code), expiresAt, now).run();
   return code;
 }
 
 export async function verifyOtpCode(env, email, code) {
-  const row = await env.DB.prepare("SELECT * FROM otp_codes WHERE email = ? AND expires_at > datetime('now') ORDER BY created_at DESC LIMIT 1").bind(email).first();
-  if (!row) return { ok: false, error: 'No code found. Request a new one.' };
-  if (Number(row.attempts) >= 5) return { ok: false, error: 'Too many attempts. Request a new code.' };
-  const ok = await verifyPassword(code, base64ToBytes(row.code_hash), row.code_hash);
-  if (!ok) {
+  const row = await env.DB.prepare("SELECT * FROM otp_codes WHERE email = ? AND expires_at > datetime('now') ORDER BY id DESC LIMIT 1").bind(email).first();
+  if (!row) return { ok: false, error: 'That code has expired. Ask for a new one.' };
+  if (Number(row.attempts) >= 5) return { ok: false, error: 'Too many wrong tries. Ask for a new code.' };
+  const expected = await otpHash(env, email, String(code).trim());
+  let diff = expected.length ^ row.code_hash.length;
+  for (let i = 0; i < expected.length; i++) diff |= expected.charCodeAt(i) ^ (row.code_hash.charCodeAt(i) || 0);
+  if (diff !== 0) {
     await env.DB.prepare('UPDATE otp_codes SET attempts = attempts + 1 WHERE id = ?').bind(row.id).run();
-    return { ok: false, error: 'Incorrect code.' };
+    return { ok: false, error: 'That code is not right.' };
   }
   await env.DB.prepare('DELETE FROM otp_codes WHERE email = ?').bind(email).run();
   const user = await env.DB.prepare('SELECT * FROM users WHERE email = ? AND active = 1 AND deleted_at IS NULL').bind(email).first();
-  if (!user) return { ok: false, error: 'Account not found or inactive.' };
+  if (!user) return { ok: false, error: 'This account is not active.' };
   return { ok: true, user };
 }

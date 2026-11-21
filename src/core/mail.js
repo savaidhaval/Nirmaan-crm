@@ -1,160 +1,103 @@
 // core/mail.js — mail provider switch: smtp | brevo_api with queue + retry (§7.8)
 
 import { sendSmtp } from './smtp.js';
+import { getSetting } from './settings.js';
 
-export async function sendMail(env, to, subject, html, attachments = []) {
-  const settings = await getAllSettings(env);
-  const provider = settings['email.provider'] || 'smtp';
-  const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
+const nowStr = () => new Date().toISOString().replace('T', ' ').substring(0, 19);
+export const esc = (v) => String(v == null ? '' : v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-  // Queue the email
-  await env.DB.prepare(
-    `INSERT INTO email_log (to_email, subject, body_html, status, created_at)
-     VALUES (?, ?, ?, 'queued', ?)`
-  ).bind(to, subject, html, now).run();
+export async function getEmailConfig(env) {
+  const g = (k, d) => getSetting(env, k).then((v) => (v === null || v === undefined || v === '' ? d : v));
+  return {
+    provider: await g('email.provider', 'smtp'),
+    host: await g('smtp.host', ''), port: Number(await g('smtp.port', 465)), security: await g('smtp.security', 'ssl'),
+    username: await g('smtp.username', ''), password: await g('smtp.password', ''),
+    fromName: await g('smtp.from_name', 'NirmaanCRM'), fromEmail: await g('smtp.from_email', ''),
+    brevoKey: await g('brevo.api_key', ''),
+  };
+}
 
-  let sent = false;
-  let lastError = null;
-
+// Queue + send. Pass { logId } to retry an existing log row instead of creating a new one.
+export async function sendMail(env, to, subject, html, opts = {}) {
+  const cfg = await getEmailConfig(env);
+  let logId = opts.logId;
+  if (!logId) {
+    const r = await env.DB.prepare(`INSERT INTO email_log (to_email, subject, body_html, status, provider, template, created_at) VALUES (?, ?, ?, 'queued', ?, ?, ?)`)
+      .bind(to, subject, opts.template === 'otp' ? '(login code not stored)' : html, cfg.provider, opts.template || null, nowStr()).run();
+    logId = r.meta.last_row_id;
+  }
   try {
-    if (provider === 'brevo_api') {
-      await sendViaBrevo(env, to, subject, html, attachments);
-    } else {
-      await sendViaSmtp(env, to, subject, html, attachments);
-    }
-    await env.DB.prepare(
-      `UPDATE email_log SET status = 'sent', sent_at = ? WHERE to_email = ? AND status = 'queued' ORDER BY created_at DESC LIMIT 1`
-    ).bind(now, to).run();
-    sent = true;
+    if (cfg.provider === 'brevo_api') await sendViaBrevo(cfg, to, subject, html);
+    else await sendViaSmtp(cfg, to, subject, html, opts.attachments || []);
+    await env.DB.prepare(`UPDATE email_log SET status = 'sent', error = NULL, sent_at = ?, attempts = attempts + 1 WHERE id = ?`).bind(nowStr(), logId).run();
+    return { sent: true, error: null, logId };
   } catch (e) {
-    lastError = e.message;
-    await env.DB.prepare(
-      `UPDATE email_log SET status = 'failed', error = ?, attempts = attempts + 1 WHERE to_email = ? AND status = 'queued' ORDER BY created_at DESC LIMIT 1`
-    ).bind(lastError, to).run();
+    const msg = String(e.message || e).slice(0, 400);
+    await env.DB.prepare(`UPDATE email_log SET status = 'failed', error = ?, attempts = attempts + ? WHERE id = ?`).bind(msg, opts.template === 'otp' ? 3 : 1, logId).run();
+    return { sent: false, error: msg, logId };
   }
-
-  return { sent, error: lastError };
 }
 
-async function sendViaSmtp(env, to, subject, html, attachments) {
-  const settings = await getAllSettings(env);
-  const host = settings['smtp.host'];
-  const port = Number(settings['smtp.port'] || 465);
-  const username = settings['smtp.username'] || '';
-  const password = settings['smtp.password'] ? await decryptSetting(env, settings['smtp.password']) : '';
-  const fromName = settings['smtp.from_name'] || 'NirmaanCRM';
-  const fromEmail = settings['smtp.from_email'] || 'noreply@yourcompany.in';
-
-  if (!host || !username || !password) {
-    throw new Error('SMTP not configured. Go to Settings → Email.');
-  }
-
-  return sendSmtp(env, to, subject, html, fromName, fromEmail, host, port, username, password);
+async function sendViaSmtp(cfg, to, subject, html, attachments) {
+  if (!cfg.host || !cfg.username || !cfg.password || !cfg.fromEmail) throw new Error('Email is not set up yet. Go to More → Email settings.');
+  return sendSmtp(cfg, { fromName: cfg.fromName, fromEmail: cfg.fromEmail, to, subject, html, attachments });
 }
 
-async function sendViaBrevo(env, to, subject, html, attachments) {
-  const settings = await getAllSettings(env);
-  const apiKey = settings['brevo.api_key'];
-  if (!apiKey) throw new Error('Brevo API key not configured');
-
+async function sendViaBrevo(cfg, to, subject, html) {
+  if (!cfg.brevoKey || !cfg.fromEmail) throw new Error('Brevo API key and sender address are not set. Go to More → Email settings.');
   const res = await fetch('https://api.brevo.com/v3/smtp/email', {
     method: 'POST',
-    headers: {
-      'Accept': 'application/json',
-      'Content-Type': 'application/json',
-      'api-key': apiKey,
-    },
-    body: JSON.stringify({
-      sender: { name: 'NirmaanCRM', email: settings['smtp.from_email'] || 'noreply@yourcompany.in' },
-      to: [{ email: to }],
-      subject: subject,
-      htmlContent: html,
-    }),
+    headers: { Accept: 'application/json', 'Content-Type': 'application/json', 'api-key': cfg.brevoKey },
+    body: JSON.stringify({ sender: { name: cfg.fromName || 'NirmaanCRM', email: cfg.fromEmail }, to: [{ email: to }], subject, htmlContent: html }),
   });
-  if (!res.ok) {
-    const txt = await res.text();
-    throw new Error(`Brevo API error (${res.status}): ${txt}`);
-  }
+  if (!res.ok) throw new Error(`Brevo rejected the message (${res.status}).`);
 }
 
+// Hourly: retry failed emails (max 3 attempts).
 export async function retryFailedEmails(env) {
-  const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
-  const rows = await env.DB.prepare(
-    `SELECT * FROM email_log WHERE status = 'failed' AND attempts < 3 ORDER BY created_at ASC LIMIT 40`
-  ).all();
-
+  const rows = await env.DB.prepare(`SELECT id, to_email, subject, body_html FROM email_log WHERE status = 'failed' AND attempts < 3 ORDER BY created_at ASC LIMIT 20`).all();
   for (const row of rows.results) {
-    try {
-      await sendMail(env, row.to_email, row.subject, row.body_html || '');
-    } catch (e) {
-      // Will retry next hour
-    }
+    await sendMail(env, row.to_email, row.subject, row.body_html || '', { logId: row.id });
   }
 }
 
 export async function sendDigest(env, recipientEmail) {
-  // Compose digest from aggregate queries (§7.8 + Appendix C)
-  const now = new Date();
-  const istOffset = 5.5 * 60 * 60 * 1000;
-  const istDate = new Date(now.getTime() + istOffset);
-  const dateStr = istDate.toLocaleDateString('en-IN', { day: '2-digit', month: '2-digit', year: 'numeric' });
-
-  // Get projects
-  const projects = await env.DB.prepare('SELECT * FROM projects WHERE deleted_at IS NULL').all();
-
-  let html = `<h1>🏗️ NirmaanCRM — Morning Report, ${dateStr}</h1>`;
-
+  const ist = new Date(Date.now() + 19800000);
+  const dateStr = `${String(ist.getUTCDate()).padStart(2, '0')}/${String(ist.getUTCMonth() + 1).padStart(2, '0')}/${ist.getUTCFullYear()}`;
+  const yStr = new Date(ist.getTime() - 86400000).toISOString().substring(0, 10);
+  const projects = await env.DB.prepare('SELECT * FROM projects WHERE deleted_at IS NULL AND status != \'completed\' ORDER BY name').all();
+  let html = `<h1 style="font-size:20px">NirmaanCRM — Morning report, ${dateStr}</h1>`;
+  if (!projects.results.length) html += '<p>No active projects yet.</p>';
   for (const p of projects.results) {
-    html += `<h2>${p.name}</h2>`;
-
-    // Yesterday's DPR
-    const yesterday = new Date(istDate);
-    yesterday.setUTCDate(yesterday.getUTCDate() - 1);
-    const yStr = yesterday.toISOString().substring(0, 10);
-    const dpr = await env.DB.prepare(
-      'SELECT * FROM site_dprs WHERE project_id = ? AND report_date = ? LIMIT 1'
-    ).bind(p.id, yStr).first();
-
-    if (dpr) {
-      html += `<p>• Yesterday: ${dpr.work_summary}. Labour: ${dpr.labour_count || '—'}.</p>`;
-    } else {
-      html += `<p style="color:#dc2626;">• ⚠ NO REPORT FILED yesterday.</p>`;
-    }
-
-    // Milestones done
-    const milestones = await env.DB.prepare(
-      'SELECT * FROM site_milestones WHERE project_id = ? AND status = ? AND actual_date IS NOT NULL ORDER BY actual_date DESC LIMIT 5'
-    ).bind(p.id, 'done').all();
-
-    if (milestones.results.length > 0) {
-      html += `<p>• Milestones done: ${milestones.results.map((m) => m.name).join(', ')}.</p>`;
-    }
-
-    // Approvals expiring
-    const approvals = await env.DB.prepare(
-      'SELECT * FROM apr_items WHERE project_id = ? AND deleted_at IS NULL AND valid_till IS NOT NULL AND date(valid_till) <= date(\'now\', \'+30 days\') AND status != \'approved\''
-    ).bind(p.id).all();
-
-    if (approvals.results.length > 0) {
-      html += `<p>• Approvals expiring ≤30 days: ${approvals.results.length}.</p>`;
-    }
+    html += `<h2 style="font-size:17px;margin-top:18px">${esc(p.name)}</h2><ul>`;
+    const dpr = await env.DB.prepare('SELECT work_summary, labour_count FROM site_dprs WHERE project_id = ? AND report_date = ? AND deleted_at IS NULL LIMIT 1').bind(p.id, yStr).first();
+    html += dpr ? `<li>Yesterday: ${esc(dpr.work_summary)} (labour: ${esc(dpr.labour_count ?? '—')})</li>` : '<li style="color:#b91c1c"><b>No site report was filed yesterday.</b></li>';
+    const ms = await env.DB.prepare("SELECT name FROM site_milestones WHERE project_id = ? AND status = 'done' AND date(actual_date) >= date('now', '-7 days') AND deleted_at IS NULL").bind(p.id).all();
+    if (ms.results.length) html += `<li>Milestones done this week: ${ms.results.map((m) => esc(m.name)).join(', ')}</li>`;
+    const apr = await env.DB.prepare("SELECT COUNT(*) AS n FROM apr_items WHERE project_id = ? AND deleted_at IS NULL AND valid_till IS NOT NULL AND date(valid_till) <= date('now', '+30 days')").bind(p.id).first();
+    if (Number(apr.n)) html += `<li>Approvals expiring within 30 days: <b>${apr.n}</b></li>`;
+    const snag = await env.DB.prepare("SELECT COUNT(*) AS n FROM site_snags WHERE project_id = ? AND deleted_at IS NULL AND severity = 'high' AND status != 'verified'").bind(p.id).first();
+    if (Number(snag.n)) html += `<li>Open high-severity snags: <b>${snag.n}</b></li>`;
+    const po = await env.DB.prepare("SELECT COUNT(*) AS n FROM pro_pos WHERE project_id = ? AND deleted_at IS NULL AND status = 'pending_approval'").bind(p.id).first();
+    if (Number(po.n)) html += `<li>Purchase orders waiting for approval: <b>${po.n}</b></li>`;
+    html += '</ul>';
   }
-
-  html += `<p><a href="${env.EXTERNAL_URL || 'https://nirmaan-crm.savai-dhaval.workers.dev'}">Open dashboard</a></p>`;
-
-  return sendMail(env, recipientEmail, `🏗️ NirmaanCRM — Morning Report, ${dateStr}`, html);
+  const od = await env.DB.prepare("SELECT COUNT(*) AS n, COALESCE(SUM(amount_paise + COALESCE(gst_paise,0) - settled_paise), 0) AS t FROM sal_demands WHERE status NOT IN ('paid','cancelled','scheduled') AND due_date < date('now')").first();
+  if (Number(od.n)) html += `<p><b>Overdue customer payments:</b> ${od.n} demand(s), ₹${(Number(od.t) / 100).toLocaleString('en-IN')}</p>`;
+  const base = env.EXTERNAL_URL || '';
+  if (base) html += `<p><a href="${esc(base)}">Open NirmaanCRM</a></p>`;
+  return sendMail(env, recipientEmail, `NirmaanCRM — Morning report, ${dateStr}`, html, { template: 'digest' });
 }
 
-async function getAllSettings(env) {
-  const rows = await env.DB.prepare('SELECT key, value_json FROM settings').all();
-  const s = {};
-  for (const r of rows.results) {
-    try { s[r.key] = JSON.parse(r.value_json); } catch (e) { s[r.key] = r.value_json; }
+// 19:00 IST: tell PMs/Owners which active projects have no report today.
+export async function notifyMissingDprs(env) {
+  const today = new Date(Date.now() + 19800000).toISOString().substring(0, 10);
+  const missing = await env.DB.prepare(`SELECT p.id, p.name FROM projects p WHERE p.deleted_at IS NULL AND p.status NOT IN ('completed', 'on_hold')
+    AND NOT EXISTS (SELECT 1 FROM site_dprs d WHERE d.project_id = p.id AND d.report_date = ? AND d.deleted_at IS NULL)`).bind(today).all();
+  if (!missing.results.length) return 0;
+  const users = await env.DB.prepare("SELECT id FROM users WHERE active = 1 AND deleted_at IS NULL AND role IN ('owner', 'pm')").all();
+  for (const m of missing.results) for (const u of users.results) {
+    await env.DB.prepare('INSERT INTO notifications (user_id, title, body, link, created_at) VALUES (?, ?, ?, ?, ?)').bind(u.id, `No site report yet: ${m.name}`, 'Nobody has filed today\'s work report.', 'site', nowStr()).run();
   }
-  return s;
-}
-
-async function decryptSetting(env, encryptedB64) {
-  // Placeholder — Phase 13 will wire AES-GCM decryption with APP_KEY
-  return encryptedB64;
+  return missing.results.length;
 }
