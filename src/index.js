@@ -2605,7 +2605,7 @@ router.post('/api/storage/google/disconnect', async (req, env) => {
       await setSettingRaw(env, 'storage.gdrive.status', 'not_connected', user.user_id);
       await setSettingRaw(env, 'storage.gdrive.refresh_token_enc', null, user.user_id);
       await setSettingRaw(env, 'storage.gdrive.access_token_enc', null, user.user_id);
-      await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, ?, 'storage', 0, 'Google Drive disconnected', ?)`).bind(user.user_id, now).run();
+      await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, 'disconnect', 'storage', 0, 'Google Drive disconnected', ?)`).bind(user.user_id, now).run();
       return json({ ok: true });
     } catch (e) {
       return json({ ok: false, error: 'gdrive-disconnect: ' + e.message }, 500);
