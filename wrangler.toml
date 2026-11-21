@@ -19,6 +19,7 @@ crons = ["30 2 * * *", "30 13 * * *", "30 * * * *", "30 20 * * *"]
 
 [vars]
 ENVIRONMENT = "production"
+EXTERNAL_URL = "https://crm.mysociety.tech"
 
 [env.staging]
 name = "nirmaan-crm-staging"
