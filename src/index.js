@@ -11,6 +11,7 @@ import { query } from './core/db.js';
 import { sendMail, retryFailedEmails, sendDigest, notifyMissingDprs, getEmailConfig, esc as escHtml } from './core/mail.js';
 import * as gdrive from './core/gdrive.js';
 import { registerSalesOps, expireHolds, LEAD_TRANSITIONS } from './routes/sales_ops.js';
+import { registerReports } from './routes/reports.js';
 
 const router = new Router();
 
@@ -1961,6 +1962,7 @@ async function driveResponse(env, doc, req, disposition) {
 }
 
 
+registerReports(router, { withAuth, json, serverError, visibleProjectIds, getSetting, nowStr });
 registerSalesOps(router, { withAuth, json, serverError, visibleProjectIds, userCan, getSetting, nowStr, encryptSetting, clientIp, checkRateLimit });
 
 // ---------- Branding routes ----------

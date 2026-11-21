@@ -343,6 +343,22 @@ export function registerSalesOps(router, h) {
     } catch (e) { return serverError(e, 'reverse'); }
   }));
 
+  // Agreement for sale / registration dates (drives the "Registered" state on the stacking plan)
+  router.post('/api/sales/bookings/:id/registration', async (req, env) => withAuth(req, env, 'sales', 'A', async (req, env) => {
+    try {
+      const booking = await env.DB.prepare("SELECT * FROM sal_bookings WHERE id = ? AND status <> 'cancelled' AND deleted_at IS NULL").bind(Number(req.params.id)).first();
+      if (!booking) return json({ ok: false, error: 'Active booking not found.' }, 404);
+      if (!(await visibleProjectIds(env, req.user)).includes(booking.project_id)) return json({ ok: false, error: 'Not allowed.' }, 403);
+      const b = await req.json();
+      const ok = (d) => d === null || d === undefined || d === '' || /^\d{4}-\d{2}-\d{2}$/.test(String(d));
+      if (!ok(b.agreement_date) || !ok(b.registration_date)) return json({ ok: false, error: 'Dates must look like 2026-11-30.' }, 400);
+      await env.DB.prepare('UPDATE sal_bookings SET agreement_date = COALESCE(?, agreement_date), registration_date = COALESCE(?, registration_date), status = CASE WHEN ? IS NOT NULL THEN \'registered\' ELSE status END WHERE id = ?')
+        .bind(b.agreement_date || null, b.registration_date || null, b.registration_date || null, booking.id).run();
+      await audit(env, req.user, 'registration', 'sal_bookings', booking.id, `Booking of ${booking.customer_name}: agreement ${b.agreement_date || '-'}, registration ${b.registration_date || '-'}`);
+      return json({ ok: true });
+    } catch (e) { return serverError(e, 'registration'); }
+  }));
+
   // ---------- Cancellation, refunds, unit transfer ----------
   router.post('/api/sales/bookings/:id/cancel', async (req, env) => withAuth(req, env, 'sales', 'A', async (req, env) => {
     try {
