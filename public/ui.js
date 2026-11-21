@@ -10,8 +10,14 @@ async function api(path, options = {}) {
     ...options.headers,
   };
 
+  let body = options.body;
+  if (body && typeof body === 'object' && !(body instanceof FormData) && !(body instanceof Blob) && !(body instanceof ArrayBuffer)) {
+    body = JSON.stringify(body);
+  }
+  if (body instanceof FormData || body instanceof Blob) delete headers['Content-Type'];
   const res = await fetch(API_BASE + path, {
     ...options,
+    body,
     headers,
     credentials: 'include',
   });

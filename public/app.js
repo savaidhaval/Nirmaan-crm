@@ -1,28 +1,11 @@
 // app.js — NirmaanCRM frontend application router
 // Handles client-side routing, API calls, and page rendering.
 
-const API_BASE = '';
 let currentUser = null;
 let currentPage = 'home';
 
 // ---------- Auth helpers ----------
-async function api(path, options = {}) {
-  const headers = {
-    'Content-Type': 'application/json',
-    'X-NirmaanCRM': '1',
-    ...options.headers,
-  };
-  const res = await fetch(API_BASE + path, {
-    ...options,
-    headers,
-    credentials: 'include',
-  });
-  let data;
-  try { data = await res.json(); } catch (e) { throw new Error(res.statusText || 'Request failed'); }
-  if (!res.ok) throw new Error(data && data.error ? data.error : `Request failed (${res.status})`);
-  return data;
-}
-
+// api() lives in ui.js
 async function loadUser() {
   try {
     const data = await api('/api/auth/me');

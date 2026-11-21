@@ -287,7 +287,7 @@ router.post('/api/documents', async (req, env) => {
       const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
       const result = await env.DB.prepare(`
         INSERT INTO documents (project_id, title, category, kind, module, entity, entity_id, mime, size_bytes, store, drive_file_id, drive_folder_id, thumb_drive_file_id, md5, audience, language, series_key, version, is_latest, supersedes_id, external_url, r2_key, blob_id, uploaded_by, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).bind(project_id || null, title, category || 'other', kind || 'file', module || null, entity || null, entity_id || null, mime || null, size_bytes || 0, store || null, drive_file_id || null, drive_folder_id || null, thumb_drive_file_id || null, md5 || null, audience || 'internal', language || null, series_key || null, version || 1, is_latest !== undefined ? is_latest : 1, supersedes_id || null, external_url || null, r2_key || null, blob_id || null, user.user_id, now).run();
       await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, ?, 'documents', ?, ?, ?)`).bind(user.user_id, 'create', result.meta.last_row_id, `Uploaded document "${title}"`, now).run();
       return json({ ok: true, data: { id: result.meta.last_row_id } });
@@ -423,7 +423,7 @@ router.post('/api/approvals', async (req, env) => {
         return json({ ok: false, error: 'Not allowed.' }, 403);
       }
       const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
-      const result = await env.DB.prepare(`INSERT INTO apr_items (project_id, name, authority, category, stage_order, status, applied_on, approved_on, valid_till, reminder_days, renew_months, owner_user_id, consultant, fee_paise, notes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(project_id, name, authority || '', category || 'approval', stage_order || 100, status || 'not_started', applied_on || null, approved_on || null, valid_till || null, reminder_days || 30, renew_months || null, owner_user_id || null, consultant || '', fee_paise || 0, notes || '', now).run();
+      const result = await env.DB.prepare(`INSERT INTO apr_items (project_id, name, authority, category, stage_order, status, applied_on, approved_on, valid_till, reminder_days, renew_months, owner_user_id, consultant, fee_paise, notes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(project_id, name, authority || '', category || 'approval', stage_order || 100, status || 'not_started', applied_on || null, approved_on || null, valid_till || null, reminder_days || 30, renew_months || null, owner_user_id || null, consultant || '', fee_paise || 0, notes || '', now).run();
       await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, ?, 'apr_items', ?, ?, ?)`).bind(user.user_id, 'create', result.meta.last_row_id, `Created approval "${name}"`, now).run();
       return json({ ok: true, data: { id: result.meta.last_row_id } });
     } catch (e) {
@@ -456,7 +456,7 @@ router.post('/api/approvals/:id/event', async (req, env) => {
       const user = req.user;
       const id = Number(req.params.id);
       const body = await req.json();
-      const { event, note } = body;
+      const { event, note, applied_on, approved_on } = body;
       if (!event) {
         return json({ ok: false, error: 'Event is required.' }, 400);
       }
@@ -482,7 +482,7 @@ router.post('/api/approvals/:id/event', async (req, env) => {
       if (event === 'applied' && applied_on) { updates.push('applied_on = ?'); vals.push(applied_on); }
       if (event === 'approved' && approved_on) { updates.push('approved_on = ?'); vals.push(approved_on); }
       if (updates.length > 0) {
-        vals.push(now, id);
+        vals.push(id);
         await query(env.DB, `UPDATE apr_items SET ${updates.join(', ')} WHERE id = ?`, vals);
       }
       await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, ?, 'apr_items', ?, ?, ?)`).bind(user.user_id, 'event', id, `Approval event: ${event}`, now).run();
@@ -816,7 +816,7 @@ router.get('/api/sales/inventory', async (req, env) => {
   return withAuth(req, env, 'sales', 'V', async (req, env) => {
     try {
       const user = req.user;
-      const projectId = req.url.searchParams.get('project_id');
+      const projectId = new URL(req.url).searchParams.get('project_id');
       if (!projectId) return json({ ok: false, error: 'project_id required.' }, 400);
       const ids = await visibleProjectIds(env, user);
       if (!ids.includes(Number(projectId))) {
@@ -834,10 +834,10 @@ router.get('/api/sales/inventory', async (req, env) => {
 router.get('/api/branding', async (req, env) => {
   return withAuth(req, env, 'branding', 'V', async (req, env) => {
     try {
-      const projectId = req.url.searchParams.get('project_id') || null;
-      const row = await env.DB.prepare('SELECT * FROM brand_profiles WHERE project_id IS ?').bind(projectId === null ? null : Number(projectId)).first();
-      // Actually use COALESCE for project_id NULL vs value
-      const rows = await env.DB.prepare('SELECT * FROM brand_profiles WHERE project_id IS NULL').all();
+      const pid = new URL(req.url).searchParams.get('project_id');
+      const rows = pid
+        ? await env.DB.prepare('SELECT * FROM brand_profiles WHERE project_id = ?').bind(Number(pid)).all()
+        : await env.DB.prepare('SELECT * FROM brand_profiles WHERE project_id IS NULL').all();
       return json({ ok: true, data: { branding: rows.results[0] || null } });
     } catch (e) {
       return json({ ok: false, error: 'branding: ' + e.message }, 500);
@@ -851,13 +851,23 @@ router.post('/api/branding', async (req, env) => {
       const user = req.user;
       const body = await req.json();
       const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
-      await env.DB.prepare(`INSERT INTO brand_profiles (project_id, legal_name, trade_name, tagline, address, phone, email, website, gstin, cin_or_llpin, promoter_rera_ref, pan_enc, bank_account_name, bank_name, bank_branch, bank_ifsc, bank_account_enc, signatory_name, signatory_title, footer_text, wa_intro_text, colour_primary, colour_secondary, colour_accent, letterhead_mode, margin_top_mm, margin_bottom_mm, margin_side_mm, updated_by, updated_at, created_at) VALUES (NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(
-        body.legal_name || '', body.trade_name || '', body.tagline || '', body.address || '', body.phone || '', body.email || '', body.website || '',
-        body.gstin || '', body.cin_or_llpin || '', body.promoter_rera_ref || '', body.pan_enc || null, body.bank_account_name || '', body.bank_name || '',
-        body.bank_branch || '', body.bank_ifsc || '', body.bank_account_enc || null, body.signatory_name || '', body.signatory_title || '',
-        body.footer_text || '', body.wa_intro_text || '', body.colour_primary || '#1d4ed8', body.colour_secondary || '', body.colour_accent || '',
-        body.letterhead_mode || 'generated', body.margin_top_mm || 45, body.margin_bottom_mm || 30, body.margin_side_mm || 20, user.user_id, now
-      ).run();
+      const fields = ['legal_name', 'trade_name', 'tagline', 'address', 'phone', 'email', 'website', 'gstin', 'cin_or_llpin', 'promoter_rera_ref',
+        'pan_enc', 'bank_account_name', 'bank_name', 'bank_branch', 'bank_ifsc', 'bank_account_enc', 'signatory_name', 'signatory_title',
+        'footer_text', 'wa_intro_text', 'colour_primary', 'colour_secondary', 'colour_accent', 'letterhead_mode',
+        'margin_top_mm', 'margin_bottom_mm', 'margin_side_mm'];
+      const defaults = { colour_primary: '#1d4ed8', letterhead_mode: 'generated', margin_top_mm: 45, margin_bottom_mm: 30, margin_side_mm: 20 };
+      const vals = fields.map((f) => (body[f] !== undefined && body[f] !== '' ? body[f] : (defaults[f] ?? (f.endsWith('_enc') ? null : ''))));
+      const projectId = body.project_id ? Number(body.project_id) : null;
+      const existing = projectId
+        ? await env.DB.prepare('SELECT id FROM brand_profiles WHERE project_id = ?').bind(projectId).first()
+        : await env.DB.prepare('SELECT id FROM brand_profiles WHERE project_id IS NULL').first();
+      if (existing) {
+        await env.DB.prepare(`UPDATE brand_profiles SET ${fields.map((f) => f + ' = ?').join(', ')}, updated_by = ?, updated_at = ? WHERE id = ?`)
+          .bind(...vals, user.user_id, now, existing.id).run();
+      } else {
+        await env.DB.prepare(`INSERT INTO brand_profiles (project_id, ${fields.join(', ')}, updated_by, updated_at, created_at) VALUES (?, ${fields.map(() => '?').join(', ')}, ?, ?, ?)`)
+          .bind(projectId, ...vals, user.user_id, now, now).run();
+      }
       await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, ?, 'brand_profiles', ?, ?, ?)`).bind(user.user_id, 'create', 0, 'Updated company branding', now).run();
       return json({ ok: true });
     } catch (e) {
@@ -887,10 +897,10 @@ router.post('/api/share-links', async (req, env) => {
       if (!document_id) return json({ ok: false, error: 'Document is required.' }, 400);
       const token = crypto.getRandomValues(new Uint8Array(32));
       const tokenHash = await crypto.subtle.digest('SHA-256', token);
-      const tokenB64 = bytesToBase64(token);
+      const tokenB64 = bytesToBase64(token).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
       const hashB64 = bytesToBase64(new Uint8Array(tokenHash));
       const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
-      const result = await env.DB.prepare(`INSERT INTO share_links (token_hash, document_id, project_id, recipient_label, created_by, expires_at, max_views, created_at) VALUES (?, ?, NULL, ?, ?, ?, ?, ?)`).bind(hashB64, document_id, recipient_label || '', user.user_id, expires_at, max_views || null, now).run();
+      const result = await env.DB.prepare(`INSERT INTO share_links (token_hash, document_id, project_id, recipient_label, created_by, expires_at, max_views, created_at) VALUES (?, ?, NULL, ?, ?, ?, ?, ?)`).bind(hashB64, document_id, recipient_label || '', user.user_id, expires_at || new Date(Date.now() + 30 * 86400000).toISOString().replace('T', ' ').substring(0, 19), max_views || null, now).run();
       await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, ?, 'share_links', ?, ?, ?)`).bind(user.user_id, 'create', result.meta.last_row_id, `Created share link`, now).run();
       return json({ ok: true, data: { token: tokenB64, link: `/s/${tokenB64}` } });
     } catch (e) {
@@ -1102,47 +1112,49 @@ router.get('/api/dashboard', async (req, env) => {
     try {
       const user = req.user;
       const ids = await visibleProjectIds(env, user);
-      let projectFilter = '';
-      const params = [];
-      if (user.role !== 'owner' && ids.length > 0) {
-        projectFilter = 'AND project_id IN (' + ids.map(() => '?').join(',') + ')';
-        params.push(...ids);
+      if (ids.length === 0) {
+        return json({ ok: true, data: { moneyIn: 0, overdueReceivables: { total: 0, cnt: 0 }, billsDue: { total: 0, cnt: 0 }, posPending: 0, dprsYesterday: 0, highSnags: 0, newLeads: 0 } });
       }
+      const inList = '(' + ids.map(() => '?').join(',') + ')';
+      const params = ids;
 
-      // Money in - collected this month
+      // Money in - collected this month (non-reversed receipts)
       const collected = await env.DB.prepare(
-        `SELECT COALESCE(SUM(amount_paise + tds_paise), 0) as total FROM sal_receipts WHERE deleted_at IS NULL ${projectFilter} AND strftime('%Y-%m', received_on) = strftime('%Y-%m', 'now')`
+        `SELECT COALESCE(SUM(r.amount_paise + r.tds_paise), 0) as total FROM sal_receipts r JOIN sal_bookings b ON b.id = r.booking_id
+         WHERE r.reversed_at IS NULL AND b.project_id IN ${inList} AND strftime('%Y-%m', r.received_on) = strftime('%Y-%m', 'now')`
       ).bind(...params).first();
 
       // Overdue receivables
       const overdue = await env.DB.prepare(
-        `SELECT COALESCE(SUM(amount_paise - settled_paise), 0) as total, COUNT(*) as cnt FROM sal_demands WHERE deleted_at IS NULL ${projectFilter} AND status != 'paid' AND status != 'cancelled' AND due_date < date('now')`
+        `SELECT COALESCE(SUM(d.amount_paise + COALESCE(d.gst_paise, 0) - d.settled_paise), 0) as total, COUNT(*) as cnt FROM sal_demands d JOIN sal_bookings b ON b.id = d.booking_id
+         WHERE b.project_id IN ${inList} AND d.status NOT IN ('paid', 'cancelled') AND d.due_date < date('now')`
       ).bind(...params).first();
 
-      // Bills due ≤7 days
+      // Bills due <=7 days
       const billsDue = await env.DB.prepare(
-        `SELECT COALESCE(SUM(amount_paise), 0) as total, COUNT(*) as cnt FROM pro_bills WHERE deleted_at IS NULL ${projectFilter} AND status != 'paid' AND status != 'cancelled' AND due_date <= date('now', '+7 days')`
+        `SELECT COALESCE(SUM(bl.amount_paise), 0) as total, COUNT(*) as cnt FROM pro_bills bl JOIN pro_pos p ON p.id = bl.po_id
+         WHERE p.project_id IN ${inList} AND bl.status NOT IN ('paid', 'cancelled') AND bl.due_date <= date('now', '+7 days')`
       ).bind(...params).first();
 
       // POs pending approval
       const posPending = await env.DB.prepare(
-        `SELECT COUNT(*) as cnt FROM pro_pos WHERE deleted_at IS NULL ${projectFilter} AND status = 'pending_approval'`
+        `SELECT COUNT(*) as cnt FROM pro_pos WHERE deleted_at IS NULL AND project_id IN ${inList} AND status = 'pending_approval'`
       ).bind(...params).first();
 
-      // Site reports yesterday
-      const yesterday = new Date(Date.now() - 86400000).toISOString().substring(0, 10);
+      // Site reports yesterday (IST)
+      const yesterday = new Date(Date.now() + 19800000 - 86400000).toISOString().substring(0, 10);
       const dprsYesterday = await env.DB.prepare(
-        `SELECT COUNT(*) as cnt FROM site_dprs WHERE deleted_at IS NULL ${projectFilter} AND report_date = ?`
+        `SELECT COUNT(*) as cnt FROM site_dprs WHERE deleted_at IS NULL AND project_id IN ${inList} AND report_date = ?`
       ).bind(...params, yesterday).first();
 
       // Open high snags
       const highSnags = await env.DB.prepare(
-        `SELECT COUNT(*) as cnt FROM site_snags WHERE deleted_at IS NULL ${projectFilter} AND severity = 'high' AND status != 'verified'`
+        `SELECT COUNT(*) as cnt FROM site_snags WHERE deleted_at IS NULL AND project_id IN ${inList} AND severity = 'high' AND status != 'verified'`
       ).bind(...params).first();
 
       // New leads this week
       const newLeads = await env.DB.prepare(
-        `SELECT COUNT(*) as cnt FROM sal_leads WHERE deleted_at IS NULL ${projectFilter} AND status = 'new' AND date(created_at) >= date('now', '-7 days')`
+        `SELECT COUNT(*) as cnt FROM sal_leads WHERE deleted_at IS NULL AND project_id IN ${inList} AND status = 'new' AND date(created_at) >= date('now', '-7 days')`
       ).bind(...params).first();
 
       return json({
@@ -1169,21 +1181,16 @@ router.get('/api/reports/receivables', async (req, env) => {
     try {
       const user = req.user;
       const ids = await visibleProjectIds(env, user);
-      let pf = '';
-      const p = [];
-      if (user.role !== 'owner' && ids.length > 0) {
-        pf = 'AND project_id IN (' + ids.map(() => '?').join(',') + ')';
-        p.push(...ids);
-      }
+      if (ids.length === 0) return json({ ok: true, data: { rows: [] } });
       const rows = await env.DB.prepare(
         `SELECT b.customer_name, b.agreed_price_paise, COALESCE(SUM(r.amount_paise + r.tds_paise), 0) as collected,
          (b.agreed_price_paise - COALESCE(SUM(r.amount_paise + r.tds_paise), 0)) as balance,
          b.status
          FROM sal_bookings b
-         LEFT JOIN sal_receipts r ON r.booking_id = b.id AND r.deleted_at IS NULL
-         WHERE b.deleted_at IS NULL ${pf}
+         LEFT JOIN sal_receipts r ON r.booking_id = b.id AND r.reversed_at IS NULL
+         WHERE b.deleted_at IS NULL AND b.project_id IN (${ids.map(() => '?').join(',')})
          GROUP BY b.id ORDER BY b.created_at DESC LIMIT 200`
-      ).bind(...p).all();
+      ).bind(...ids).all();
       return json({ ok: true, data: { rows: rows.results } });
     } catch (e) {
       return json({ ok: false, error: 'receivables: ' + e.message }, 500);
@@ -1194,12 +1201,14 @@ router.get('/api/reports/receivables', async (req, env) => {
 router.get('/api/reports/purchase-register', async (req, env) => {
   return withAuth(req, env, 'reports', 'V', async (req, env) => {
     try {
+      const ids = await visibleProjectIds(env, req.user);
+      if (ids.length === 0) return json({ ok: true, data: { rows: [] } });
       const rows = await env.DB.prepare(
         `SELECT p.po_no, v.name as vendor, p.amount_paise, p.total_paise, p.status, p.created_at
          FROM pro_pos p
          JOIN pro_vendors v ON v.id = p.vendor_id
-         WHERE p.deleted_at IS NULL ORDER BY p.created_at DESC LIMIT 200`
-      ).all();
+         WHERE p.deleted_at IS NULL AND p.project_id IN (${ids.map(() => '?').join(',')}) ORDER BY p.created_at DESC LIMIT 200`
+      ).bind(...ids).all();
       return json({ ok: true, data: { rows: rows.results } });
     } catch (e) {
       return json({ ok: false, error: 'purchase: ' + e.message }, 500);
@@ -1412,7 +1421,8 @@ router.get('/s/:token', async (req, env) => {
 router.get('/s/:token/file', async (req, env) => {
   try {
     const tokenB64 = req.params.token;
-    const tokenBytes = Uint8Array.from(atob(tokenB64), c => c.charCodeAt(0));
+    const std = tokenB64.replace(/-/g, '+').replace(/_/g, '/');
+    const tokenBytes = Uint8Array.from(atob(std + '='.repeat((4 - std.length % 4) % 4)), c => c.charCodeAt(0));
     const hash = await crypto.subtle.digest('SHA-256', tokenBytes);
     const hashB64 = bytesToBase64(new Uint8Array(hash));
 

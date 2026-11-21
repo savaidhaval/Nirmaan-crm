@@ -4,7 +4,7 @@
   "description": "NirmaanCRM — CRM + project management for a Mumbai real-estate developer",
   "private": true,
   "devDependencies": {
-    "wrangler": "^3.0.0"
+    "wrangler": "^4.0.0"
   },
   "scripts": {
     "dev": "wrangler dev",
