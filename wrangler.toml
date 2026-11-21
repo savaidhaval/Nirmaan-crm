@@ -5,6 +5,8 @@ compatibility_flags = ["nodejs_compat"]
 
 # Custom domain (zone mysociety.tech is on this Cloudflare account). workers.dev stays available.
 routes = [{ pattern = "crm.mysociety.tech", custom_domain = true }]
+workers_dev = true      # keep the free *.workers.dev address as a fallback
+preview_urls = false
 
 [[d1_databases]]
 binding = "DB"
