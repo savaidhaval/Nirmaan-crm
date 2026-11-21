@@ -264,3 +264,5 @@ select[data-cs] { min-height: 38px; padding: 4px 10px; border-radius: 10px; bord
 @media (max-width: 420px) { .picker { max-width: 120px; } }
 .brandbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 14px; }
 .brandbar select { min-height: 42px; padding: 4px 12px; border: 1px solid var(--border); border-radius: 10px; font: inherit; font-weight: 650; }
+
+.modal input[type=datetime-local], .modal input[type=search], .modal input[type=time] { width: 100%; min-height: var(--btn-h); padding: 10px 14px; font-size: 1rem; border: 1px solid var(--border); border-radius: 11px; background: var(--surface); font-family: inherit; }

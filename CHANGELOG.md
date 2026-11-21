@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- New: lead timeline with mandatory next follow-up, site visits, 1h/4h lead SLA nudges, Today strip, channel partners + brokerage payable, lead funnel report, global search, approval expiry/unanswered-query reminders (08:00 IST), "Needs attention" strip and PM home, notification tap-through.
 - New: brochure library, site photo queue, snag workflow, People/HR, project archive, encrypted PAN/bank, signature/stamp/letterhead styles, demand-letter email, owner checklist, Hindi/Marathi everywhere, privacy/terms pages, cheat sheets, UAT + restore drill, automated security/feature tests.
 - Fix: `visibleProjectIds` duplicated in index.js ignored the "only site is limited" rule and archived projects.
 - Fix: Drive connect (PKCE verifier, callback binds, hidden Connect button).

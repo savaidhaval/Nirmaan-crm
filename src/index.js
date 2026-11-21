@@ -1234,10 +1234,11 @@ router.post('/api/sales/bookings', async (req, env) => {
       const total = stages.reduce((t, s) => t + s.pct_bp, 0);
       if (stages.length && total !== 10000) return json({ ok: false, error: 'The payment plan stages must total 100% before booking.' }, 400);
       const gstBp = b.gst_bp !== undefined ? Number(b.gst_bp) : 500;
+      const partnerId = b.channel_partner_id && (await env.DB.prepare('SELECT id FROM sal_partners WHERE id = ? AND deleted_at IS NULL').bind(Number(b.channel_partner_id)).first()) ? Number(b.channel_partner_id) : null;
       const now = nowStr();
-      const ins = await env.DB.prepare(`INSERT INTO sal_bookings (project_id, unit_id, lead_id, customer_name, phone, email, address, pan, token_paise, agreed_price_paise, gst_bp, status, booking_date, created_by, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'token', ?, ?, ?)`)
-        .bind(unit.project_id, unit.id, b.lead_id || null, b.customer_name, b.phone || '', b.email || '', b.address || '', b.pan ? 'enc:' + (await encryptSetting(env, String(b.pan).trim().toUpperCase())) : '', token, price, gstBp, now.substring(0, 10), req.user.user_id, now).run();
+      const ins = await env.DB.prepare(`INSERT INTO sal_bookings (project_id, unit_id, lead_id, customer_name, phone, email, address, pan, token_paise, agreed_price_paise, gst_bp, status, booking_date, created_by, created_at, channel_partner_id, brokerage_bp)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'token', ?, ?, ?, ?, ?)`)
+        .bind(unit.project_id, unit.id, b.lead_id || null, b.customer_name, b.phone || '', b.email || '', b.address || '', b.pan ? 'enc:' + (await encryptSetting(env, String(b.pan).trim().toUpperCase())) : '', token, price, gstBp, now.substring(0, 10), req.user.user_id, now, partnerId, partnerId ? Math.round(Number(b.brokerage_bp) || 0) || null : null).run();
       const bookingId = ins.meta.last_row_id;
       const stmts = [env.DB.prepare("UPDATE sal_inventory SET status = 'booked', blocked_till = NULL WHERE id = ?").bind(unit.id)];
       let allocated = 0;
@@ -1899,6 +1900,169 @@ router.get('/api/attachments', async (req, env) => {
   });
 });
 
+// ---------- Sales: lead timeline, follow-ups, visits ----------
+async function leadAccess(env, user, id) {
+  const lead = await env.DB.prepare('SELECT * FROM sal_leads WHERE id = ? AND deleted_at IS NULL').bind(id).first();
+  if (!lead) return { err: json({ ok: false, error: 'Lead not found.' }, 404) };
+  const seeAll = ['owner', 'pm'].includes(user.role) || (await getSetting(env, 'sales.share_all_leads')) === 'on';
+  if (!seeAll && lead.assigned_to !== user.user_id) return { err: json({ ok: false, error: 'Not allowed.' }, 403) };
+  if (lead.project_id && !(await visibleProjectIds(env, user)).includes(lead.project_id)) return { err: json({ ok: false, error: 'Not allowed.' }, 403) };
+  return { lead };
+}
+
+router.get('/api/sales/leads/:id', async (req, env) => {
+  return withAuth(req, env, 'sales', 'V', async (req, env) => {
+    const { lead, err } = await leadAccess(env, req.user, Number(req.params.id));
+    if (err) return err;
+    const acts = await env.DB.prepare('SELECT a.*, u.name AS by_name FROM sal_activities a LEFT JOIN users u ON u.id = a.by_user WHERE a.lead_id = ? ORDER BY a.id DESC LIMIT 100').bind(lead.id).all();
+    const visits = await env.DB.prepare('SELECT * FROM sal_visits WHERE lead_id = ? AND deleted_at IS NULL ORDER BY visit_at DESC').bind(lead.id).all();
+    return json({ ok: true, data: { lead, activities: acts.results, visits: visits.results } });
+  });
+});
+
+const LEAD_FLOW = ['new', 'contacted', 'interested', 'visit_scheduled', 'visited', 'negotiating', 'booked', 'lost'];
+router.post('/api/sales/leads/:id/activity', async (req, env) => {
+  return withAuth(req, env, 'sales', 'E', async (req, env) => {
+    const { lead, err } = await leadAccess(env, req.user, Number(req.params.id));
+    if (err) return err;
+    const b = await req.json();
+    const type = ['call', 'whatsapp', 'note', 'email'].includes(b.type) ? b.type : 'note';
+    // Logging a call without saying when to call next is how leads go cold: next follow-up is mandatory unless the lead is closed.
+    const closing = ['booked', 'lost'].includes(b.status);
+    if (type === 'call' && !b.next_followup_at && !closing) return json({ ok: false, error: 'Pick the next follow-up date before saving a call.' }, 400);
+    if (b.status && !LEAD_FLOW.includes(b.status)) return json({ ok: false, error: 'Unknown status.' }, 400);
+    const now = nowStr();
+    const stmts = [env.DB.prepare('INSERT INTO sal_activities (lead_id, type, outcome, note, by_user, created_at) VALUES (?, ?, ?, ?, ?, ?)').bind(lead.id, type, b.outcome || '', b.note || '', req.user.user_id, now),
+      env.DB.prepare(`UPDATE sal_leads SET last_contact_at = ?, first_contact_at = COALESCE(first_contact_at, ?), next_followup_at = ?, status = CASE WHEN ? IS NOT NULL THEN ? WHEN status = 'new' THEN 'contacted' ELSE status END WHERE id = ?`)
+        .bind(now, now, closing ? null : (b.next_followup_at || lead.next_followup_at), b.status || null, b.status || null, lead.id)];
+    await env.DB.batch(stmts);
+    return json({ ok: true });
+  });
+});
+
+router.post('/api/sales/leads/:id/visit', async (req, env) => {
+  return withAuth(req, env, 'sales', 'E', async (req, env) => {
+    const { lead, err } = await leadAccess(env, req.user, Number(req.params.id));
+    if (err) return err;
+    const b = await req.json();
+    if (!b.visit_at) return json({ ok: false, error: 'Pick the visit date and time.' }, 400);
+    const now = nowStr();
+    const r = await env.DB.prepare('INSERT INTO sal_visits (lead_id, project_id, visit_at, status, by_user, created_at) VALUES (?, ?, ?, ?, ?, ?)').bind(lead.id, lead.project_id, b.visit_at, 'scheduled', req.user.user_id, now).run();
+    await env.DB.batch([env.DB.prepare("UPDATE sal_leads SET status = CASE WHEN status IN ('new','contacted','interested') THEN 'visit_scheduled' ELSE status END, next_followup_at = ? WHERE id = ?").bind(b.visit_at, lead.id),
+      env.DB.prepare('INSERT INTO sal_activities (lead_id, type, note, by_user, created_at) VALUES (?, ?, ?, ?, ?)').bind(lead.id, 'visit', `Site visit scheduled for ${b.visit_at}`, req.user.user_id, now)]);
+    return json({ ok: true, data: { id: r.meta.last_row_id } });
+  });
+});
+
+router.post('/api/sales/visits/:id/status', async (req, env) => {
+  return withAuth(req, env, 'sales', 'E', async (req, env) => {
+    const v = await env.DB.prepare('SELECT * FROM sal_visits WHERE id = ? AND deleted_at IS NULL').bind(Number(req.params.id)).first();
+    if (!v) return json({ ok: false, error: 'Visit not found.' }, 404);
+    const { lead, err } = await leadAccess(env, req.user, v.lead_id);
+    if (err) return err;
+    const b = await req.json();
+    if (!['done', 'no_show', 'cancelled'].includes(b.status)) return json({ ok: false, error: 'Unknown status.' }, 400);
+    await env.DB.batch([env.DB.prepare('UPDATE sal_visits SET status = ?, feedback = ? WHERE id = ?').bind(b.status, b.feedback || '', v.id),
+      env.DB.prepare("UPDATE sal_leads SET status = CASE WHEN ? = 'done' THEN 'visited' ELSE status END WHERE id = ?").bind(b.status, lead.id),
+      env.DB.prepare('INSERT INTO sal_activities (lead_id, type, outcome, note, by_user, created_at) VALUES (?, ?, ?, ?, ?, ?)').bind(lead.id, 'visit', b.status, b.feedback || '', req.user.user_id, nowStr())]);
+    return json({ ok: true });
+  });
+});
+
+// Follow-ups due today or overdue, and visits in the next 7 days (for the Sales home strip)
+router.get('/api/sales/followups', async (req, env) => {
+  return withAuth(req, env, 'sales', 'V', async (req, env) => {
+    const user = req.user;
+    const seeAll = ['owner', 'pm'].includes(user.role) || (await getSetting(env, 'sales.share_all_leads')) === 'on';
+    const scope = user.scopeProject ? ' AND project_id = ' + Number(user.scopeProject) : '';
+    const mine = seeAll ? '' : ' AND assigned_to = ' + Number(user.user_id);
+    const leads = await env.DB.prepare(`SELECT id, name, phone, status, next_followup_at, project_id FROM sal_leads WHERE deleted_at IS NULL AND status NOT IN ('booked','lost') AND next_followup_at IS NOT NULL AND date(next_followup_at) <= date('now', '+0 days', '+5 hours', '+30 minutes')${scope}${mine} ORDER BY next_followup_at LIMIT 50`).all();
+    const visits = await env.DB.prepare(`SELECT v.id, v.visit_at, v.status, l.name, l.phone, l.id AS lead_id FROM sal_visits v JOIN sal_leads l ON l.id = v.lead_id WHERE v.deleted_at IS NULL AND v.status = 'scheduled' AND date(v.visit_at) >= date('now') AND date(v.visit_at) <= date('now', '+7 days')${scope.replace('project_id', 'v.project_id')}${mine.replace('assigned_to', 'l.assigned_to')} ORDER BY v.visit_at LIMIT 50`).all();
+    return json({ ok: true, data: { followups: leads.results, visits: visits.results } });
+  });
+});
+
+// ---------- Sales: channel partners + brokerage payable ----------
+router.get('/api/sales/partners', async (req, env) => {
+  return withAuth(req, env, 'sales', 'V', async (req, env) => {
+    if (!['owner', 'pm', 'accounts'].includes(req.user.role)) return json({ ok: false, error: 'Not allowed.' }, 403);
+    const rows = await env.DB.prepare(`SELECT p.*,
+      (SELECT COALESCE(SUM(CAST((SELECT COALESCE(SUM(r.amount_paise + r.tds_paise), 0) FROM sal_receipts r WHERE r.booking_id = b.id AND r.reversed_at IS NULL) * COALESCE(b.brokerage_bp, p.brokerage_default_bp, 0) / 10000 AS INTEGER)), 0) FROM sal_bookings b WHERE b.channel_partner_id = p.id AND b.status <> 'cancelled' AND b.deleted_at IS NULL) AS earned_paise,
+      (SELECT COALESCE(SUM(amount_paise), 0) FROM sal_brokerage_payments x WHERE x.partner_id = p.id AND x.reversed_at IS NULL) AS paid_paise
+      FROM sal_partners p WHERE p.deleted_at IS NULL ORDER BY p.firm`).all();
+    return json({ ok: true, data: { partners: rows.results } });
+  });
+});
+
+router.post('/api/sales/partners', async (req, env) => {
+  return withAuth(req, env, 'sales', 'E', async (req, env) => {
+    if (!['owner', 'pm', 'accounts'].includes(req.user.role)) return json({ ok: false, error: 'Not allowed.' }, 403);
+    const b = await req.json();
+    if (!b.firm) return json({ ok: false, error: 'Firm name is required.' }, 400);
+    const r = await env.DB.prepare('INSERT INTO sal_partners (firm, contact, phone, rera_no, brokerage_default_bp, created_at) VALUES (?, ?, ?, ?, ?, ?)')
+      .bind(b.firm, b.contact || '', b.phone || '', b.rera_no || '', Math.round(Number(b.brokerage_default_bp) || 0), nowStr()).run();
+    return json({ ok: true, data: { id: r.meta.last_row_id } });
+  });
+});
+
+router.post('/api/sales/partners/:id/payments', async (req, env) => {
+  return withAuth(req, env, 'sales', 'A', async (req, env) => {
+    const b = await req.json();
+    const amount = Math.round(Number(b.amount_paise) || 0);
+    if (!(amount > 0)) return json({ ok: false, error: 'Amount is required.' }, 400);
+    const pid = Number(req.params.id);
+    const bk = b.booking_id ? await env.DB.prepare('SELECT id FROM sal_bookings WHERE id = ? AND channel_partner_id = ?').bind(Number(b.booking_id), pid).first() : await env.DB.prepare('SELECT id FROM sal_bookings WHERE channel_partner_id = ? ORDER BY id DESC LIMIT 1').bind(pid).first();
+    if (!bk) return json({ ok: false, error: 'This partner has no bookings yet.' }, 400);
+    await env.DB.prepare('INSERT INTO sal_brokerage_payments (booking_id, partner_id, amount_paise, tds_paise, paid_on, mode, ref_no, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .bind(bk.id, pid, amount, Math.round(Number(b.tds_paise) || 0), b.paid_on || nowStr().substring(0, 10), b.mode || 'bank', b.ref_no || '', nowStr()).run();
+    return json({ ok: true });
+  });
+});
+
+// ---------- Reports: lead funnel, sources, response time ----------
+router.get('/api/reports/funnel', async (req, env) => {
+  return withAuth(req, env, 'reports', 'V', async (req, env) => {
+    if (!userCan(req.user, 'sales', 'V')) return json({ ok: false, error: 'Not allowed.' }, 403);
+    const scope = req.user.scopeProject ? ' AND project_id = ' + Number(req.user.scopeProject) : '';
+    const seeAll = ['owner', 'pm', 'accounts', 'viewer'].includes(req.user.role) || (await getSetting(env, 'sales.share_all_leads')) === 'on';
+    const mine = seeAll ? '' : ' AND assigned_to = ' + Number(req.user.user_id);
+    const status = await env.DB.prepare(`SELECT status, COUNT(*) AS n FROM sal_leads WHERE deleted_at IS NULL${scope}${mine} GROUP BY status`).all();
+    const source = await env.DB.prepare(`SELECT source, COUNT(*) AS n, SUM(status = 'booked') AS booked FROM sal_leads WHERE deleted_at IS NULL${scope}${mine} GROUP BY source ORDER BY n DESC`).all();
+    const resp = await env.DB.prepare(`SELECT AVG((julianday(first_contact_at) - julianday(created_at)) * 24) AS hrs, COUNT(*) AS n FROM sal_leads WHERE deleted_at IS NULL AND first_contact_at IS NOT NULL${scope}${mine}`).first();
+    return json({ ok: true, data: { status: status.results, source: source.results, avg_first_response_hours: resp.hrs == null ? null : Math.round(resp.hrs * 10) / 10, responded: resp.n } });
+  });
+});
+
+// ---------- Global search ----------
+router.get('/api/search', async (req, env) => {
+  return withAuth(req, env, 'projects', 'V', async (req, env) => {
+    const q = String(new URL(req.url).searchParams.get('q') || '').trim();
+    if (q.length < 2) return json({ ok: true, data: { results: [] } });
+    const like = '%' + q.replace(/[%_\\]/g, '') + '%';
+    const user = req.user; const ids = await visibleProjectIds(env, user);
+    const out = [];
+    if (!ids.length) return json({ ok: true, data: { results: [] } });
+    const ph = ids.map(() => '?').join(',');
+    for (const r of (await env.DB.prepare(`SELECT id, name, code FROM projects WHERE deleted_at IS NULL AND id IN (${ph}) AND (name LIKE ? OR code LIKE ?) LIMIT 5`).bind(...ids, like, like).all()).results) out.push({ kind: 'Project', title: r.name, sub: r.code, route: 'projects' });
+    if (userCan(user, 'drawings', 'V')) for (const r of (await env.DB.prepare(`SELECT code, title FROM drw_drawings WHERE deleted_at IS NULL AND project_id IN (${ph}) AND (code LIKE ? OR title LIKE ?) LIMIT 8`).bind(...ids, like, like).all()).results) out.push({ kind: 'Drawing', title: r.code, sub: r.title, route: 'drawings' });
+    if (userCan(user, 'approvals', 'V')) for (const r of (await env.DB.prepare(`SELECT name, status FROM apr_items WHERE deleted_at IS NULL AND project_id IN (${ph}) AND name LIKE ? LIMIT 6`).bind(...ids, like).all()).results) out.push({ kind: 'Approval', title: r.name, sub: r.status, route: 'approvals' });
+    if (userCan(user, 'sales', 'V')) {
+      const seeAll = ['owner', 'pm'].includes(user.role) || (await getSetting(env, 'sales.share_all_leads')) === 'on';
+      for (const r of (await (seeAll ? env.DB.prepare('SELECT id, name, phone FROM sal_leads WHERE deleted_at IS NULL AND (name LIKE ? OR phone LIKE ?) LIMIT 8').bind(like, like) : env.DB.prepare('SELECT id, name, phone FROM sal_leads WHERE deleted_at IS NULL AND assigned_to = ? AND (name LIKE ? OR phone LIKE ?) LIMIT 8').bind(user.user_id, like, like)).all()).results) out.push({ kind: 'Lead', title: r.name, sub: r.phone, route: 'sales' });
+      for (const r of (await env.DB.prepare(`SELECT b.customer_name, i.unit_no FROM sal_bookings b JOIN sal_inventory i ON i.id = b.unit_id WHERE b.deleted_at IS NULL AND b.project_id IN (${ph}) AND (b.customer_name LIKE ? OR i.unit_no LIKE ?) LIMIT 6`).bind(...ids, like, like).all()).results) out.push({ kind: 'Booking', title: r.customer_name, sub: 'Flat ' + r.unit_no, route: 'sales' });
+    }
+    if (userCan(user, 'procurement', 'V') && user.role !== 'site') {
+      for (const r of (await env.DB.prepare('SELECT name, phone FROM pro_vendors WHERE deleted_at IS NULL AND (name LIKE ? OR phone LIKE ?) LIMIT 6').bind(like, like).all()).results) out.push({ kind: 'Vendor', title: r.name, sub: r.phone || '', route: 'procurement' });
+      for (const r of (await env.DB.prepare(`SELECT po_no, status FROM pro_pos WHERE deleted_at IS NULL AND project_id IN (${ph}) AND po_no LIKE ? LIMIT 6`).bind(...ids, like).all()).results) out.push({ kind: 'PO', title: r.po_no, sub: r.status, route: 'procurement' });
+    }
+    for (const r of (await env.DB.prepare(`SELECT title, category, module, audience FROM documents WHERE deleted_at IS NULL AND (series_key IS NULL OR series_key NOT LIKE 'brand:%') AND (project_id IS NULL OR project_id IN (${ph})) AND title LIKE ? LIMIT 8`).bind(...ids, like).all()).results) {
+      if (r.module === 'brochure' && r.audience !== 'customer' && !['owner', 'pm'].includes(user.role)) continue;
+      out.push({ kind: r.module === 'brochure' ? 'Brochure' : 'Document', title: r.title, sub: r.category || '', route: r.module === 'brochure' ? 'brochures' : 'documents' });
+    }
+    return json({ ok: true, data: { results: out.slice(0, 40) } });
+  });
+});
+
 // ---------- Branding routes ----------
 router.get('/api/branding', async (req, env) => {
   return withAuth(req, env, 'branding', 'V', async (req, env) => {
@@ -2406,9 +2570,14 @@ router.get('/api/dashboard', async (req, env) => {
         `SELECT COUNT(*) as cnt FROM sal_leads WHERE deleted_at IS NULL AND project_id IN ${inList} AND status = 'new' AND date(created_at) >= date('now', '-7 days')`
       ).bind(...params).first();
 
+      const expiring = await env.DB.prepare(`SELECT COUNT(*) AS n FROM apr_items WHERE deleted_at IS NULL AND project_id IN ${inList} AND valid_till IS NOT NULL AND status NOT IN ('na') AND date(valid_till) <= date('now', '+30 days')`).bind(...params).first();
+      const staleQueries = await env.DB.prepare(`SELECT COUNT(*) AS n FROM apr_items i WHERE i.deleted_at IS NULL AND i.project_id IN ${inList} AND i.status = 'query' AND COALESCE((SELECT MAX(created_at) FROM apr_events e WHERE e.item_id = i.id), i.created_at) < datetime('now', '-5 days')`).bind(...params).first();
+      const waiting = await env.DB.prepare(`SELECT COUNT(*) AS n FROM drw_drawings d WHERE d.deleted_at IS NULL AND d.project_id IN ${inList} AND d.waiting_consultant = 1 AND NOT EXISTS (SELECT 1 FROM drw_revisions r WHERE r.drawing_id = d.id AND r.status = 'ifc')`).bind(...params).first();
+      const followupsDue = await env.DB.prepare(`SELECT COUNT(*) AS n FROM sal_leads WHERE deleted_at IS NULL AND project_id IN ${inList} AND status NOT IN ('booked','lost') AND next_followup_at IS NOT NULL AND date(next_followup_at) <= date('now', '+5 hours', '+30 minutes')`).bind(...params).first();
       return json({
         ok: true,
         data: {
+          approvalsExpiring: Number(expiring?.n || 0), staleQueries: Number(staleQueries?.n || 0), waitingConsultant: Number(waiting?.n || 0), followupsDue: Number(followupsDue?.n || 0),
           moneyIn: Number(collected?.total || 0),
           overdueReceivables: { total: Number(overdue?.total || 0), cnt: Number(overdue?.cnt || 0) },
           billsDue: { total: Number(billsDue?.total || 0), cnt: Number(billsDue?.cnt || 0) },
@@ -2857,6 +3026,45 @@ function makeId(len = 16) {
 
 
 // ---------- Cron handler (§7.8 note 6) ----------
+// 08:00 IST: tell Owner/PM about approvals expiring soon and queries nobody has answered for 5+ days (once per item per day).
+async function approvalReminders(env) {
+  const today = new Date(Date.now() + 19800000).toISOString().substring(0, 10);
+  const due = await env.DB.prepare(`SELECT i.id, i.name, i.valid_till, i.reminder_days, p.name AS project FROM apr_items i JOIN projects p ON p.id = i.project_id
+    WHERE i.deleted_at IS NULL AND p.deleted_at IS NULL AND COALESCE(p.status,'') != 'archived' AND i.valid_till IS NOT NULL AND i.status NOT IN ('na', 'rejected')
+    AND date(i.valid_till) <= date('now', '+' || COALESCE(i.reminder_days, 30) || ' days')`).all();
+  const stale = await env.DB.prepare(`SELECT i.id, i.name, p.name AS project FROM apr_items i JOIN projects p ON p.id = i.project_id WHERE i.deleted_at IS NULL AND p.deleted_at IS NULL AND i.status = 'query'
+    AND COALESCE((SELECT MAX(created_at) FROM apr_events e WHERE e.item_id = i.id), i.created_at) < datetime('now', '-5 days')`).all();
+  const users = await env.DB.prepare("SELECT id FROM users WHERE active = 1 AND deleted_at IS NULL AND role IN ('owner', 'pm')").all();
+  const note = async (title, body, key) => {
+    for (const u of users.results) {
+      const dup = await env.DB.prepare("SELECT id FROM notifications WHERE user_id = ? AND link = ? AND date(created_at) = ?").bind(u.id, key, today).first();
+      if (!dup) await env.DB.prepare('INSERT INTO notifications (user_id, title, body, link, created_at) VALUES (?, ?, ?, ?, ?)').bind(u.id, title, body, key, nowStr()).run();
+    }
+  };
+  for (const r of due.results) {
+    const days = Math.round((new Date(r.valid_till) - new Date(today)) / 86400000);
+    await note(days < 0 ? `Expired: ${r.name}` : `Expiring in ${days} days: ${r.name}`, `${r.project} — valid till ${r.valid_till}. Confirm renewal dates with your CA/architect.`, `approvals#${r.id}`);
+  }
+  for (const r of stale.results) await note(`Query unanswered 5+ days: ${r.name}`, r.project, `approvals#q${r.id}`);
+}
+
+// Hourly: a new lead nobody touched in 1 hour nudges its owner; after 4 hours the Owner/PM hear about it. Business hours only (09:00-19:00 IST).
+async function leadSlaNudges(env) {
+  const hour = new Date(Date.now() + 19800000).getUTCHours();
+  if (hour < 9 || hour >= 19) return;
+  const rows = await env.DB.prepare("SELECT id, name, assigned_to, created_at FROM sal_leads WHERE deleted_at IS NULL AND status = 'new' AND first_contact_at IS NULL AND created_at < datetime('now', '-1 hours') LIMIT 50").all();
+  const mgr = await env.DB.prepare("SELECT id FROM users WHERE active = 1 AND deleted_at IS NULL AND role IN ('owner', 'pm')").all();
+  for (const l of rows.results) {
+    const late = l.created_at < new Date(Date.now() - 4 * 3600000).toISOString().replace('T', ' ').substring(0, 19);
+    const targets = late ? mgr.results.map((m) => m.id) : (l.assigned_to ? [l.assigned_to] : []);
+    for (const uid of targets) {
+      const key = `lead#${l.id}:${late ? '4h' : '1h'}`;
+      const dup = await env.DB.prepare('SELECT id FROM notifications WHERE user_id = ? AND link = ?').bind(uid, key).first();
+      if (!dup) await env.DB.prepare('INSERT INTO notifications (user_id, title, body, link, created_at) VALUES (?, ?, ?, ?, ?)').bind(uid, late ? `Lead waiting 4+ hours: ${l.name}` : `New lead not contacted yet: ${l.name}`, 'Please call or WhatsApp them.', key, nowStr()).run();
+    }
+  }
+}
+
 async function scheduled(event, env, ctx) {
   if (env.ENVIRONMENT === 'staging') return; // staging guard
   const cron = event.cron;
@@ -2874,12 +3082,14 @@ async function runCron(cron, env) {
   if (cron === '30 * * * *') {
     // Hourly: retry failed emails (max 3 attempts each)
     await retryFailedEmails(env);
+    await leadSlaNudges(env);
   } else if (cron === '30 2 * * *') {
     // 08:00 IST digest to every active Owner
     const owners = await env.DB.prepare("SELECT email FROM users WHERE role = 'owner' AND active = 1 AND deleted_at IS NULL").all();
     for (const o of owners.results) {
       try { await sendDigest(env, o.email); } catch (e) { console.error('digest failed', e.message); }
     }
+    await approvalReminders(env);
   } else if (cron === '30 13 * * *') {
     // 19:00 IST: in-app nudge for projects with no site report today
     await notifyMissingDprs(env);
