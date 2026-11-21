@@ -94,8 +94,11 @@ ok('site cannot issue revisions', (await site.c.call('POST', `/api/drawings/${di
 const fdSvg = new FormData(); fdSvg.append('file', new Blob(['<svg onload=alert(1)/>'], { type: 'image/svg+xml' }), 'x.svg'); fdSvg.append('title', 'svg');
 ok('SVG upload refused', (await owner.call('POST', '/api/files/upload', fdSvg)).status === 400);
 const fdHtml = new FormData(); fdHtml.append('file', new Blob(['<script>1</script>'], { type: 'text/html' }), 'x.html'); fdHtml.append('title', 'html');
+const fakePdf = new FormData(); fakePdf.append('file', new Blob(['<html>not a pdf</html>'], { type: 'application/pdf' }), 'x.pdf'); fakePdf.append('title', 'fake');
+ok('file whose bytes do not match its type refused', (await owner.call('POST', '/api/files/upload', fakePdf)).status === 400);
 ok('HTML upload refused', (await owner.call('POST', '/api/files/upload', fdHtml)).status === 400);
-const fdBig = new FormData(); fdBig.append('file', new Blob([new Uint8Array(1700000)], { type: 'application/pdf' }), 'big.pdf'); fdBig.append('title', 'big');
+const bigBytes = new Uint8Array(1700000); bigBytes.set([0x25, 0x50, 0x44, 0x46]);
+const fdBig = new FormData(); fdBig.append('file', new Blob([bigBytes], { type: 'application/pdf' }), 'big.pdf'); fdBig.append('title', 'big');
 const big = await owner.call('POST', '/api/files/upload', fdBig);
 ok('over-size file refused or sent to Drive', big.status === 413 || big.status === 200 || big.status === 503, String(big.status));
 const fdSig = new FormData(); fdSig.append('file', new Blob([new Uint8Array(70)], { type: 'image/png' }), 's.png'); fdSig.append('title', 'sig'); fdSig.append('series_key', 'brand:signature');

@@ -1,6 +1,10 @@
 # Changelog
 
 ## Unreleased
+- Audit pass: atomic holds/bookings, 48h holds with expiry, discount approval limits, audited price/plan changes, lead protection (normalised phone, first registration wins), lead state machine, receipt integrity (numbering, cash limit, duplicates, reversal), refunds workflow, unit transfer, Maharashtra cost sheet, RERA 70% routing report, signed lead webhook, append-only audit log, KYC document isolation, magic-byte uploads, sanitized errors, IP login throttle, hashed sessions. See docs/AUDIT.md.
+- Reports and UI: interactive stacking plan, cash flow/escrow, aging, marketing & partner ROI, velocity & discount leakage, charts on the dashboard.
+- Fix: changing the payment plan after bookings crashed (foreign key).
+- New: lead timeline with mandatory next follow-up, site visits, 1h/4h lead SLA nudges, Today strip, channel partners + brokerage payable, lead funnel report, global search, approval expiry/unanswered-query reminders (08:00 IST), "Needs attention" strip and PM home, notification tap-through.
 - New: brochure library, site photo queue, snag workflow, People/HR, project archive, encrypted PAN/bank, signature/stamp/letterhead styles, demand-letter email, owner checklist, Hindi/Marathi everywhere, privacy/terms pages, cheat sheets, UAT + restore drill, automated security/feature tests.
 - Fix: `visibleProjectIds` duplicated in index.js ignored the "only site is limited" rule and archived projects.
 - Fix: Drive connect (PKCE verifier, callback binds, hidden Connect button).

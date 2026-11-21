@@ -33,6 +33,13 @@ Use a real phone for the site steps. Tick each line. Anything that fails: note t
 - [ ] Brochures: upload v1 (customer-shareable), then v2 → v1 under "Older versions". Internal price list does not show for Sales.
 - [ ] Send a brochure link; open it on another phone with no login; Owner cancels it → "expired".
 
+## 4b. Sales follow-up
+- [ ] Open a lead → Log a call: saving without a next follow-up date is refused.
+- [ ] Schedule a visit → it appears under Today; mark Visited with feedback.
+- [ ] A new lead left alone for an hour nudges its owner (business hours only); after 4 hours the Owner/PM are told.
+- [ ] Channel partner: add one, book a flat through them, record a receipt → brokerage payable = percent of money received.
+- [ ] Search (magnifier, top bar) finds a lead, a drawing code, a vendor and a PO.
+
 ## 5. People
 - [ ] Open a position, add a candidate, move to Interview (time), then Hired → appears in Staff.
 
