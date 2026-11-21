@@ -47,3 +47,12 @@ Use a real phone for the site steps. Tick each line. Anything that fails: note t
 - [ ] Download receipts CSV; opens in Excel with ₹ amounts intact.
 - [ ] More → Everything (backup) downloads; run the restore drill (docs/RESTORE.md).
 - [ ] `node tests/security.mjs` and `node tests/features.mjs` pass on staging.
+
+## Phase 2 checks
+1. Finance > Late interest: open a booking with an overdue demand; interest shows; PM "Ask to waive" then Owner approves.
+2. Record an interest receipt; principal due and the 70/30 split do not change.
+3. Import & privacy > Import: upload a 5-row flats CSV with one bad row; bad row listed; others import.
+4. Two-step sign-in: enrol with an authenticator, save recovery codes, sign out, sign in with code; try a recovery code once.
+5. Finance > TDS: record a bill with 194C 1%; a vendor without PAN gets 20%; record the challan; download Tally CSVs.
+6. Booking > Statement of account prints with interest block.
+7. Privacy requests: find by mobile, export, erase a cancelled booking.

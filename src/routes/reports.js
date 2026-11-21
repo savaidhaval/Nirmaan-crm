@@ -48,7 +48,7 @@ export function registerReports(router, h) {
       const dem = await env.DB.prepare(`SELECT substr(d.due_date, 1, 7) AS m, SUM(d.amount_paise + COALESCE(d.gst_paise, 0)) AS due FROM sal_demands d JOIN sal_bookings b ON b.id = d.booking_id
         WHERE b.project_id IN (${ph(ids)}) AND d.status != 'cancelled' AND d.due_date IS NOT NULL GROUP BY m`).bind(...ids).all();
       const rec = await env.DB.prepare(`SELECT substr(r.received_on, 1, 7) AS m, SUM(r.amount_paise + r.tds_paise) AS got FROM sal_receipts r JOIN sal_bookings b ON b.id = r.booking_id
-        WHERE b.project_id IN (${ph(ids)}) AND r.reversed_at IS NULL GROUP BY m`).bind(...ids).all();
+        WHERE b.project_id IN (${ph(ids)}) AND r.reversed_at IS NULL AND r.kind = 'principal' GROUP BY m`).bind(...ids).all();
       const future = await env.DB.prepare(`SELECT COALESCE(SUM(d.amount_paise + COALESCE(d.gst_paise, 0) - d.settled_paise), 0) AS t FROM sal_demands d JOIN sal_bookings b ON b.id = d.booking_id WHERE b.project_id IN (${ph(ids)}) AND d.status = 'scheduled'`).bind(...ids).first();
       const map = {};
       for (const r of dem.results) (map[r.m] = map[r.m] || { month: r.m, due: 0, collected: 0 }).due = r.due;

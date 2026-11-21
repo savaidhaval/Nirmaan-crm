@@ -101,6 +101,18 @@ async function render(d) {
       ${r.tds_paise ? `<tr><td colspan="2">TDS deducted by customer</td><td class="r">${inr(r.tds_paise)}</td></tr>` : ''}</table>
       <div class="words">${rupeeWords(r.amount_paise)}</div>
       <p style="font-size:10pt;color:#555">Subject to realisation of cheque, if paid by cheque.</p>`;
+  } else if (d.kind === 'statement') {
+    const bk = d.booking; const it = d.interest || { accrued: 0, waived: 0, paid: 0, due: 0 };
+    const totalDem = d.demands.reduce((t, x) => t + x.amount_paise + (x.gst_paise || 0), 0); const rec = d.receipts.filter((r) => r.kind !== 'interest').reduce((t, r) => t + r.amount_paise + (r.tds_paise || 0), 0);
+    body = `<div class="doc-title">Statement of Account</div>
+      <div class="two"><div><b>Customer:</b> ${e(bk.customer_name)}<br><b>Flat:</b> ${e((d.unit.wing ? d.unit.wing + '-' : '') + d.unit.unit_no)}</div><div style="text-align:right"><b>As on:</b> ${e(d.as_of)}<br><b>Agreed price:</b> ${inr(bk.agreed_price_paise)}</div></div>
+      <table><tr><th>Demand</th><th>Due</th><th class="r">Amount incl. GST</th><th class="r">Received</th></tr>
+      ${d.demands.map((x) => `<tr><td>${e(x.label)}</td><td>${e(x.due_date || '')}</td><td class="r">${inr(x.amount_paise + (x.gst_paise || 0))}</td><td class="r">${inr(x.settled_paise || 0)}</td></tr>`).join('')}
+      <tr><th colspan="2">Total</th><th class="r">${inr(totalDem)}</th><th class="r">${inr(rec)}</th></tr></table>
+      <table><tr><th>Receipt</th><th>Date</th><th>Mode / ref</th><th class="r">Amount</th></tr>
+      ${d.receipts.map((r) => `<tr><td>${e(r.receipt_no || '')}${r.kind === 'interest' ? ' (interest)' : ''}</td><td>${e(r.received_on)}</td><td>${e(r.mode || '')} ${e(r.ref_no || '')}</td><td class="r">${inr(r.amount_paise)}</td></tr>`).join('')}</table>
+      <table><tr><th colspan="2">Late-payment interest</th></tr><tr><td>Accrued</td><td class="r">${inr(it.accrued)}</td></tr><tr><td>Waived</td><td class="r">− ${inr(it.waived)}</td></tr><tr><td>Paid</td><td class="r">− ${inr(it.paid)}</td></tr><tr><th>Interest due</th><th class="r">${inr(it.due)}</th></tr></table>
+      <p style="font-size:10pt;color:#555">Principal still to be received on demands raised: ${inr(Math.max(totalDem - rec, 0))}. Figures are as per our records on the date shown.</p>`;
   } else {
     // sample: shows margins, a ruler and a dummy letter so artwork can be checked on real paper
     body = `<div class="doc-title">Sample letter</div><p>Dear Sir / Madam,</p><p>This page shows how your letters will look with the current style and margins. Check that the text stays clear of your logo, header and footer artwork when printed on A4.</p>

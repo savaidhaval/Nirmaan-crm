@@ -12,6 +12,10 @@ import { sendMail, retryFailedEmails, sendDigest, notifyMissingDprs, getEmailCon
 import * as gdrive from './core/gdrive.js';
 import { registerSalesOps, expireHolds, LEAD_TRANSITIONS } from './routes/sales_ops.js';
 import { registerReports } from './routes/reports.js';
+import { registerFinance } from './routes/finance.js';
+import { registerMfa, mfaChallenge } from './routes/mfa.js';
+import { registerImporter } from './routes/importer.js';
+import { registerPrivacy } from './routes/privacy.js';
 
 const router = new Router();
 
@@ -27,19 +31,31 @@ function json(data, status = 200) {
   return Response.json(data, { status });
 }
 
+// Roles that must use two-step sign-in (Owner sets this under More → Security). Cached for a minute per isolate.
+let mfaRolesCache = { at: 0, roles: [] };
+async function mfaRequiredRoles(env) {
+  if (Date.now() - mfaRolesCache.at < 60000) return mfaRolesCache.roles;
+  const v = await getSetting(env, 'security.require_mfa_roles');
+  mfaRolesCache = { at: Date.now(), roles: Array.isArray(v) ? v : [] };
+  return mfaRolesCache.roles;
+}
+
 // Returns an error Response when the user may not proceed, else null.
-function authFailure(user, allowMustChange = false) {
+function authFailure(user, allowMustChange = false, mfaRoles = []) {
   if (!user) return json({ ok: false, error: 'Please log in.' }, 401);
   if (!user.active || user.deactivated_at) return json({ ok: false, error: 'Account deactivated.' }, 403);
   if (user.must_change_password && !allowMustChange) {
     return json({ ok: false, error: 'Please choose your own password first.', code: 'must_change_password' }, 403);
+  }
+  if (!allowMustChange && mfaRoles.includes(user.role) && !user.mfa_enabled_at) {
+    return json({ ok: false, error: 'Set up two-step sign-in first (More → Security).', code: 'mfa_enroll' }, 403);
   }
   return null;
 }
 
 async function withAuth(req, env, module, action, handler, requireHeader = true) {
   const user = await getCurrentUser(env, req.headers.get('cookie'));
-  const fail = authFailure(user);
+  const fail = authFailure(user, false, user ? await mfaRequiredRoles(env) : []);
   if (fail) return fail;
   if (['POST', 'PUT', 'DELETE'].includes(req.method) && !/multipart\/form-data/i.test(req.headers.get('content-type') || '') && Number(req.headers.get('content-length') || 0) > 1048576) {
     return json({ ok: false, error: 'That request is too large.' }, 413);
@@ -95,7 +111,8 @@ router.post('/api/auth/login', async (req, env) => {
     return json({ ok: false, error: 'Please enter email and password.' }, 400);
   }
   try {
-    const { user, session } = await loginPassword(env, email, password, req.headers.get('user-agent') || '');
+    const { user, session, early } = await loginPassword(env, email, password, req.headers.get('user-agent') || '', { beforeSession: (u) => mfaChallenge(env, u.id) });
+    if (early) return json({ ok: true, data: { mfa_required: true, mfa_token: early } });
     const res = json({ ok: true, data: { user: safeUser(user), must_change_password: !!user.must_change_password } });
     setSessionCookie(res, session.token, session.expiresAt);
     return res;
@@ -116,7 +133,8 @@ router.get('/api/auth/me', async (req, env) => {
   const user = await getCurrentUser(env, req.headers.get('cookie'));
   if (!user) return json({ ok: false, error: 'Please log in.' }, 401);
   if (!user.active || user.deactivated_at) return json({ ok: false, error: 'Account deactivated.' }, 403);
-  return json({ ok: true, data: { user: safeUser(user), must_change_password: !!user.must_change_password } });
+  const mfaRoles = await mfaRequiredRoles(env);
+  return json({ ok: true, data: { user: safeUser(user), must_change_password: !!user.must_change_password, mfa_enrolled: !!user.mfa_enabled_at, mfa_enroll_required: mfaRoles.includes(user.role) && !user.mfa_enabled_at } });
 });
 
 router.post('/api/auth/change-password', async (req, env) => {
@@ -207,6 +225,8 @@ router.put('/api/projects/:id', async (req, env) => {
     const body = await req.json();
     const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
     const n = (v) => (v === undefined ? null : v);
+    let pct = null;
+    if (body.percent_complete !== undefined) { pct = Math.round(Number(body.percent_complete)); if (!(pct >= 0 && pct <= 100)) return json({ ok: false, error: 'Completion must be between 0 and 100.' }, 400); }
     if (body.status === 'archived') return json({ ok: false, error: 'Use Archive on the Projects screen (Owner only).' }, 400);
     if (body.brand_id && user.role !== 'owner') return json({ ok: false, error: 'Only the Owner can change a project\'s brand.' }, 403);
     let brandId = null;
@@ -214,7 +234,8 @@ router.put('/api/projects/:id', async (req, env) => {
       if (!(await env.DB.prepare('SELECT id FROM brands WHERE id = ? AND deleted_at IS NULL').bind(Number(body.brand_id)).first())) return json({ ok: false, error: 'Unknown brand.' }, 400);
       brandId = Number(body.brand_id);
     }
-    await env.DB.prepare(`UPDATE projects SET name = COALESCE(?, name), code = COALESCE(?, code), address = COALESCE(?, address), ward = COALESCE(?, ward), city = COALESCE(?, city), type = COALESCE(?, type), status = COALESCE(?, status), rera_no = COALESCE(?, rera_no), rera_expiry = COALESCE(?, rera_expiry), start_date = COALESCE(?, start_date), target_date = COALESCE(?, target_date), budget_paise = COALESCE(?, budget_paise), notes = COALESCE(?, notes), brand_id = COALESCE(?, brand_id) WHERE id = ? AND deleted_at IS NULL`).bind(n(body.name), n(body.code), n(body.address), n(body.ward), n(body.city), n(body.type), n(body.status), n(body.rera_no), n(body.rera_expiry), n(body.start_date), n(body.target_date), n(body.budget_paise), n(body.notes), brandId, id).run();
+    await env.DB.prepare(`UPDATE projects SET name = COALESCE(?, name), code = COALESCE(?, code), address = COALESCE(?, address), ward = COALESCE(?, ward), city = COALESCE(?, city), type = COALESCE(?, type), status = COALESCE(?, status), rera_no = COALESCE(?, rera_no), rera_expiry = COALESCE(?, rera_expiry), start_date = COALESCE(?, start_date), target_date = COALESCE(?, target_date), budget_paise = COALESCE(?, budget_paise), notes = COALESCE(?, notes), brand_id = COALESCE(?, brand_id), percent_complete = COALESCE(?, percent_complete) WHERE id = ? AND deleted_at IS NULL`).bind(n(body.name), n(body.code), n(body.address), n(body.ward), n(body.city), n(body.type), n(body.status), n(body.rera_no), n(body.rera_expiry), n(body.start_date), n(body.target_date), n(body.budget_paise), n(body.notes), brandId, pct, id).run();
+    if (pct !== null) await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, 'progress', 'projects', ?, ?, ?)`).bind(user.user_id, id, `Certified completion set to ${pct}%`, now).run();
     await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, ?, 'projects', ?, ?, ?)`).bind(user.user_id, 'edit', id, `Updated project ${id}`, now).run();
     return json({ ok: true, data: { id } });
   });
@@ -506,7 +527,7 @@ router.get('/api/settings', async (req, env) => {
 const EDITABLE_SETTINGS = ['po.pm_approval_limit_paise', 'access.allow_second_owner', 'access.limit_roles_to_assigned_projects', 'sales.share_all_leads',
   'demand.due_days_after_milestone', 'share.default_expiry_days', 'share.default_max_views', 'files.brochure_max_mb', 'branding.apply_colours_to_app',
   'brochure.price_list_default_audience', 'storage.warn_percent', 'sales.max_holds_per_user', 'sales.max_discount_bp', 'sales.pm_max_discount_bp',
-  'tax.stamp_duty_bp', 'tax.metro_cess_bp', 'tax.women_concession_bp', 'tax.registration_bp', 'tax.registration_cap_paise', 'tax.gst_bp'];
+  'interest.rate_bp', 'interest.grace_days', 'interest.enabled', 'security.require_mfa_roles', 'tax.stamp_duty_bp', 'tax.metro_cess_bp', 'tax.women_concession_bp', 'tax.registration_bp', 'tax.registration_cap_paise', 'tax.gst_bp'];
 
 router.post('/api/settings/:key', async (req, env) => {
   return withAuth(req, env, 'users_settings', 'E', async (req, env) => {
@@ -515,6 +536,7 @@ router.post('/api/settings/:key', async (req, env) => {
       if (!EDITABLE_SETTINGS.includes(key)) return json({ ok: false, error: 'That setting cannot be changed here.' }, 400);
       const { value } = await req.json();
       await setSetting(env, key, value, req.user.user_id);
+      if (key === 'security.require_mfa_roles') mfaRolesCache.at = 0;
       await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, 'update', 'settings', 0, ?, ?)`).bind(req.user.user_id, `Changed setting ${key}`, nowStr()).run();
       return json({ ok: true, data: { key, value } });
     } catch (e) {
@@ -867,6 +889,12 @@ router.get('/api/procurement/vendors', async (req, env) => {
   return withAuth(req, env, 'procurement', 'V', async (req, env) => {
     try {
       const rows = await env.DB.prepare('SELECT * FROM pro_vendors WHERE deleted_at IS NULL ORDER BY name').all();
+      // PAN is stored encrypted; the list only says whether one is on file (and its last 4 characters for accounts/owner).
+      for (const v of rows.results) {
+        const has = !!v.pan; let masked = '';
+        if (has && ['owner', 'accounts'].includes(req.user.role)) { try { const p = v.pan.startsWith('enc:') ? await decryptSetting(env, v.pan.slice(4)) : v.pan; masked = '••••' + p.slice(-4); } catch (e) { masked = '••••'; } }
+        v.has_pan = has; v.pan_masked = masked; delete v.pan;
+      }
       return json({ ok: true, data: { vendors: rows.results } });
     } catch (e) {
       return serverError(e, 'vendors');
@@ -881,8 +909,10 @@ router.post('/api/procurement/vendors', async (req, env) => {
       const body = await req.json();
       const { name, category, contact_person, phone, email, gstin, address, rating, notes } = body;
       if (!name) return json({ ok: false, error: 'Vendor name is required.' }, 400);
+      if (body.pan && !/^[A-Za-z]{5}\d{4}[A-Za-z]$/.test(String(body.pan).trim())) return json({ ok: false, error: 'PAN looks wrong (format ABCDE1234F).' }, 400);
+      const panEnc = body.pan ? 'enc:' + (await encryptSetting(env, String(body.pan).trim().toUpperCase())) : null;
       const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
-      const result = await env.DB.prepare(`INSERT INTO pro_vendors (name, category, contact_person, phone, email, gstin, address, rating, notes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(name, category || '', contact_person || '', phone || '', email || '', gstin || '', address || '', rating || 0, notes || '', now).run();
+      const result = await env.DB.prepare(`INSERT INTO pro_vendors (name, category, contact_person, phone, email, gstin, pan, address, rating, notes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(name, category || '', contact_person || '', phone || '', email || '', gstin || '', panEnc, address || '', rating || 0, notes || '', now).run();
       await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, ?, 'pro_vendors', ?, ?, ?)`).bind(user.user_id, 'create', result.meta.last_row_id, `Created vendor "${name}"`, now).run();
       return json({ ok: true, data: { id: result.meta.last_row_id } });
     } catch (e) {
@@ -1176,7 +1206,7 @@ router.get('/api/sales/bookings', async (req, env) => {
   return withAuth(req, env, 'sales', 'V', async (req, env) => {
     const ids = await visibleProjectIds(env, req.user);
     if (!ids.length) return json({ ok: true, data: { bookings: [] } });
-    const rows = await env.DB.prepare(`SELECT b.*, i.unit_no, i.wing, (SELECT COALESCE(SUM(amount_paise + tds_paise), 0) FROM sal_receipts r WHERE r.booking_id = b.id AND r.reversed_at IS NULL) AS collected_paise
+    const rows = await env.DB.prepare(`SELECT b.*, i.unit_no, i.wing, (SELECT COALESCE(SUM(amount_paise + tds_paise), 0) FROM sal_receipts r WHERE r.booking_id = b.id AND r.reversed_at IS NULL AND r.kind = 'principal') AS collected_paise
       FROM sal_bookings b JOIN sal_inventory i ON i.id = b.unit_id WHERE b.deleted_at IS NULL AND b.project_id IN (${ids.map(() => '?').join(',')}) ORDER BY b.id DESC LIMIT 200`).bind(...ids).all();
     for (const r of rows.results) r.pan = await maskPan(env, r.pan);
     return json({ ok: true, data: { bookings: rows.results } });
@@ -1270,22 +1300,6 @@ router.get('/api/procurement/bills', async (req, env) => {
     const rows = await env.DB.prepare(`SELECT b.*, v.name AS vendor, p.po_no FROM pro_bills b JOIN pro_vendors v ON v.id = b.vendor_id LEFT JOIN pro_pos p ON p.id = b.po_id
       WHERE (p.id IS NULL OR p.project_id IN (${ids.map(() => '?').join(',')})) ORDER BY b.status = 'paid', b.due_date LIMIT 200`).bind(...ids).all();
     return json({ ok: true, data: { bills: rows.results } });
-  });
-});
-
-router.post('/api/procurement/bills', async (req, env) => {
-  return withAuth(req, env, 'procurement', 'E', async (req, env) => {
-    const b = await req.json();
-    const amount = Math.round(Number(b.amount_paise) || 0);
-    if (!b.vendor_id || !(amount > 0)) return json({ ok: false, error: 'Vendor and amount are required.' }, 400);
-    if (b.po_id) {
-      const po = await env.DB.prepare('SELECT project_id FROM pro_pos WHERE id = ?').bind(Number(b.po_id)).first();
-      if (!po || !(await visibleProjectIds(env, req.user)).includes(po.project_id)) return json({ ok: false, error: 'Not allowed.' }, 403);
-    }
-    const r = await env.DB.prepare('INSERT INTO pro_bills (po_id, vendor_id, bill_no, amount_paise, due_date, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-      .bind(b.po_id ? Number(b.po_id) : null, Number(b.vendor_id), b.bill_no || '', amount, b.due_date || null, nowStr()).run();
-    await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, 'create', 'pro_bills', ?, ?, ?)`).bind(req.user.user_id, r.meta.last_row_id, `Recorded bill ${b.bill_no || ''} ₹${(amount / 100).toLocaleString('en-IN')}`, nowStr()).run();
-    return json({ ok: true, data: { id: r.meta.last_row_id } });
   });
 });
 
@@ -1393,7 +1407,7 @@ router.get('/api/export/:what', async (req, env) => {
       return csvResponse('receipts.csv', ['Date', 'Customer', 'Project', 'Wing', 'Flat', 'Amount (INR)', 'TDS (INR)', 'Mode', 'Reference', 'Reversed'], rows.results.map((r) => [r.received_on, r.customer_name, r.project, r.wing, r.unit_no, rupees(r.amount_paise), rupees(r.tds_paise), r.mode, r.ref_no, r.reversed_at ? 'Yes' : '']));
     }
     if (what === 'receivables') {
-      const rows = await env.DB.prepare(`SELECT b.customer_name, pr.name AS project, i.wing, i.unit_no, b.agreed_price_paise, b.status, (SELECT COALESCE(SUM(amount_paise + tds_paise), 0) FROM sal_receipts r WHERE r.booking_id = b.id AND r.reversed_at IS NULL) AS collected FROM sal_bookings b JOIN sal_inventory i ON i.id = b.unit_id JOIN projects pr ON pr.id = b.project_id WHERE b.deleted_at IS NULL AND b.project_id IN (${ph}) ORDER BY b.id`).bind(...ids).all();
+      const rows = await env.DB.prepare(`SELECT b.customer_name, pr.name AS project, i.wing, i.unit_no, b.agreed_price_paise, b.status, (SELECT COALESCE(SUM(amount_paise + tds_paise), 0) FROM sal_receipts r WHERE r.booking_id = b.id AND r.reversed_at IS NULL AND r.kind = 'principal') AS collected FROM sal_bookings b JOIN sal_inventory i ON i.id = b.unit_id JOIN projects pr ON pr.id = b.project_id WHERE b.deleted_at IS NULL AND b.project_id IN (${ph}) ORDER BY b.id`).bind(...ids).all();
       return csvResponse('receivables.csv', ['Customer', 'Project', 'Wing', 'Flat', 'Agreed price (INR)', 'Collected (INR)', 'Balance (INR)', 'Status'], rows.results.map((r) => [r.customer_name, r.project, r.wing, r.unit_no, rupees(r.agreed_price_paise), rupees(r.collected), rupees(r.agreed_price_paise - r.collected), r.status]));
     }
     if (what === 'purchases') {
@@ -1813,7 +1827,7 @@ router.get('/api/sales/partners', async (req, env) => {
   return withAuth(req, env, 'sales', 'V', async (req, env) => {
     if (!['owner', 'pm', 'accounts'].includes(req.user.role)) return json({ ok: false, error: 'Not allowed.' }, 403);
     const rows = await env.DB.prepare(`SELECT p.*,
-      (SELECT COALESCE(SUM(CAST((SELECT COALESCE(SUM(r.amount_paise + r.tds_paise), 0) FROM sal_receipts r WHERE r.booking_id = b.id AND r.reversed_at IS NULL) * COALESCE(b.brokerage_bp, p.brokerage_default_bp, 0) / 10000 AS INTEGER)), 0) FROM sal_bookings b WHERE b.channel_partner_id = p.id AND b.status <> 'cancelled' AND b.deleted_at IS NULL) AS earned_paise,
+      (SELECT COALESCE(SUM(CAST((SELECT COALESCE(SUM(r.amount_paise + r.tds_paise), 0) FROM sal_receipts r WHERE r.booking_id = b.id AND r.reversed_at IS NULL AND r.kind = 'principal') * COALESCE(b.brokerage_bp, p.brokerage_default_bp, 0) / 10000 AS INTEGER)), 0) FROM sal_bookings b WHERE b.channel_partner_id = p.id AND b.status <> 'cancelled' AND b.deleted_at IS NULL) AS earned_paise,
       (SELECT COALESCE(SUM(amount_paise), 0) FROM sal_brokerage_payments x WHERE x.partner_id = p.id AND x.reversed_at IS NULL) AS paid_paise
       FROM sal_partners p WHERE p.deleted_at IS NULL ORDER BY p.firm`).all();
     return json({ ok: true, data: { partners: rows.results } });
@@ -1962,6 +1976,10 @@ async function driveResponse(env, doc, req, disposition) {
 }
 
 
+registerFinance(router, { withAuth, json, serverError, visibleProjectIds, userCan, getSetting, nowStr, encryptSetting, decryptSetting, printBrand });
+registerMfa(router, { json, serverError, getCurrentUser, getSetting, nowStr, encryptSetting, decryptSetting, checkRateLimit, createSession, setSessionCookie, safeUser, withAuth, clientIp });
+registerImporter(router, { withAuth, json, serverError, visibleProjectIds, nowStr, encryptSetting });
+registerPrivacy(router, { withAuth, json, serverError, nowStr, decryptSetting });
 registerReports(router, { withAuth, json, serverError, visibleProjectIds, getSetting, nowStr });
 registerSalesOps(router, { withAuth, json, serverError, visibleProjectIds, userCan, getSetting, nowStr, encryptSetting, clientIp, checkRateLimit });
 
@@ -2232,6 +2250,8 @@ router.post('/api/auth/otp/verify', async (req, env) => {
     const result = u ? await verifyOtpCode(env, u.email, b.code) : { ok: false, error: 'That code is not right.' };
     if (!result.ok) return json({ ok: false, error: result.error }, 400);
     const user = result.user;
+    const early = await mfaChallenge(env, user.id);
+    if (early) return json({ ok: true, data: { mfa_required: true, mfa_token: early } });
     const session = await createSession(env, user.id, req.headers.get('user-agent') || '');
     await env.DB.prepare('UPDATE users SET last_login_at = ? WHERE id = ?').bind(nowStr(), user.id).run();
     const res = json({ ok: true, data: { user: safeUser({ user_id: user.id, ...user }), must_change_password: !!user.must_change_password } });
@@ -2512,7 +2532,7 @@ router.get('/api/reports/receivables', async (req, env) => {
          (b.agreed_price_paise - COALESCE(SUM(r.amount_paise + r.tds_paise), 0)) as balance,
          b.status
          FROM sal_bookings b
-         LEFT JOIN sal_receipts r ON r.booking_id = b.id AND r.reversed_at IS NULL
+         LEFT JOIN sal_receipts r ON r.booking_id = b.id AND r.reversed_at IS NULL AND r.kind = 'principal'
          WHERE b.deleted_at IS NULL AND b.project_id IN (${ids.map(() => '?').join(',')})
          GROUP BY b.id ORDER BY b.created_at DESC LIMIT 200`
       ).bind(...ids).all();
