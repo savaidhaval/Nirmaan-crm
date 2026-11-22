@@ -1,4 +1,4 @@
-# NirmaanCRM data dictionary (real schema from migrations 0001-0015, updated 2026-11-22)
+# NirmaanCRM data dictionary (real schema from migrations 0001-0016, updated 2026-11-22)
 
 Source: replaying migrations/*.sql into an empty SQLite DB. Live D1 not verified (see docs/STATE.md). Money = paise INTEGER, percentages = basis points (_bp). NN = NOT NULL, PK = primary key.
 
@@ -125,6 +125,8 @@ id TEXT PK, user_id INTEGER NN, expires_at TEXT NN, user_agent TEXT, created_at 
 key TEXT PK, value_json TEXT NN, updated_by INTEGER, updated_at TEXT
 ### share_links
 id INTEGER PK, token_hash TEXT NN, document_id INTEGER NN, project_id INTEGER, entity TEXT, entity_id INTEGER, recipient_label TEXT, created_by INTEGER NN, expires_at TEXT NN, max_views INTEGER, view_count INTEGER NN, first_viewed_at TEXT, last_viewed_at TEXT, revoked_at TEXT, revoked_by INTEGER, created_at TEXT
+### site_dpr_labour
+id INTEGER PK, dpr_id INTEGER NN, contractor_id INTEGER NN, trade TEXT, headcount INTEGER NN, created_at TEXT
 ### site_dprs
 id INTEGER PK, project_id INTEGER NN, report_date TEXT NN, wing TEXT, work_summary TEXT NN, labour_count INTEGER, weather TEXT, materials_used TEXT, issues TEXT, safety_incident TEXT, created_by INTEGER, client_uuid TEXT, created_at TEXT, deleted_at TEXT
 ### site_milestones
@@ -224,6 +226,9 @@ id TEXT PK, source TEXT, seen_at TEXT
 - share_links:idx_share_entity
 - share_links:idx_share_creator
 - share_links:idx_share_expiry
+- site_dpr_labour:idx_dprlab_dpr
+- site_dpr_labour:idx_dprlab_contractor
+- site_dpr_labour:uq_dprlab_line
 - site_dprs:idx_dpr_project_date
 - site_milestones:idx_milestone_project
 - site_milestones:uq_milestone_key
@@ -242,3 +247,6 @@ id TEXT PK, source TEXT, seen_at TEXT
 - con_contractors (PAN encrypted, optional vendor_id link), con_work_orders (basis lump_sum|item_rate|measured; retention_bp, advance_paise per work order; numbers `WO-<code>-0001` from counters `wo:<project>`), con_wo_items, con_ra_bills (numbers per work order from counters `ra:<wo_id>`; status draft/checked/approved/part_paid/paid/cancelled), con_ra_lines, con_payments (kind ra | advance | retention_release; reversed, never deleted; client_uuid for retries), con_ledger (append-only; reversals are negative rows).
 - Net payable on an RA bill = gross - retention - advance recovery - other deductions + GST - TDS. GST/TDS rates come from settings con.gst_bp / con.tds_bp (confirm with CA), editable per bill.
 - Settings: con.enabled (off by default), con.pm_approval_limit_paise (default Rs 5,00,000), con.gst_bp, con.tds_bp.
+
+## 0016 additions (WP-6)
+- site_dpr_labour (dpr_id, contractor_id, trade, headcount): labour per contractor and trade on each daily report. contractor_id has no foreign key: the Site module asks the Contractors module (`activeContractorsForProject`, `contractorNames`) and never reads contractor tables. site_dprs.labour_count = sum of the lines for new reports; old reports keep their single number.

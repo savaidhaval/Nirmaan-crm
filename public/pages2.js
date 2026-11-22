@@ -91,19 +91,58 @@ async function filePhotos(kind, uuid, projectId, files, serverId) {
   }
 }
 
+// Contractor list for the daily report: fetched when online, remembered on the phone so the form still works offline.
+async function dprLabourSetup(pid) {
+  const key = 'nirmaan.dprcon.' + pid;
+  try {
+    const [c, l] = await Promise.all([api(`/api/contractors/for-project?project_id=${pid}`), api(`/api/site/dprs/last-labour?project_id=${pid}`)]);
+    const data = { contractors: c.data.contractors, last: l.data.labour };
+    try { localStorage.setItem(key, JSON.stringify(data)); } catch (e) { /* storage blocked */ }
+    return data;
+  } catch (e) {
+    try { return JSON.parse(localStorage.getItem(key) || 'null') || { contractors: [], last: [] }; } catch (e2) { return { contractors: [], last: [] }; }
+  }
+}
+
+// Daily report: labour per contractor (+/- buttons, copied from the last report), or one box when no contractors are set up. Photos stay optional.
 newDpr = async function () {
-  const v = await openForm({ title: t("Today's work report"), submit: t('Save'), fields: [
-    { name: 'project_id', label: t('Project'), type: 'select', options: await projectOptions() },
-    { name: 'report_date', label: t('Date'), type: 'date', value: today() },
-    { name: 'work_summary', label: t('What work happened today?'), type: 'textarea', required: true },
-    { name: 'labour_count', label: t('Labour on site'), type: 'number' }, { name: 'issues', label: t('Problems / delays'), type: 'textarea' },
-    { name: 'photos', label: 'Photos', type: 'files', accept: 'image/*', help: 'Optional. Kept on the phone until sent.' }] });
-  if (!v) return;
-  const files = (window.__lastFiles && window.__lastFiles.photos) || [];
-  delete v.photos;
-  v.project_id = Number(v.project_id); v.client_uuid = crypto.randomUUID();
-  const r = await postOrQueue('/api/site/dprs', v, t('Report saved'));
-  if (r) { if (files.length) await filePhotos('site_dprs', v.client_uuid, v.project_id, files, r.data && r.data.id); if (r.data && r.data.id) saveMapEntry(v.client_uuid, r.data.id); renderSite($('app-main')); }
+  const projects = await projectOptions();
+  const ov = document.createElement('div'); ov.className = 'modal-overlay';
+  ov.innerHTML = `<div class="modal"><h2>${esc(t("Today's work report"))}</h2><form id="dpr-form">
+    <div class="field"><label>${esc(t('Project'))}</label><select id="dpr-project">${projects.map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join('')}</select></div>
+    <div class="field"><label>${esc(t('Date'))}</label><input id="dpr-date" type="date" value="${today()}"></div>
+    <div class="field"><label>${esc(t('What work happened today?'))} *</label><textarea id="dpr-summary" rows="3"></textarea></div>
+    <div class="field"><label>${esc(t('Labour on site'))}</label><div id="dpr-labour"></div></div>
+    <div class="field"><label>${esc(t('Problems / delays'))}</label><textarea id="dpr-issues" rows="2"></textarea></div>
+    <div class="field"><label>Photos</label><input id="dpr-photos" type="file" accept="image/*" multiple><p class="help">Optional. Kept on the phone until sent.</p></div>
+    <div class="error" id="dpr-err" style="display:none"></div>
+    <div class="modal-actions"><button type="button" class="btn" id="dpr-cancel">${esc(t('Cancel'))}</button><button type="submit" class="btn btn-primary">${esc(t('Save'))}</button></div></form></div>`;
+  document.body.appendChild(ov);
+  let contractors = [];
+  const stepper = (c, n) => `<div class="row" style="align-items:center;gap:8px;margin-bottom:8px" data-con="${c.id}" data-trade="${esc(c.trade || '')}"><div style="flex:1"><b>${esc(c.name)}</b>${c.trade ? `<div class="muted">${esc(c.trade)}</div>` : ''}</div>
+    <button type="button" class="btn" data-step="-1" aria-label="Fewer" style="min-width:48px">−</button><input data-n inputmode="numeric" value="${n}" style="width:64px;text-align:center" aria-label="Headcount"><button type="button" class="btn" data-step="1" aria-label="More" style="min-width:48px">+</button></div>`;
+  const draw = async () => {
+    const pid = Number($('dpr-project').value); const box = $('dpr-labour');
+    const d = await dprLabourSetup(pid); contractors = d.contractors;
+    if (!contractors.length) { box.innerHTML = '<input id="dpr-total" type="text" inputmode="numeric" placeholder="0">'; return; }
+    const last = Object.fromEntries((d.last || []).map((x) => [x.contractor_id, x.headcount]));
+    box.innerHTML = contractors.map((c) => stepper(c, last[c.id] || 0)).join('') + '<p class="help">Numbers are copied from the last report. Change only what is different today.</p>';
+    box.querySelectorAll('[data-step]').forEach((b) => { b.onclick = () => { const inp = b.parentElement.querySelector('[data-n]'); inp.value = Math.max(0, (Number(inp.value) || 0) + Number(b.dataset.step)); }; });
+  };
+  $('dpr-project').onchange = draw; await draw();
+  $('dpr-cancel').onclick = () => ov.remove();
+  $('dpr-form').onsubmit = async (e) => {
+    e.preventDefault();
+    const summary = $('dpr-summary').value.trim();
+    if (!summary) { const er = $('dpr-err'); er.textContent = `${t('Please fill in')}: ${t('What work happened today?')}`; er.style.display = 'block'; return; }
+    const v = { project_id: Number($('dpr-project').value), report_date: $('dpr-date').value, work_summary: summary, issues: $('dpr-issues').value.trim(), client_uuid: crypto.randomUUID() };
+    if (contractors.length) v.labour = [...$('dpr-labour').querySelectorAll('[data-con]')].map((r) => ({ contractor_id: Number(r.dataset.con), trade: r.dataset.trade, headcount: Number(r.querySelector('[data-n]').value) || 0 })).filter((x) => x.headcount > 0);
+    else v.labour_count = Number(($('dpr-total') || {}).value) || 0;
+    const files = [...$('dpr-photos').files];
+    ov.remove();
+    const r = await postOrQueue('/api/site/dprs', v, t('Report saved'));
+    if (r) { if (files.length) await filePhotos('site_dprs', v.client_uuid, v.project_id, files, r.data && r.data.id); if (r.data && r.data.id) saveMapEntry(v.client_uuid, r.data.id); renderSite($('app-main')); }
+  };
 };
 
 newSnag = async function () {
@@ -132,7 +171,7 @@ loadSite = async function () {
   try {
     const [dprs, snags, ms] = await Promise.all([api('/api/site/dprs'), api('/api/site/snags'), api('/api/site/milestones')]);
     const canE = userCanClient('site', 'C'); const canV = ['owner', 'pm'].includes(currentUser.role);
-    let html = `<h3>${esc(t('Milestones'))}</h3>` + (ms.data.milestones.map((m) => `<div class="card"><div class="row"><div><b>${esc(m.name)}</b>${m.wing ? ' · ' + esc(m.wing) : ''}<p class="muted">Planned ${esc(m.planned_date || '—')}${m.actual_date ? ' · Done ' + esc(String(m.actual_date).substring(0, 10)) : ''}</p></div>${m.status === 'done' ? statusChip('done') : (canE ? `<button class="btn small" data-done="${m.id}">${esc(t('Done today'))}</button>` : statusChip('pending'))}</div></div>`).join('') || '<p class="muted">No milestones yet.</p>');
+    let html = (currentUser.role !== 'site' ? '<p><a class="btn small" href="/api/site/reports/labour?csv=1">Labour this month by contractor (CSV)</a></p>' : '') + `<h3>${esc(t('Milestones'))}</h3>` + (ms.data.milestones.map((m) => `<div class="card"><div class="row"><div><b>${esc(m.name)}</b>${m.wing ? ' · ' + esc(m.wing) : ''}<p class="muted">Planned ${esc(m.planned_date || '—')}${m.actual_date ? ' · Done ' + esc(String(m.actual_date).substring(0, 10)) : ''}</p></div>${m.status === 'done' ? statusChip('done') : (canE ? `<button class="btn small" data-done="${m.id}">${esc(t('Done today'))}</button>` : statusChip('pending'))}</div></div>`).join('') || '<p class="muted">No milestones yet.</p>');
     html += `<h3>${esc(t('Recent reports'))}</h3>` + (dprs.data.dprs.map((d) => `<div class="card"><div class="row"><div><b>${esc(d.report_date)}</b> · ${esc(d.labour_count || 0)} labour</div><button class="btn small" data-ph="site_dprs:${d.id}">Photos</button></div><p>${esc(d.work_summary)}</p></div>`).join('') || '<p class="muted">No reports yet.</p>');
     html += `<h3>${esc(t('Snags'))}</h3>` + (snags.data.snags.map((s) => `<div class="card"><div class="row"><div><b>${esc(s.title)}</b><p class="muted">${esc(s.location || '')}</p></div><div>${chip(s.severity, s.severity === 'high' ? 'bad' : s.severity === 'medium' ? 'warn' : '')} ${statusChip(s.status)}</div></div>
       <div class="row-btns"><button class="btn small" data-ph="site_snags:${s.id}">Photos</button>${s.status === 'open' && canE ? `<button class="btn small" data-snag="fixed" data-id="${s.id}">Mark fixed</button>` : ''}${s.status === 'fixed' && canV ? `<button class="btn small btn-primary" data-snag="verified" data-id="${s.id}">Verify fix</button><button class="btn small" data-snag="open" data-id="${s.id}">Reopen</button>` : ''}</div></div>`).join('') || '<p class="muted">No open snags.</p>');

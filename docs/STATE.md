@@ -90,3 +90,6 @@ Code complete and tested locally (all 8 suites pass). Migration 0014 NOT applied
 ## WP-5 status
 Code complete, tested locally (all 9 suites pass). Migration 0015 NOT applied to staging/production. Contractors module is OFF by default (setting con.enabled). Staging has no URL now (workers.dev off).
 Decisions taken by default: D4 both bases, retention per work order, contractor-supplied materials not tracked; PM approval limit default Rs 5,00,000 (setting). contractors table is standalone (vendor_id optional) instead of raw SQL on pro_vendors.
+
+## WP-6 status
+Code complete, all 10 suites + browser walkthroughs pass locally. Migration 0016 applied to the STAGING database only; NOT applied to production. Note: public/pages2.js overrides newDpr/loadSite from pages.js, so edit the DPR form there.
