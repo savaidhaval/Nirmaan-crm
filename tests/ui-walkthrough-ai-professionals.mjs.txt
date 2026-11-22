@@ -1,0 +1,100 @@
+import { createRequire } from 'node:module';
+const { chromium } = createRequire(import.meta.url)('/opt/node-tools/node_modules/playwright');
+const BASE = process.env.BASE || 'http://localhost:8787', SHOTS = '/tmp/claude-0/scratch/shots';
+const run = Date.now().toString(36);
+let pass = 0, fail = 0; const ok = (n, c, x = '') => { c ? pass++ : fail++; console.log(`${c ? 'PASS' : 'FAIL'}  ${n}${c ? '' : '  ' + x}`); };
+class C { constructor() { this.cookie = ''; } async call(m, p, b) { const h = { 'X-NirmaanCRM': '1' }; if (this.cookie) h.cookie = this.cookie; let body; if (b) { h['Content-Type'] = 'application/json'; body = JSON.stringify(b); }
+  const r = await fetch(BASE + p, { method: m, headers: h, body }); const sc = r.headers.get('set-cookie'); if (sc) this.cookie = sc.split(';')[0]; let d = null; try { d = await r.json(); } catch (e) {} return { status: r.status, data: d && d.data, err: d && d.error }; } }
+const o = new C(); await o.call('POST', '/api/auth/login', { email: 'owner@test.local', password: 'CiStrongPass-12345' });
+const pid = (await o.call('POST', '/api/projects', { name: 'UI Tower ' + run, code: 'UI' + run.toUpperCase().slice(-5), budget_paise: 5e9 })).data.id;
+await o.call('POST', '/api/settings/con.enabled', { value: 'on' });
+await o.call('POST', '/api/settings/con.pm_approval_limit_paise', { value: 50000000 });
+const users = {};
+for (const role of ['site', 'pm', 'purchase', 'accounts']) {
+  const email = `ui-${role}-${run}@test.local`; const r = await o.call('POST', '/api/users', { name: 'UI ' + role + ' ' + run, email, role, projects: role === 'site' ? [pid] : [] });
+  const c = new C(); await c.call('POST', '/api/auth/login', { email, password: r.data.temporaryPassword }); const pw = 'UiStrongPass-' + run;
+  await c.call('POST', '/api/auth/change-password', { currentPassword: r.data.temporaryPassword, newPassword: pw }); users[role] = { email, pw };
+}
+const browser = await chromium.launch();
+const ctxs = {};
+async function page(role) {
+  if (!ctxs[role]) {
+    const ctx = await browser.newContext({ viewport: { width: 390, height: 800 } });
+    const email = role === 'owner' ? 'owner@test.local' : users[role].email, password = role === 'owner' ? 'CiStrongPass-12345' : users[role].pw;
+    const r = await ctx.request.post(BASE + '/api/auth/login', { headers: { 'X-NirmaanCRM': '1', 'Content-Type': 'application/json' }, data: { email, password } });
+    if (!r.ok()) throw new Error('login ' + role + ' ' + r.status());
+    ctxs[role] = ctx;
+  }
+  const p = await ctxs[role].newPage(); p.on('dialog', (d) => d.accept()); p.on('pageerror', (e) => console.log('PAGEERROR', role, e.message));
+  await p.goto(BASE + '/'); await p.waitForFunction(() => typeof navigate === 'function' && typeof currentUser !== 'undefined' && currentUser, null, { timeout: 15000 }); return p;
+}
+const go = async (p, route) => { await p.evaluate((r) => navigate(r), route); await p.waitForTimeout(800); };
+const toastText = async (p) => { await p.waitForTimeout(500); return p.evaluate(() => (document.getElementById('toast') || {}).textContent || ''); };
+const submit = (p) => p.click('#modal-form button[type=submit]');
+const pick = (p, sel, label) => p.selectOption(sel, { label });
+const shot = (p, n) => p.screenshot({ path: `${SHOTS}/${n}.png` });
+const proj = 'UI Tower ' + run;
+const iso = (d) => new Date(Date.now() + 19800000 + d * 86400000).toISOString().slice(0, 10);
+const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
+await o.call('POST', '/api/settings/ai.enabled', { value: 'off' });
+
+// ===== AI off: plain message =====
+let st = await page('site'); await go(st, 'ai'); await st.waitForTimeout(600);
+ok('AI switched off shows a plain message', (await st.textContent('#ai-body')).includes('switched off'));
+
+// ===== Owner switches it on in Settings =====
+const ow = await page('owner'); await go(ow, 'settings'); await ow.waitForSelector('select[data-key="ai.enabled"]');
+await ow.selectOption('select[data-key="ai.enabled"]', 'on'); await shot(ow, '60-settings-ai'); await ow.click('#settings-save');
+await ow.waitForTimeout(1500); ok('Owner turns the AI on from Settings', (await o.call('GET', '/api/ai/status')).data.enabled === true);
+
+// ===== data to ask about =====
+const pc = new C(); await pc.call('POST', '/api/auth/login', { email: users.purchase.email, password: users.purchase.pw });
+const item = (await pc.call('POST', '/api/stores/items', { name: 'AI Cement ' + run, unit: 'bags' })).data.id;
+const pmapi = new C(); await pmapi.call('POST', '/api/auth/login', { email: users.pm.email, password: users.pm.pw });
+await pmapi.call('POST', '/api/stores/reorder', { project_id: pid, item_id: item, reorder_level: 50 });
+const adj = (await pmapi.call('POST', '/api/stores/adjust', { project_id: pid, item_id: item, qty: 10, reason: 'opening' })).data.id; await o.call('POST', `/api/stores/moves/${adj}/approve`, {});
+const lead = (await o.call('POST', '/api/sales/leads', { name: 'Priya Kulkarni ' + run, phone: '9' + String(Date.now()).slice(-9), project_id: pid, source: 'website', consent: true })).data.id;
+
+// ===== site engineer asks the CRM =====
+st = await page('site'); await go(st, 'ai'); await st.waitForSelector('#ai-q');
+await st.fill('#ai-q', 'What stock is running low?'); await st.click('#ai-ask'); await st.waitForSelector('#ai-out .card', { timeout: 15000 });
+let txt = (await st.textContent('#ai-out')).replace(/\s+/g, ' ');
+ok('answer appears with a "based on" line', txt.includes('MOCK REPLY') && txt.includes('Based on: store and stock'), txt.slice(0, 300));
+await st.click('#ai-out summary'); ok('facts are one tap away and name the item', (await st.textContent('#ai-out details')).includes('AI Cement ' + run));
+await shot(st, '61-ai-ask');
+await st.fill('#ai-q', 'Which vendor bills are due?'); await st.click('#ai-ask'); await st.waitForTimeout(1200);
+ok('site engineer is told they do not have access to bills', (await st.textContent('#ai-out')).includes('does not have access'));
+ok('site engineer has no message-writing card for payments, leads or vendors', (await st.$('#dr-kind')) === null);
+
+// ===== PM drafts a follow-up for a lead =====
+const pm = await page('pm'); await go(pm, 'ai'); await pm.waitForSelector('#dr-kind');
+await pm.selectOption('#dr-kind', 'lead_followup'); await pm.fill('#dr-q', 'Priya Kulkarni ' + run); await pm.waitForSelector('[data-pick-id]', { timeout: 8000 }); await pm.click('#dr-results [data-pick-id]');
+await pm.fill('#dr-note', 'Offer a Saturday visit'); await pm.selectOption('#dr-lang', 'mr'); await shot(pm, '62-ai-draft-form'); await pm.click('#dr-go');
+await pm.waitForSelector('#dr-text', { timeout: 15000 });
+ok('draft appears in an editable box', (await pm.inputValue('#dr-text')).includes('MOCK REPLY'));
+await pm.fill('#dr-text', 'Edited by me: ' + (await pm.inputValue('#dr-text'))); ok('draft can be edited', (await pm.inputValue('#dr-text')).startsWith('Edited by me'));
+ok('draft says nothing has been sent', (await pm.textContent('#dr-out')).includes('Nothing has been sent'));
+ok('facts shown for the draft do not contain the phone number', !/\b9\d{9}\b/.test(await pm.textContent('#dr-out')));
+await shot(pm, '63-ai-draft');
+// summary of the project's week
+await pm.selectOption('#sm-kind', 'project_week'); await pm.fill('#sm-q', proj); await pm.waitForSelector('#sm-results [data-pick-id]', { timeout: 8000 }); await pm.click('#sm-results [data-pick-id]'); await pm.click('#sm-go');
+await pm.waitForSelector('#sm-out .card', { timeout: 15000 }); ok('project week summary appears', (await pm.textContent('#sm-out')).includes('MOCK REPLY'));
+await pm.selectOption('#sm-kind', 'text'); await pm.fill('#sm-text', 'The architect agreement runs for twenty four months from signing. It covers concept design, working drawings and periodic site visits. Fees are paid in five stages.'); await pm.click('#sm-go');
+await pm.waitForTimeout(1500); ok('pasted-text summary appears', (await pm.textContent('#sm-out')).includes('AI summary of: text you pasted'));
+await shot(pm, '64-ai-summary');
+
+// ===== Professionals and contracts =====
+const pu = await page('purchase'); await go(pu, 'professionals'); await pu.waitForSelector('#pf-new'); await pu.click('#pf-new'); await pu.waitForSelector('#f_name');
+await pu.fill('#f_name', 'Ar. Deshmukh ' + run); await pu.fill('#f_profession', 'Architect'); await pu.fill('#f_firm', 'Deshmukh Associates'); await pu.fill('#f_pan', 'ABCDE1234F'); await submit(pu);
+ok('Purchase adds an architect', /Added/.test(await toastText(pu)));
+await pu.waitForTimeout(700); await pu.fill('#pf-q', 'Deshmukh ' + run); await pu.waitForTimeout(900);
+ok('search finds the architect, PAN is not shown to Purchase', (await pu.textContent('#pf-list')).includes('Ar. Deshmukh') && !(await pu.textContent('#pf-list')).includes('234F'));
+await pu.click('[data-pdocs]'); await pu.waitForSelector('#pd-add-c'); await shot(pu, '65-professional-docs');
+await pu.click('#pd-add-c'); await pu.waitForSelector('#f_doc_type'); await pu.fill('#f_doc_type', 'Architect agreement'); await pu.fill('#f_valid_till', iso(400)); await pu.setInputFiles('#f_file', { name: 'agreement.png', mimeType: 'image/png', buffer: png }); await submit(pu);
+ok('architect agreement uploaded as a contract', /Document added/.test(await toastText(pu)));
+await pu.waitForTimeout(700); const mt = (await pu.locator('.modal').last().textContent()).replace(/\s+/g, ' ');
+ok('listed under Contracts, valid, with its file', mt.includes('Contracts') && mt.includes('Architect agreement') && mt.includes('Valid') && (await pu.$('a[href^="/api/files/download/"]')) !== null, mt.slice(0, 300));
+await shot(pu, '66-contract-listed');
+const sbd = await page('site'); await go(sbd, 'professionals'); await sbd.waitForTimeout(800);
+ok('site engineer cannot open the professionals register', (await sbd.textContent('#app-main')).toLowerCase().includes('not allowed') || (await sbd.$('#pf-new')) === null);
+await browser.close(); console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);

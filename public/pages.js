@@ -166,6 +166,10 @@ const ICONS = {
   home: 'M3 12l9-9 9 9M5 10v10h14V10', dashboard: 'M3 3h7v9H3zM14 3h7v5h-7zM14 12h7v9h-7zM3 16h7v5H3z',
   projects: 'M3 21h18M5 21V7l7-4 7 4v14M9 9h2M9 13h2M13 9h2M13 13h2M10 21v-4h4v4',
   approvals: 'M9 12l2 2 4-4M12 21a9 9 0 100-18 9 9 0 000 18z', drawings: 'M12 20h9M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z',
+  ai: 'M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8zM19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z',
+  professionals: 'M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8zM17 11l2 2 4-4',
+  stores: 'M3 7l9-4 9 4v10l-9 4-9-4zM3 7l9 4 9-4M12 11v10',
+  petty: 'M3 7h18v12H3zM3 11h18M7 15h3',
   budget: 'M3 3v18h18M7 14l4-4 3 3 5-6',
   contractors: 'M17 21v-2a4 4 0 00-4-4H7a4 4 0 00-4 4v2M10 11a4 4 0 100-8 4 4 0 000 8zM20 8v6M23 11h-6',
   site: 'M2 18h20M4 18a8 8 0 0116 0M12 6V3', procurement: 'M6 6h15l-1.5 9h-12zM6 6L5 3H2M9 20.5a.5.5 0 100-1 .5.5 0 000 1zM18 20.5a.5.5 0 100-1 .5.5 0 000 1z',
@@ -192,15 +196,15 @@ function sidebarItems(role) {
   const H = { label: 'Home', route: role === 'owner' ? 'dashboard' : 'home', icon: role === 'owner' ? 'dashboard' : 'home' };
   const I = (label, route) => ({ label, route, icon: route });
   const by = {
-    owner: [[null, [H]], ['Work', [I('Projects', 'projects'), I('Approvals', 'approvals'), I('Drawings', 'drawings'), I('Site', 'site')]], ['Money', [I('Procurement', 'procurement'), I('Contractors', 'contractors'), I('Budget', 'budget'), I('Sales', 'sales')]],
-      ['Admin', [I('Documents', 'documents'), I('Brochures', 'brochures'), I('People', 'people'), I('Users & access', 'users'), I('Branding', 'branding'), I('Shared links', 'sharelinks'), I('Audit log', 'audit')]], ['Setup', [I('Storage', 'storage'), I('Email', 'email'), I('Settings', 'settings')]]],
-    pm: [[null, [H]], ['Work', [I('Projects', 'projects'), I('Approvals', 'approvals'), I('Drawings', 'drawings'), I('Site', 'site')]], ['Money', [I('Procurement', 'procurement'), I('Contractors', 'contractors'), I('Budget', 'budget'), I('Sales', 'sales')]], ['Admin', [I('Documents', 'documents'), I('Brochures', 'brochures'), I('People', 'people'), I('Branding', 'branding'), I('Shared links', 'sharelinks'), I('Audit log', 'audit')]]],
-    site: [[null, [H]], ['Work', [I('Drawings', 'drawings'), I('Site', 'site'), I('Procurement', 'procurement'), I('Contractors', 'contractors')]], ['Admin', [I('Documents', 'documents')]]],
-    sales: [[null, [H]], ['Work', [I('Sales', 'sales'), I('Brochures', 'brochures')]], ['Admin', [I('Documents', 'documents')]]],
-    accounts: [[null, [H]], ['Money', [I('Sales', 'sales'), I('Procurement', 'procurement'), I('Contractors', 'contractors'), I('Budget', 'budget')]], ['Admin', [I('Documents', 'documents'), I('Brochures', 'brochures'), I('Branding', 'branding')]]],
-    purchase: [[null, [H]], ['Work', [I('Procurement', 'procurement'), I('Contractors', 'contractors'), I('Budget', 'budget'), I('Drawings', 'drawings')]], ['Admin', [I('Documents', 'documents')]]],
+    owner: [[null, [H, I('AI assistant', 'ai')]], ['Work', [I('Projects', 'projects'), I('Approvals', 'approvals'), I('Drawings', 'drawings'), I('Site', 'site'), I('Store', 'stores')]], ['Money', [I('Procurement', 'procurement'), I('Contractors', 'contractors'), I('Budget', 'budget'), I('Petty cash', 'petty'), I('Sales', 'sales')]],
+      ['Admin', [I('Documents', 'documents'), I('Professionals', 'professionals'), I('Brochures', 'brochures'), I('People', 'people'), I('Users & access', 'users'), I('Branding', 'branding'), I('Shared links', 'sharelinks'), I('Audit log', 'audit')]], ['Setup', [I('Storage', 'storage'), I('Email', 'email'), I('Settings', 'settings')]]],
+    pm: [[null, [H, I('AI assistant', 'ai')]], ['Work', [I('Projects', 'projects'), I('Approvals', 'approvals'), I('Drawings', 'drawings'), I('Site', 'site'), I('Store', 'stores')]], ['Money', [I('Procurement', 'procurement'), I('Contractors', 'contractors'), I('Budget', 'budget'), I('Petty cash', 'petty'), I('Sales', 'sales')]], ['Admin', [I('Documents', 'documents'), I('Professionals', 'professionals'), I('Brochures', 'brochures'), I('People', 'people'), I('Branding', 'branding'), I('Shared links', 'sharelinks'), I('Audit log', 'audit')]]],
+    site: [[null, [H, I('AI assistant', 'ai')]], ['Work', [I('Drawings', 'drawings'), I('Site', 'site'), I('Store', 'stores'), I('Petty cash', 'petty'), I('Procurement', 'procurement'), I('Contractors', 'contractors')]], ['Admin', [I('Documents', 'documents')]]],
+    sales: [[null, [H, I('AI assistant', 'ai')]], ['Work', [I('Sales', 'sales'), I('Brochures', 'brochures')]], ['Admin', [I('Documents', 'documents')]]],
+    accounts: [[null, [H, I('AI assistant', 'ai')]], ['Money', [I('Sales', 'sales'), I('Procurement', 'procurement'), I('Contractors', 'contractors'), I('Budget', 'budget'), I('Petty cash', 'petty'), I('Store', 'stores')]], ['Admin', [I('Documents', 'documents'), I('Professionals', 'professionals'), I('Brochures', 'brochures'), I('Branding', 'branding')]]],
+    purchase: [[null, [H, I('AI assistant', 'ai')]], ['Work', [I('Procurement', 'procurement'), I('Contractors', 'contractors'), I('Budget', 'budget'), I('Store', 'stores'), I('Drawings', 'drawings')]], ['Admin', [I('Documents', 'documents'), I('Professionals', 'professionals')]]],
     hr: [[null, [H]], ['Work', [I('People', 'people')]]],
-    viewer: [[null, [H]], ['Work', [I('Projects', 'projects'), I('Approvals', 'approvals'), I('Drawings', 'drawings'), I('Site', 'site')]], ['Admin', [I('Documents', 'documents')]]],
+    viewer: [[null, [H, I('AI assistant', 'ai')]], ['Work', [I('Projects', 'projects'), I('Approvals', 'approvals'), I('Drawings', 'drawings'), I('Site', 'site')]], ['Admin', [I('Documents', 'documents')]]],
   };
   return by[role] || by.viewer;
 }
@@ -226,7 +230,7 @@ function getBottomNavItems(role) {
 
 const PAGES = {
   home: renderHome, dashboard: renderDashboard, projects: renderProjects, users: renderUsers, documents: renderDocuments,
-  settings: renderSettings, approvals: renderApprovals, drawings: renderDrawings, site: renderSite, procurement: renderProcurement, contractors: (m) => renderContractors(m), budget: (m) => renderBudget(m),
+  settings: renderSettings, approvals: renderApprovals, drawings: renderDrawings, site: renderSite, procurement: renderProcurement, contractors: (m) => renderContractors(m), budget: (m) => renderBudget(m), professionals: (m) => renderProfessionals(m), ai: (m) => renderAi(m), stores: (m) => renderStores(m), petty: (m) => renderPetty(m),
   sales: renderSales, storage: renderStorage, branding: (m) => renderBranding(m), sharelinks: renderShareLinks, more: renderMore,
   audit: renderAudit, notifications: renderNotifications, help: renderHelp, password: renderChangePassword, email: renderEmailSettings,
 };
@@ -629,6 +633,13 @@ function renderShareLinks(main) {
 
 const SETTING_LABELS = {
   'po.pm_approval_limit_paise': ['PM approval limit for purchase orders (₹)', 'money'],
+  'ai.enabled': ['AI assistant (ask the CRM, draft messages, summaries)', 'onoff'],
+  'ai.daily_limit': ['AI: most requests per day for the whole team', 'number'],
+  'ai.model': ['AI model name (leave as it is unless told otherwise)', 'text'],
+  'sales.receipt_approval_limit_paise': ['Receipts of this amount or more need a second person to approve (₹, 0 = off)', 'money'],
+  'sales.discount_pm_limit_paise': ['Largest discount below the rate card the PM may approve on a cost sheet (₹)', 'money'],
+  'sales.handover_template': ['Handover checklist items, separated by ; (blank = starter list)', 'text'],
+  'petty.low_balance_paise': ['Petty cash: warn when a fund falls below (₹)', 'money'],
   'budget.gst_basis': ['Budget figures: with or without GST (confirm with your CA)', 'basis'],
   'con.enabled': ['Contractors module (work orders, RA bills)', 'onoff'],
   'con.pm_approval_limit_paise': ['PM approval limit for work orders and RA bills (₹)', 'money'],
@@ -910,15 +921,17 @@ async function newPo() {
   const vendors = (await api('/api/procurement/vendors')).data.vendors;
   if (!vendors.length) { toast('Add a vendor first'); return; }
   const heads = await budgetHeadOptions();
+  const stockItems = await stockItemOptions();
   const v = await openForm({ title: 'New purchase order', intro: 'One line item for now. Add more lines later from the PO.', fields: [
     { name: 'project_id', label: 'Project', type: 'select', options: await projectOptions() },
     { name: 'vendor_id', label: 'Vendor', type: 'select', options: vendors.map((x) => [x.id, x.name]) },
     { name: 'description', label: 'Item', required: true }, { name: 'qty', label: 'Quantity', type: 'number', required: true }, { name: 'unit', label: 'Unit' },
     { name: 'rate', label: 'Rate per unit (₹)', type: 'money', required: true },
     { name: 'gst_bp', label: 'GST', type: 'select', options: [['1800', '18%'], ['1200', '12%'], ['500', '5%'], ['0', 'None']] }, { name: 'terms', label: 'Terms', type: 'textarea' },
-    ...(heads.length ? [{ name: 'budget_head_id', label: 'Budget head', type: 'select', options: heads, help: 'Which cost this belongs to. Used to watch the budget.' }] : [])] });
+    ...(heads.length ? [{ name: 'budget_head_id', label: 'Budget head', type: 'select', options: heads, help: 'Which cost this belongs to. Used to watch the budget.' }] : []),
+    ...(stockItems.length ? [{ name: 'stock_item_id', label: 'Goes into the store as', type: 'select', options: stockItems, help: 'Pick the store item so what you receive is added to stock.' }] : [])] });
   if (!v) return;
-  const body = { project_id: Number(v.project_id), vendor_id: Number(v.vendor_id), gst_bp: Number(v.gst_bp), terms: v.terms, budget_head_id: v.budget_head_id ? Number(v.budget_head_id) : null, items: [{ description: v.description, qty: v.qty, unit: v.unit, rate_paise: v.rate }] };
+  const body = { project_id: Number(v.project_id), vendor_id: Number(v.vendor_id), gst_bp: Number(v.gst_bp), terms: v.terms, budget_head_id: v.budget_head_id ? Number(v.budget_head_id) : null, stock_item_id: v.stock_item_id ? Number(v.stock_item_id) : null, items: [{ description: v.description, qty: v.qty, unit: v.unit, rate_paise: v.rate }] };
   if (await act(api('/api/procurement/pos', { method: 'POST', body }), 'PO created as draft')) loadProcurement();
 }
 
@@ -1012,7 +1025,7 @@ async function bookingDetail(id) {
   const ov = document.createElement('div');
   ov.className = 'modal-overlay';
   ov.innerHTML = `<div class="modal"><h2>${esc(d.booking.customer_name)}</h2><p class="muted">${esc(d.booking.wing || '')}-${esc(d.booking.unit_no)} · ${moneyP(d.booking.agreed_price_paise)}</p>
-    <h3>Demands</h3>${d.demands.map((x) => `<div class="card"><div class="row"><div><b>${esc(x.label)}</b><p class="muted">${moneyP(x.amount_paise)} + GST ${moneyP(x.gst_paise)}${x.due_date ? ' · due ' + esc(x.due_date) : ''}</p></div>${statusChip(x.status)}</div><div class="row-btns">${['ready', 'partial', 'scheduled'].includes(x.status) && userCanClient('sales', 'E') ? `<button class="btn small" data-rcpt="${x.id}">Record receipt</button>` : ''}<button class="btn small" data-pdem="${x.id}">Print demand letter</button></div></div>`).join('')}
+    <h3>Demands</h3>${d.demands.map((x) => `<div class="card"><div class="row"><div><b>${esc(x.label)}</b><p class="muted">${moneyP(x.amount_paise)} + GST ${moneyP(x.gst_paise)}${x.due_date ? ' · due ' + esc(x.due_date) : ''}${x.demand_no ? ' · ' + esc(x.demand_no) : ''}</p></div>${statusChip(x.status)}</div><div class="row-btns">${['ready', 'partial', 'scheduled'].includes(x.status) && userCanClient('sales', 'E') ? `<button class="btn small" data-rcpt="${x.id}">Record receipt</button>` : ''}<button class="btn small" data-pdem="${x.id}">Print demand letter</button></div></div>`).join('')}
     <h3>Receipts</h3>${d.receipts.map((r) => `<p>${esc(r.received_on)} · ${moneyP(r.amount_paise)}${r.tds_paise ? ' + TDS ' + moneyP(r.tds_paise) : ''} · ${esc(r.mode || '')} <button class="btn small" data-prcp="${r.id}">Print</button></p>`).join('') || '<p class="muted">None yet.</p>'}
     <div class="modal-actions">${d.booking.status !== 'cancelled' && userCanClient('sales', 'A') ? '<button class="btn" id="bk-cancel" style="color:#dc2626">Cancel booking</button>' : ''}<button class="btn btn-primary" id="bk-close">Close</button></div></div>`;
   document.body.appendChild(ov);
@@ -1026,7 +1039,7 @@ async function bookingDetail(id) {
   ov.querySelectorAll('[data-rcpt]').forEach((b) => {
     b.onclick = async () => {
       const v = await openForm({ title: 'Record receipt', fields: [{ name: 'amount_paise', label: 'Amount received (₹)', type: 'money', required: true }, { name: 'tds_paise', label: 'TDS deducted (₹)', type: 'money' }, { name: 'mode', label: 'Mode', type: 'select', options: [['bank', 'Bank transfer'], ['cheque', 'Cheque'], ['upi', 'UPI'], ['cash', 'Cash']] }, { name: 'ref_no', label: 'Reference / cheque no.' }, { name: 'received_on', label: 'Date', type: 'date', value: today() }] });
-      if (v && await act(api(`/api/sales/bookings/${id}/receipts`, { method: 'POST', body: { ...v, demand_id: Number(b.dataset.rcpt) } }), 'Receipt saved')) { ov.remove(); bookingDetail(id); }
+      if (v) { const r = await act(api(`/api/sales/bookings/${id}/receipts`, { method: 'POST', body: { ...v, demand_id: Number(b.dataset.rcpt) } })); if (r) { toast(r.data && r.data.pending ? r.data.message : 'Receipt saved', r.data && r.data.pending ? 8000 : 3000); ov.remove(); bookingDetail(id); } }
     };
   });
 }

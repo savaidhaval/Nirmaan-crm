@@ -1,0 +1,122 @@
+import { createRequire } from 'node:module';
+const { chromium } = createRequire(import.meta.url)('/opt/node-tools/node_modules/playwright');
+const BASE = process.env.BASE || 'http://localhost:8787', SHOTS = '/tmp/claude-0/scratch/shots';
+const run = Date.now().toString(36);
+let pass = 0, fail = 0; const ok = (n, c, x = '') => { c ? pass++ : fail++; console.log(`${c ? 'PASS' : 'FAIL'}  ${n}${c ? '' : '  ' + x}`); };
+class C { constructor() { this.cookie = ''; } async call(m, p, b) { const h = { 'X-NirmaanCRM': '1' }; if (this.cookie) h.cookie = this.cookie; let body; if (b) { h['Content-Type'] = 'application/json'; body = JSON.stringify(b); }
+  const r = await fetch(BASE + p, { method: m, headers: h, body }); const sc = r.headers.get('set-cookie'); if (sc) this.cookie = sc.split(';')[0]; let d = null; try { d = await r.json(); } catch (e) {} return { status: r.status, data: d && d.data, err: d && d.error }; } }
+const o = new C(); await o.call('POST', '/api/auth/login', { email: 'owner@test.local', password: 'CiStrongPass-12345' });
+const pid = (await o.call('POST', '/api/projects', { name: 'UI Tower ' + run, code: 'UI' + run.toUpperCase().slice(-5), budget_paise: 5e9 })).data.id;
+await o.call('POST', '/api/settings/con.enabled', { value: 'on' });
+await o.call('POST', '/api/settings/con.pm_approval_limit_paise', { value: 50000000 });
+const users = {};
+for (const role of ['site', 'pm', 'purchase', 'accounts', 'sales']) {
+  const email = `ui-${role}-${run}@test.local`; const r = await o.call('POST', '/api/users', { name: 'UI ' + role + ' ' + run, email, role, projects: role === 'site' ? [pid] : [] });
+  const c = new C(); await c.call('POST', '/api/auth/login', { email, password: r.data.temporaryPassword }); const pw = 'UiStrongPass-' + run;
+  await c.call('POST', '/api/auth/change-password', { currentPassword: r.data.temporaryPassword, newPassword: pw }); users[role] = { email, pw };
+}
+const browser = await chromium.launch();
+const ctxs = {};
+async function page(role) {
+  if (!ctxs[role]) {
+    const ctx = await browser.newContext({ viewport: { width: 390, height: 800 } });
+    const email = role === 'owner' ? 'owner@test.local' : users[role].email, password = role === 'owner' ? 'CiStrongPass-12345' : users[role].pw;
+    const r = await ctx.request.post(BASE + '/api/auth/login', { headers: { 'X-NirmaanCRM': '1', 'Content-Type': 'application/json' }, data: { email, password } });
+    if (!r.ok()) throw new Error('login ' + role + ' ' + r.status());
+    ctxs[role] = ctx;
+  }
+  const p = await ctxs[role].newPage(); p.on('dialog', (d) => d.accept()); p.on('pageerror', (e) => console.log('PAGEERROR', role, e.message));
+  await p.goto(BASE + '/'); await p.waitForFunction(() => typeof navigate === 'function' && typeof currentUser !== 'undefined' && currentUser, null, { timeout: 15000 }); return p;
+}
+const go = async (p, route) => { await p.evaluate((r) => navigate(r), route); await p.waitForTimeout(800); };
+const toastText = async (p) => { await p.waitForTimeout(500); return p.evaluate(() => (document.getElementById('toast') || {}).textContent || ''); };
+const submit = (p) => p.click('#modal-form button[type=submit]');
+const pick = (p, sel, label) => p.selectOption(sel, { label });
+const shot = (p, n) => p.screenshot({ path: `${SHOTS}/${n}.png` });
+const proj = 'UI Tower ' + run;
+const iso = (d) => new Date(Date.now() + 19800000 + d * 86400000).toISOString().slice(0, 10);
+const sc = new C(); await sc.call('POST', '/api/auth/login', { email: users.sales.email, password: users.sales.pw });
+const pmc = new C(); await pmc.call('POST', '/api/auth/login', { email: users.pm.email, password: users.pm.pw });
+await o.call('POST', '/api/sales/plan-stages', { project_id: pid, stages: [{ stage_name: 'On booking', pct_bp: 2000 }, { stage_name: 'Possession', pct_bp: 8000 }] });
+const unit = (await o.call('POST', '/api/sales/inventory', { project_id: pid, wing: 'B', floor: 5, unit_no: '502' + run.slice(-3), type: '2BHK', carpet_sqft: 600, rera_carpet_sqft: 500, price_paise: 100000000 })).data.id;
+const lead = (await sc.call('POST', '/api/sales/leads', { name: 'Mr Kulkarni ' + run, phone: '9' + String(Date.now()).slice(-9), project_id: pid, source: 'walk_in', consent: true })).data.id;
+await o.call('POST', '/api/settings/tax.gst_bp', { value: 500 }); await o.call('POST', '/api/settings/tax.stamp_duty_bp', { value: 600 });
+await o.call('POST', '/api/settings/sales.discount_pm_limit_paise', { value: 10000000 }); await o.call('POST', '/api/settings/sales.receipt_approval_limit_paise', { value: 500000 });
+const openDrill = (p) => p.evaluate(async (args) => { const r = await api('/api/reports/stacking?project_id=' + args.pid); unitDrill(r.data.units.find((u) => u.id === args.unit)); }, { pid, unit });
+
+// ===== Sales makes a cost sheet from the flat card =====
+let s = await page('sales'); await go(s, 'sales'); await openDrill(s); await s.waitForSelector('text=Cost sheets (priced offers)'); await s.click('text=Cost sheets (priced offers)');
+await s.waitForSelector('#cs-new'); await s.click('#cs-new'); await s.waitForSelector('#f_rate');
+await pick(s, '#f_lead_id', 'Mr Kulkarni ' + run); await s.fill('#f_rate', '2000'); await s.fill('#f_lines', 'Parking | 50000\nFestival offer | -100000'); await s.fill('#f_registration', '30000'); await shot(s, '70-costsheet-form'); await submit(s);
+ok('Sales makes a cost sheet', /Cost sheet made as a draft/.test(await toastText(s)));
+await s.waitForSelector('[data-css]'); let mt = (await s.locator('.modal').last().textContent()).replace(/\s+/g, ' ');
+ok('sheet shows agreement value (10,00,000 + 50,000 parking - 1,00,000 offer = 9,50,000), total with taxes, and 50,000 below the rate card', mt.includes('9,50,000') && mt.includes('₹50,000.00 below the rate card') && mt.includes('10,84,500'), mt.slice(0, 300));
+await shot(s, '71-costsheet-draft'); await s.click('[data-css]'); ok('sent for approval', /Sent for approval/.test(await toastText(s)));
+
+// ===== PM approves it (discount within the PM limit) =====
+let pm = await page('pm'); await go(pm, 'sales'); await openDrill(pm); await pm.waitForSelector('text=Cost sheets (priced offers)'); await pm.click('text=Cost sheets (priced offers)');
+await pm.waitForSelector('[data-csa="approve"]'); await pm.click('[data-csa="approve"]'); ok('PM approves the cost sheet', /Done/.test(await toastText(pm)));
+await pm.waitForTimeout(800);
+const sheetId = (await o.call('GET', `/api/sales/cost-sheets?unit_id=${unit}`)).data.sheets[0].id;
+const pr = await page('accounts'); await pr.goto(BASE + `/print.html?k=costsheet&id=${sheetId}`); await pr.waitForSelector('.doc-title', { timeout: 10000 });
+const printed = (await pr.textContent('#sheet')).replace(/\s+/g, ' ');
+ok('printed cost sheet shows the lines, taxes and the total on the letterhead', printed.includes('Cost Sheet') && printed.includes('Festival offer') && printed.includes('9,50,000') && printed.includes('GST @ 5.00%') && !printed.includes('not yet approved'), printed.slice(0, 400));
+await shot(pr, '72-costsheet-print');
+
+// ===== Sales books the flat from the approved sheet =====
+await s.reload(); await s.waitForFunction(() => typeof navigate === 'function' && currentUser, null, { timeout: 15000 }); await go(s, 'sales'); await openDrill(s); await s.waitForSelector('#ud-book'); await s.click('#ud-book'); await s.waitForSelector('#f_customer_name');
+await s.fill('#f_customer_name', 'Mr Kulkarni ' + run); await s.fill('#f_phone', '9822000111');
+const opts = await s.$$eval('#f_cost_sheet_id option', (os) => os.map((x) => x.textContent)); ok('booking form offers the approved cost sheet', opts.some((x) => x.includes('Version 1') && x.includes('9,50,000')), JSON.stringify(opts));
+await s.selectOption('#f_cost_sheet_id', { index: 1 }); await s.fill('#f_token_paise', '10000'); await shot(s, '73-book-from-sheet'); await submit(s);
+ok('flat booked at the sheet price', /Booked/.test(await toastText(s)));
+const bk = (await o.call('GET', '/api/sales/bookings')).data.bookings.find((b) => b.customer_name === 'Mr Kulkarni ' + run).id;
+const bkd = (await o.call('GET', `/api/sales/bookings/${bk}`)).data;
+ok('agreed price is exactly the sheet\'s Rs 9,50,000 and demands add up to it', bkd.booking.agreed_price_paise === 95000000 && bkd.demands.reduce((t, d) => t + d.amount_paise, 0) === 95000000);
+
+// ===== Accounts records a large receipt: it waits =====
+let ac = await page('accounts'); await ac.evaluate((id) => { bookingDetail(id); }, bk); await ac.waitForSelector('[data-rcpt]'); await ac.waitForTimeout(800); await ac.click('[data-rcpt]'); await ac.waitForSelector('#f_amount_paise');
+await ac.fill('#f_amount_paise', '7000'); await ac.fill('#f_ref_no', 'NEFT' + run); await submit(ac);
+const t = await toastText(ac); ok('a receipt above Rs 5,000 is held for a second person, in plain words', /second person/.test(t), t);
+await ac.waitForSelector('text=Receipts waiting for approval'); ok('the booking shows it as waiting, without Approve for Accounts', (await ac.$('[data-rq="approve"]')) === null);
+await shot(ac, '74-receipt-waiting');
+pm = await page('pm'); await pm.evaluate((id) => { bookingDetail(id); }, bk); await pm.waitForSelector('[data-rq="approve"]', { timeout: 10000 }); await shot(pm, '75-pm-approve-receipt'); await pm.click('[data-rq="approve"]');
+ok('PM approves the receipt', /Receipt approved/.test(await toastText(pm)));
+await pm.waitForTimeout(1200); const rmt = (await pm.locator('.modal').last().textContent()).replace(/\s+/g, ' ');
+ok('the receipt now appears with its financial-year number', /RC-.*-\d{4}-\d{2}-00001/.test(rmt) || (await o.call('GET', `/api/sales/bookings/${bk}`)).data.receipts[0].receipt_no.includes('-00001'), rmt.slice(0, 300));
+
+// ===== Demand letter number =====
+const dem = bkd.demands[0].id; const pd = await page('accounts'); await pd.goto(BASE + `/print.html?k=demand&id=${dem}`); await pd.waitForSelector('.doc-title', { timeout: 10000 });
+ok('the printed demand letter carries a Demand No', /Demand No:\s*DL-.*-\d{4}-\d{2}-0001/.test((await pd.textContent('#sheet')).replace(/\s+/g, ' ')));
+
+// ===== Credit note =====
+ac = await page('accounts'); await ac.evaluate((id) => { bookingDetail(id); }, bk); await ac.waitForSelector('#adj-new'); await ac.waitForTimeout(600); await ac.click('#adj-new'); await ac.waitForSelector('#f_reason');
+await ac.fill('#f_amount_paise', '1000'); await ac.fill('#f_reason', 'Goodwill credit for the delay'); await submit(ac); ok('Accounts raises a credit note of Rs 1,000', /Sent for approval/.test(await toastText(ac)));
+pm = await page('pm'); await pm.evaluate((id) => { bookingDetail(id); }, bk); await pm.waitForSelector('[data-adj="approve"]', { timeout: 10000 }); await pm.click('[data-adj="approve"]'); ok('PM approves the credit note', /Done/.test(await toastText(pm)));
+await pm.waitForTimeout(1000); const cmt = (await pm.locator('.modal').last().textContent()).replace(/\s+/g, ' ');
+ok('the note has its own number and the booking lists it', /CN-.*-\d{4}-\d{2}-0001/.test(cmt), cmt.slice(0, 400));
+const cnId = (await o.call('GET', `/api/sales/bookings/${bk}/adjustments`)).data.adjustments[0].id;
+const pc = await page('accounts'); await pc.goto(BASE + `/print.html?k=creditnote&id=${cnId}`); await pc.waitForSelector('.doc-title', { timeout: 10000 });
+ok('credit note prints on the letterhead', (await pc.textContent('#sheet')).includes('Credit Note') && (await pc.textContent('#sheet')).includes('Goodwill'));
+await shot(pm, '76-booking-notes');
+
+// ===== Co-applicant =====
+s = await page('sales'); await s.evaluate((id) => { bookingDetail(id); }, bk); await s.waitForSelector('#party-new'); await s.waitForTimeout(600); await s.click('#party-new'); await s.waitForSelector('#f_name');
+await s.fill('#f_name', 'Mrs Kulkarni'); await s.fill('#f_relation', 'spouse'); await s.fill('#f_share', '40'); await s.fill('#f_pan', 'ABCDE1234F'); await s.fill('#f_aadhaar', '1234 5678 9012'); await submit(s);
+ok('Sales adds a co-applicant', /Co-applicant added/.test(await toastText(s)));
+await s.waitForTimeout(900); const pt = (await s.locator('.modal').last().textContent()).replace(/\s+/g, ' ');
+ok('co-applicant listed with 40% and only the last 4 of Aadhaar', pt.includes('Mrs Kulkarni') && pt.includes('40% share') && pt.includes('XXXX XXXX 9012') && !pt.includes('123456789012') && !pt.includes('ABCDE1234F'), pt.slice(0, 500));
+await shot(s, '77-co-applicant');
+
+// ===== Handover =====
+await pmc.call('POST', `/api/sales/bookings/${bk}/registration`, { agreement_date: iso(-20) });
+await s.evaluate((id) => { bookingDetail(id); }, bk); await s.waitForSelector('#ho-open'); await s.waitForTimeout(500); await s.click('#ho-open'); ok('Sales opens the handover', /Handover opened/.test(await toastText(s)));
+await s.waitForSelector('[data-hoi]'); await shot(s, '78-handover-checklist');
+ok('starter checklist with the "edit to suit your process" note', (await s.$$('[data-hoi]')).length === 5 && (await s.locator('.modal').last().textContent()).includes('Starter checklist'));
+await s.locator('[data-hoi]').first().check(); await s.waitForTimeout(500);
+await s.click('#ho-details'); await s.waitForSelector('#f_oc_reference'); await s.fill('#f_possession_offered_on', iso(5)); await s.fill('#f_oc_reference', 'OC/2026/77'); await submit(s); ok('possession details saved', /Saved/.test(await toastText(s)));
+await s.waitForSelector('#ho-done'); await s.waitForTimeout(500); await s.click('#ho-done'); ok('Sales marks it handed over', /Handed over/.test(await toastText(s)));
+await s.waitForTimeout(1200); const ht = (await s.locator('.modal').last().textContent()).replace(/\s+/g, ' ');
+ok('booking shows Handed over, OC reference and the date', ht.includes('Handed over on') && ht.includes('OC/2026/77'), ht.slice(0, 300));
+ok('the flat is possessed on the stacking plan', (await o.call('GET', `/api/reports/stacking?project_id=${pid}`)).data.units.find((u) => u.id === unit).state === 'possessed');
+await shot(s, '79-handed-over');
+await browser.close(); console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);

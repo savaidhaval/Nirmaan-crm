@@ -155,6 +155,6 @@ async function contractorLedger(id) {
     <p><b>Payable now: ${moneyP(t.payable || 0)}</b><br><span class="muted">Billed (approved) ${moneyP(t.billed_net || 0)} − paid ${moneyP(t.paid_on_bills || 0)}</span></p>
     <p>Advance outstanding: <b>${moneyP(t.advance_outstanding || 0)}</b><br>Retention held: <b>${moneyP(t.retention_held || 0)}</b></p>
     ${d.entries.map((e) => `<p class="muted">${esc(String(e.created_at).substring(0, 10))} · ${esc(e.wo_no)} · ${esc(LABEL[e.kind] || e.kind)} · ${e.amount_paise < 0 ? '−' : ''}${moneyP(Math.abs(e.amount_paise))}</p>`).join('') || '<p class="muted">No entries yet.</p>'}
-    <div class="modal-actions"><button class="btn btn-primary" id="cl-x">Close</button></div></div>`;
-  document.body.appendChild(ov); $('cl-x').onclick = () => ov.remove();
+    <div class="modal-actions"><button class="btn" id="cl-docs">Documents</button><button class="btn btn-primary" id="cl-x">Close</button></div></div>`;
+  document.body.appendChild(ov); $('cl-x').onclick = () => ov.remove(); $('cl-docs').onclick = () => partyDocsModal('contractor', id);
 }

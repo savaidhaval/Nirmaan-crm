@@ -20,6 +20,18 @@ const MATRIX = {
   procurement: {
     owner: 'VCEAX', pm: 'VCEA', site: 'C', sales: '–', accounts: 'VCE', purchase: 'VCE', hr: '–', viewer: 'V',
   },
+  ai: {
+    owner: 'VCEAX', pm: 'VC', site: 'VC', sales: 'VC', accounts: 'VC', purchase: 'VC', hr: '–', viewer: 'VC',
+  },
+  professionals: {
+    owner: 'VCEAX', pm: 'VCE', site: '–', sales: '–', accounts: 'VCE', purchase: 'VCE', hr: '–', viewer: 'V',
+  },
+  petty: {
+    owner: 'VCEAX', pm: 'VCEA', site: 'VC', sales: '–', accounts: 'VCE', purchase: '–', hr: '–', viewer: '–',
+  },
+  stores: {
+    owner: 'VCEAX', pm: 'VCEA', site: 'VCE', sales: '–', accounts: 'V', purchase: 'VCE', hr: '–', viewer: 'V',
+  },
   budget: {
     owner: 'VCEAX', pm: 'VCE', site: '–', sales: '–', accounts: 'V', purchase: 'V', hr: '–', viewer: 'V',
   },
