@@ -1,0 +1,92 @@
+import { createRequire } from 'node:module';
+const { chromium } = createRequire(import.meta.url)('/opt/node-tools/node_modules/playwright');
+const BASE = process.env.BASE || 'http://localhost:8787', SHOTS = '/tmp/claude-0/scratch/shots';
+const run = Date.now().toString(36);
+let pass = 0, fail = 0; const ok = (n, c, x = '') => { c ? pass++ : fail++; console.log(`${c ? 'PASS' : 'FAIL'}  ${n}${c ? '' : '  ' + x}`); };
+class C { constructor() { this.cookie = ''; } async call(m, p, b) { const h = { 'X-NirmaanCRM': '1' }; if (this.cookie) h.cookie = this.cookie; let body; if (b) { h['Content-Type'] = 'application/json'; body = JSON.stringify(b); }
+  const r = await fetch(BASE + p, { method: m, headers: h, body }); const sc = r.headers.get('set-cookie'); if (sc) this.cookie = sc.split(';')[0]; let d = null; try { d = await r.json(); } catch (e) {} return { status: r.status, data: d && d.data, err: d && d.error }; } }
+const o = new C(); await o.call('POST', '/api/auth/login', { email: 'owner@test.local', password: 'CiStrongPass-12345' });
+const pid = (await o.call('POST', '/api/projects', { name: 'UI Tower ' + run, code: 'UI' + run.toUpperCase().slice(-5), budget_paise: 5e9 })).data.id;
+await o.call('POST', '/api/settings/con.enabled', { value: 'on' });
+await o.call('POST', '/api/settings/con.pm_approval_limit_paise', { value: 50000000 });
+const users = {};
+for (const role of ['site', 'pm', 'purchase', 'accounts', 'sales', 'viewer']) {
+  const email = `ui-${role}-${run}@test.local`; const r = await o.call('POST', '/api/users', { name: 'UI ' + role + ' ' + run, email, role, projects: role === 'site' ? [pid] : [] });
+  const c = new C(); await c.call('POST', '/api/auth/login', { email, password: r.data.temporaryPassword }); const pw = 'UiStrongPass-' + run;
+  await c.call('POST', '/api/auth/change-password', { currentPassword: r.data.temporaryPassword, newPassword: pw }); users[role] = { email, pw };
+}
+const browser = await chromium.launch();
+const ctxs = {};
+async function page(role) {
+  if (!ctxs[role]) {
+    const ctx = await browser.newContext({ viewport: { width: 390, height: 800 } });
+    const email = role === 'owner' ? 'owner@test.local' : users[role].email, password = role === 'owner' ? 'CiStrongPass-12345' : users[role].pw;
+    const r = await ctx.request.post(BASE + '/api/auth/login', { headers: { 'X-NirmaanCRM': '1', 'Content-Type': 'application/json' }, data: { email, password } });
+    if (!r.ok()) throw new Error('login ' + role + ' ' + r.status());
+    ctxs[role] = ctx;
+  }
+  const p = await ctxs[role].newPage(); p.on('dialog', (d) => d.accept()); p.on('pageerror', (e) => console.log('PAGEERROR', role, e.message));
+  await p.goto(BASE + '/'); await p.waitForFunction(() => typeof navigate === 'function' && typeof currentUser !== 'undefined' && currentUser, null, { timeout: 15000 }); return p;
+}
+const go = async (p, route) => { await p.evaluate((r) => navigate(r), route); await p.waitForTimeout(800); };
+const toastText = async (p) => { await p.waitForTimeout(500); return p.evaluate(() => (document.getElementById('toast') || {}).textContent || ''); };
+const submit = (p) => p.click('#modal-form button[type=submit]');
+const pick = (p, sel, label) => p.selectOption(sel, { label });
+const shot = (p, n) => p.screenshot({ path: `${SHOTS}/${n}.png` });
+const proj = 'UI Tower ' + run;
+const sc = new C(); await sc.call('POST', '/api/auth/login', { email: users.sales.email, password: users.sales.pw });
+const ac = new C(); await ac.call('POST', '/api/auth/login', { email: users.accounts.email, password: users.accounts.pw });
+await o.call('POST', '/api/sales/plan-stages', { project_id: pid, stages: [{ stage_name: 'All', pct_bp: 10000 }] });
+const unit = (await o.call('POST', '/api/sales/inventory', { project_id: pid, wing: 'C', floor: 2, unit_no: 'R' + run.slice(-3), type: '2BHK', carpet_sqft: 600, rera_carpet_sqft: 500, price_paise: 200000000 })).data.id;
+const bk = (await o.call('POST', '/api/sales/bookings', { unit_id: unit, customer_name: 'Cust ' + run, phone: '9811122233', agreed_price_paise: 200000000, token_paise: 1000000 })).data.id;
+const dem = (await o.call('GET', `/api/sales/bookings/${bk}`)).data.demands[0].id;
+await ac.call('POST', `/api/sales/bookings/${bk}/receipts`, { amount_paise: 100000000, demand_id: dem, mode: 'neft', ref_no: 'UIR' + run });
+
+// ===== RERA account =====
+let a = await page('accounts'); await go(a, 'rera'); await a.waitForSelector('#rera-project'); await pick(a, '#rera-project', proj); await a.waitForTimeout(900);
+let tx = (await a.textContent('#rera-body')).replace(/\s+/g, ' ');
+ok('shows buyers paid Rs 10,00,000 and about Rs 7,00,000 should be in the account', tx.includes('10,00,000') && tx.includes('7,00,000') && tx.includes('Still to deposit'), tx.slice(0, 300));
+ok('the 70% rule is shown as a figure to confirm with the CA, not as law', tx.includes('Confirm the current MahaRERA'));
+await shot(a, '80-rera-before');
+await a.click('#rera-dep'); await a.waitForSelector('#f_amount_paise'); await a.fill('#f_amount_paise', '500000'); await a.fill('#f_ref_no', 'UTR' + run); await submit(a);
+ok('Accounts records a Rs 5,00,000 deposit', /Recorded/.test(await toastText(a)));
+await a.waitForTimeout(900); tx = (await a.textContent('#rera-body')).replace(/\s+/g, ' ');
+ok('gap shrinks to Rs 2,00,000', tx.includes('Still to deposit ₹2,00,000'), tx.slice(0, 300));
+let dlg = null; a.on('dialog', (d) => { dlg = d.message(); });
+await a.click('#rera-wd'); await a.waitForSelector('#f_cert_ref'); await a.fill('#f_amount_paise', '100000'); await submit(a);
+await a.waitForTimeout(1200); ok('a withdrawal with no certificate shows a warning but is recorded', dlg && dlg.includes('certificate'), String(dlg).slice(0, 200));
+await a.waitForTimeout(600); tx = (await a.textContent('#rera-body')).replace(/\s+/g, ' ');
+ok('balance Rs 4,00,000 and the entry flags "no certificate recorded"', tx.includes('4,00,000') && tx.includes('no certificate recorded'), tx.slice(0, 500));
+await shot(a, '81-rera-after');
+const vw = await page('viewer'); await go(vw, 'rera'); await vw.waitForSelector('#rera-project'); await pick(vw, '#rera-project', proj); await vw.waitForTimeout(900);
+ok('the CA (viewer) can read and download the statement but cannot record anything', (await vw.$('#rera-dep')) === null && (await vw.$('a[href*="csv=1"]')) !== null);
+
+// ===== Site-visit feedback and check-in =====
+const leadId = (await sc.call('POST', '/api/sales/leads', { name: 'Mrs Joshi ' + run, phone: '9' + String(Date.now()).slice(-9), project_id: pid, source: 'walk_in', consent: true })).data.id;
+const visit1 = (await sc.call('POST', `/api/sales/leads/${leadId}/visit`, { visit_at: new Date().toISOString().slice(0, 16) })).data.id;
+const pm = await page('pm'); await ctxs.pm.grantPermissions(['geolocation']); await ctxs.pm.setGeolocation({ latitude: 19.076, longitude: 72.8777 });
+await go(pm, 'projects'); await pm.locator('.card', { hasText: proj }).locator('[data-loc]').waitFor({ timeout: 10000 }); await pm.locator('.card', { hasText: proj }).locator('[data-loc]').click();
+ok('PM sets the site location from the project card', /Site location saved/.test(await toastText(pm)));
+const s = await page('sales'); await ctxs.sales.grantPermissions(['geolocation']); await ctxs.sales.setGeolocation({ latitude: 19.0763, longitude: 72.8777, accuracy: 15 });
+await go(s, 'sales'); await s.evaluate((id) => { leadDetail(id); }, leadId); await s.waitForSelector('[data-vs="done"]'); await s.click('[data-vs="done"]'); await s.waitForSelector('#f_interest');
+await s.selectOption('#f_interest', 'hot'); await s.selectOption('#f_objection', { index: 1 }); await s.selectOption('#f_next_step', 'send_cost_sheet'); await s.fill('#f_feedback', 'Liked the layout'); await s.check('#f_checkin'); await shot(s, '82-visit-feedback-form'); await submit(s);
+const t1 = await toastText(s); await s.waitForTimeout(2500); const t2 = await toastText(s);
+ok('three taps of feedback, then "Checked in at the site." (no warning, about 33 m away)', /Visit saved|Checked in at the site/.test(t1) && /Checked in at the site/.test(t2), t1 + ' | ' + t2);
+let row = (await sc.call('GET', `/api/sales/leads/${leadId}`)).data.visits.find((v) => v.id === visit1);
+ok('the visit holds interest, objection, next step and a check-in', row.interest === 'hot' && row.objection && row.next_step === 'send_cost_sheet' && row.checked_in_at && row.distance_m < 80, JSON.stringify(row));
+// a second visit from far away: soft warning, still saved
+const visit2 = (await sc.call('POST', `/api/sales/leads/${leadId}/visit`, { visit_at: new Date().toISOString().slice(0, 16) })).data.id;
+await ctxs.sales.setGeolocation({ latitude: 19.12, longitude: 72.8777, accuracy: 15 });
+await s.reload(); await s.waitForFunction(() => typeof navigate === 'function' && currentUser, null, { timeout: 15000 }); await go(s, 'sales'); await s.evaluate((id) => { leadDetail(id); }, leadId); await s.waitForSelector('[data-vs="done"]');
+await s.click('[data-vs="done"]'); await s.waitForSelector('#f_interest'); await s.check('#f_checkin'); await submit(s); await s.waitForTimeout(3000);
+const t3 = await toastText(s); ok('far from the site: a soft warning, and the check-in is still saved', /saved anyway/.test(t3), t3);
+row = (await sc.call('GET', `/api/sales/leads/${leadId}`)).data.visits.find((v) => v.id === visit2); ok('far visit saved with its distance', row.checked_in_at && row.distance_m > 4000);
+// denied location never blocks
+await ctxs.sales.clearPermissions(); const visit3 = (await sc.call('POST', `/api/sales/leads/${leadId}/visit`, { visit_at: new Date().toISOString().slice(0, 16) })).data.id;
+await s.reload(); await s.waitForFunction(() => typeof navigate === 'function' && currentUser, null, { timeout: 15000 }); await go(s, 'sales'); await s.evaluate((id) => { leadDetail(id); }, leadId); await s.waitForSelector('[data-vs="done"]');
+await s.click('[data-vs="done"]'); await s.waitForSelector('#f_interest'); await s.check('#f_checkin'); await submit(s); await s.waitForTimeout(4000);
+row = (await sc.call('GET', `/api/sales/leads/${leadId}`)).data.visits.find((v) => v.id === visit3);
+ok('if the phone refuses to share its location, the visit is still saved', row.status === 'done' && !row.checked_in_at);
+const fun = await page('pm'); await go(fun, 'sales'); await fun.waitForTimeout(1500);
+ok('the Sales funnel mentions visit to booking', (await fun.textContent('#sales-list')).includes('visit to booking'));
+await browser.close(); console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);

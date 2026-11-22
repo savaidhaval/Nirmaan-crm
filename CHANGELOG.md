@@ -72,3 +72,8 @@
 - WP-14: handover checklist (editable template), possession details, home-loan records, snags per flat, "possessed" status, due reminders, pending-handover report.
 - Migration 0023; code in `src/routes/sales3.js`, `public/pages11.js`; test `tests/sales3.mjs` (92 checks, in CI); browser walkthrough 25 checks.
 - Released: WP-8 to WP-14, professionals and contracts, AI assistant (after GitHub checks passed).
+
+## WP-15 RERA account tracker, WP-19 visit feedback (2026-11-22)
+- RERA account: required deposit (setting rera.designated_pct_bp, default 70%, confirm with CA) vs deposited vs withdrawn, the gap, balance; deposits and withdrawals recorded by Accounts, reversed with a reason, never deleted; a withdrawal can never exceed the balance; warnings (not blocks) for no certificate, above the completion share, above recorded cost; statement CSV for the CA; weekly gap reminder and quarterly certificate reminder; the cash-flow escrow report now uses the same setting instead of a hard-coded 70%.
+- Visit feedback: interest (hot/warm/cold), objection (editable list), next step; optional "check in" with the phone's location compared with the project's location (soft warning only, saved anyway; never blocks); visit-to-booking by project, source and salesperson (funnel + CSV). Privacy page now describes staff location and the AI assistant.
+- Migrations 0024-0025; tests rera_visits (44 checks, in CI); browser walkthrough 14 checks.
