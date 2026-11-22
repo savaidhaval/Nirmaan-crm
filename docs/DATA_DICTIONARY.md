@@ -360,3 +360,6 @@ id TEXT PK, source TEXT, seen_at TEXT
 
 ## 0030 additions (WP-22 drawing acknowledgement)
 - drw_acks (revision_id, user_id, acked_at; UNIQUE per person per revision; never edited or deleted). Only role site (assigned to the project) confirms; only the current IFC revision can be confirmed. Reminder time limit: setting drawing.ack_hours.
+
+## 0031 additions (WP-17 Tally export)
+- tally_export_log (what was exported, dates, voucher count, held-back count, total in paise, who, when). Ledger names are in the setting tally.ledger_map (JSON: one name per ledger role, an optional ledger per party, auto_party flag, optional Tally company name). The CRM does no accounting: vouchers are built from existing records (receipts, adjustments, bills, payments, RA bills, petty expenses); reversed or cancelled money records are not exported.
