@@ -50,7 +50,7 @@ async function budgetHeadDetail(id, writer, pid) {
   ov.innerHTML = `<div class="modal"><h2>${esc(d.head.code)} · ${esc(d.head.name)}</h2><p>Budget <b>${moneyP(d.head.budget_paise)}</b></p>
     <h3>Purchase orders</h3>${d.pos.map((p) => `<p>${esc(p.po_no)} · ${esc(p.vendor)} · ${moneyP(p.amount_paise)} ${statusChip(p.status)}</p>`).join('') || '<p class="muted">None tagged yet.</p>'}
     <h3>Work orders</h3>${d.work_orders.map((w) => `<p>${esc(w.wo_no)} · ${esc(w.contractor)} · ${moneyP(w.value_paise)} ${statusChip(w.status)}</p>`).join('') || '<p class="muted">None tagged yet.</p>'}
-    <div class="modal-actions">${writer ? '<button class="btn" id="bh-edit">Change budget</button><button class="btn" id="bh-del">Remove head</button>' : ''}<button class="btn btn-primary" id="bh-x">Close</button></div></div>`;
+    <div class="modal-actions">${writer ? '<button class="btn" id="bh-edit">Change budget</button>' + (currentUser.role === 'owner' ? '<button class="btn" id="bh-del">Remove head</button>' : '') : ''}<button class="btn btn-primary" id="bh-x">Close</button></div></div>`;
   document.body.appendChild(ov); $('bh-x').onclick = () => ov.remove();
   if ($('bh-edit')) $('bh-edit').onclick = async () => {
     const v = await openForm({ title: 'Change budget', fields: [{ name: 'name', label: 'Name', value: d.head.name, required: true }, { name: 'budget_paise', label: 'Budget (₹)', type: 'money', value: (d.head.budget_paise / 100).toFixed(2), required: true }] });

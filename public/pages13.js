@@ -81,7 +81,8 @@ async function renderProfile(main) {
   $('pf-photo').onclick = () => $('pf-file').click();
   $('pf-file').onchange = async () => {
     const f = $('pf-file').files[0]; if (!f) return;
-    const fd = new FormData(); fd.append('file', await shrinkPicture(f));
+    const pic = await shrinkPicture(f); $('pf-file').value = ''; if (!pic) return;
+    const fd = new FormData(); fd.append('file', pic);
     if (await act(api('/api/me/avatar', { method: 'POST', body: fd }), 'Picture saved')) { await refreshMe(); renderProfile(main); }
   };
   if ($('pf-nophoto')) $('pf-nophoto').onclick = async () => { if (await act(api('/api/me/avatar', { method: 'DELETE' }), 'Picture removed')) { await refreshMe(); renderProfile(main); } };

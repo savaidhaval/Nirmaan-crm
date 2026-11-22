@@ -1,0 +1,98 @@
+import { createRequire } from 'node:module';
+const { chromium } = createRequire(import.meta.url)('/opt/node-tools/node_modules/playwright');
+const BASE = process.env.BASE || 'http://localhost:8787', SHOTS = '/tmp/claude-0/scratch/shots';
+const run = Date.now().toString(36);
+let pass = 0, fail = 0; const ok = (n, c, x = '') => { c ? pass++ : fail++; console.log(`${c ? 'PASS' : 'FAIL'}  ${n}${c ? '' : '  ' + x}`); };
+class C { constructor() { this.cookie = ''; } async call(m, p, b) { const h = { 'X-NirmaanCRM': '1' }; if (this.cookie) h.cookie = this.cookie; let body; if (b) { h['Content-Type'] = 'application/json'; body = JSON.stringify(b); }
+  const r = await fetch(BASE + p, { method: m, headers: h, body }); const sc = r.headers.get('set-cookie'); if (sc) this.cookie = sc.split(';')[0]; let d = null; try { d = await r.json(); } catch (e) {} return { status: r.status, data: d && d.data, err: d && d.error }; } }
+const o = new C(); await o.call('POST', '/api/auth/login', { email: 'owner@test.local', password: 'CiStrongPass-12345' });
+const pid = (await o.call('POST', '/api/projects', { name: 'UI Tower ' + run, code: 'UI' + run.toUpperCase().slice(-5), budget_paise: 5e9 })).data.id;
+await o.call('POST', '/api/settings/con.enabled', { value: 'on' });
+await o.call('POST', '/api/settings/con.pm_approval_limit_paise', { value: 50000000 });
+const users = {};
+for (const role of ['site', 'pm', 'purchase', 'accounts', 'sales', 'viewer']) {
+  const email = `ui-${role}-${run}@test.local`; const r = await o.call('POST', '/api/users', { name: 'UI ' + role + ' ' + run, email, role, projects: role === 'site' ? [pid] : [] });
+  const c = new C(); await c.call('POST', '/api/auth/login', { email, password: r.data.temporaryPassword }); const pw = 'UiStrongPass-' + run;
+  await c.call('POST', '/api/auth/change-password', { currentPassword: r.data.temporaryPassword, newPassword: pw }); users[role] = { email, pw };
+}
+const browser = await chromium.launch();
+const ctxs = {};
+async function page(role) {
+  if (!ctxs[role]) {
+    const ctx = await browser.newContext({ viewport: { width: 390, height: 800 } });
+    const email = role === 'owner' ? 'owner@test.local' : users[role].email, password = role === 'owner' ? 'CiStrongPass-12345' : users[role].pw;
+    const r = await ctx.request.post(BASE + '/api/auth/login', { headers: { 'X-NirmaanCRM': '1', 'Content-Type': 'application/json' }, data: { email, password } });
+    if (!r.ok()) throw new Error('login ' + role + ' ' + r.status());
+    ctxs[role] = ctx;
+  }
+  const p = await ctxs[role].newPage(); p.on('dialog', (d) => d.accept()); p.on('pageerror', (e) => console.log('PAGEERROR', role, e.message));
+  await p.goto(BASE + '/'); await p.waitForFunction(() => typeof navigate === 'function' && typeof currentUser !== 'undefined' && currentUser, null, { timeout: 15000 }); return p;
+}
+const go = async (p, route) => { await p.evaluate((r) => navigate(r), route); await p.waitForTimeout(800); };
+const toastText = async (p) => { await p.waitForTimeout(500); return p.evaluate(() => (document.getElementById('toast') || {}).textContent || ''); };
+const submit = (p) => p.click('#modal-form button[type=submit]');
+const pick = (p, sel, label) => p.selectOption(sel, { label });
+const shot = (p, n) => p.screenshot({ path: `${SHOTS}/${n}.png` });
+{ const email = 'ui-hr-' + run + '@test.local'; const r = await o.call('POST', '/api/users', { name: 'UI hr ' + run, email, role: 'hr', projects: [] }); const c = new C(); await c.call('POST', '/api/auth/login', { email, password: r.data.temporaryPassword }); const pw = 'UiStrongPass-' + run; await c.call('POST', '/api/auth/change-password', { currentPassword: r.data.temporaryPassword, newPassword: pw }); users.hr = { email, pw }; }
+const pageAt = async (role, w, h) => {
+  const ctx = await browser.newContext({ viewport: { width: w, height: h } });
+  const email = role === 'owner' ? 'owner@test.local' : users[role].email, password = role === 'owner' ? 'CiStrongPass-12345' : users[role].pw;
+  const r = await ctx.request.post(BASE + '/api/auth/login', { headers: { 'X-NirmaanCRM': '1', 'Content-Type': 'application/json' }, data: { email, password } }); if (!r.ok()) throw new Error('login ' + role);
+  const p = await ctx.newPage(); p.on('dialog', (d) => d.accept()); p.on('pageerror', (e) => console.log('PAGEERROR', role, e.message));
+  await p.goto(BASE + '/'); await p.waitForFunction(() => typeof navigate === 'function' && typeof currentUser !== 'undefined' && currentUser, null, { timeout: 15000 }); await p.waitForTimeout(700); return p;
+};
+const heads = (p) => p.$$eval('#side-nav .side-head', (els) => els.map((e) => e.textContent.trim()));
+
+// ===== desktop: grouped menu, several open at once =====
+const ow = await pageAt('owner', 1280, 800);
+let h = await heads(ow);
+ok('Owner sees the main headings: Projects, Money, Sales, People, Library, Admin, You', ['Projects', 'Money', 'Sales', 'People', 'Library', 'Admin', 'You'].every((x) => h.includes(x)), JSON.stringify(h));
+await ow.click('[data-grp="Money"]'); await ow.click('[data-grp="Projects"]');
+ok('two groups can stay open together', (await ow.getAttribute('[data-grp="Money"]', 'aria-expanded')) === 'true' && (await ow.getAttribute('[data-grp="Projects"]', 'aria-expanded')) === 'true');
+ok('their pages show underneath', (await ow.textContent('#side-nav')).includes('Procurement') && (await ow.textContent('#side-nav')).includes('Drawings'));
+await shot(ow, '150-desktop-nav');
+await ow.click('#side-nav [data-route="drawings"]'); await ow.waitForTimeout(700); ok('a page opens from the grouped menu', (await ow.textContent('h1')).includes('Drawings'));
+await ow.reload(); await ow.waitForSelector('#side-nav .side-head'); await ow.waitForTimeout(500); ok('open groups are remembered after a reload', (await ow.getAttribute('[data-grp="Money"]', 'aria-expanded')) === 'true');
+const roles = {};
+for (const r of ['pm', 'site', 'sales', 'accounts', 'hr', 'viewer']) { const p = await pageAt(r, 1280, 800); roles[r] = await heads(p); await p.close(); }
+ok('the PM sees every working group', ['Projects', 'Money', 'Sales', 'People', 'Library'].every((x) => roles.pm.includes(x)), JSON.stringify(roles.pm));
+ok('Site sees only the groups it needs (no Sales, no Admin)', roles.site.includes('Projects') && !roles.site.includes('Sales') && !roles.site.includes('Admin'), JSON.stringify(roles.site));
+ok('Sales sees Sales and no Money or Admin', roles.sales.includes('Sales') && !roles.sales.includes('Money') && !roles.sales.includes('Admin'), JSON.stringify(roles.sales));
+ok('Accounts sees Money and Sales, no Admin', roles.accounts.includes('Money') && roles.accounts.includes('Sales') && !roles.accounts.includes('Admin'), JSON.stringify(roles.accounts));
+ok('HR sees only People (and You)', roles.hr.includes('People') && !roles.hr.includes('Money') && !roles.hr.includes('Projects'), JSON.stringify(roles.hr));
+const pmp = await pageAt('pm', 1280, 800); const pmItems = await pmp.evaluate(() => sidebarItems('pm').flatMap((g) => g[1]).map((i) => i.route)); await pmp.close();
+ok('Users & access, Settings, Storage and Email are Owner-only', !pmItems.some((r) => ['users', 'settings', 'storage', 'email'].includes(r)));
+
+// ===== install button =====
+await ow.click('#btn-install'); await ow.waitForSelector('#install-modal'); await shot(ow, '151-install');
+ok('Install shows iPhone/iPad, Android, Windows and Mac', (await ow.$$('#install-modal [data-os]')).length === 4);
+await ow.click('#install-modal [data-os="mac"]'); ok('Mac tab explains Safari "Add to Dock"', (await ow.textContent('#install-modal')).includes('Add to Dock'));
+await ow.click('#install-modal [data-os="ios"]'); ok('iPhone tab explains "Add to Home Screen"', (await ow.textContent('#install-modal')).includes('Add to Home Screen'));
+await ow.click('#inst-close');
+const man = await (await fetch(BASE + '/manifest.json')).json(); ok('the web app manifest is installable (name, icons, standalone)', man.display === 'standalone' && man.icons.length >= 3 && man.icons.some((i) => i.purpose === 'maskable') && (await fetch(BASE + '/icons/icon-512.png')).status === 200);
+ok('the login page offers the install button too', (await (await fetch(BASE + '/login.html')).text()).includes('data-install'));
+
+// ===== photo crop =====
+await ow.evaluate(() => navigate('profile')); await ow.waitForSelector('#pf-photo');
+await ow.setInputFiles('#pf-file', '/tmp/claude-0/scratch/photo.png'); await ow.waitForSelector('#cp-stage'); await ow.waitForTimeout(400); await shot(ow, '152-crop');
+ok('choosing a picture opens the crop window with a round guide and a zoom slider', (await ow.$('#cp-stage .ring')) !== null && (await ow.$('#cp-zoom')) !== null);
+await ow.fill('#cp-zoom', '220');
+const box = await ow.locator('#cp-stage').boundingBox(); await ow.mouse.move(box.x + 150, box.y + 150); await ow.mouse.down(); await ow.mouse.move(box.x + 120, box.y + 140, { steps: 4 }); await ow.mouse.up();
+await ow.click('#cp-ok'); await ow.waitForTimeout(1800);
+ok('the cropped photo is saved and shown in the top bar', (await ow.$('#avatar img')) !== null);
+const dims = await ow.evaluate(async () => { const r = await fetch(`/api/users/${currentUser.id}/avatar`); const b = await createImageBitmap(await r.blob()); return [b.width, b.height]; });
+ok('it is a 256 by 256 square', dims[0] === 256 && dims[1] === 256, JSON.stringify(dims));
+await ow.setInputFiles('#pf-file', '/tmp/claude-0/scratch/photo.png'); await ow.waitForSelector('#cp-cancel'); await ow.click('#cp-cancel'); await ow.waitForTimeout(300); ok('Cancel leaves the picture as it was', (await ow.$('#cp-stage')) === null);
+await shot(ow, '153-profile');
+
+// ===== phone =====
+const ph = await pageAt('owner', 390, 844);
+const tabs = await ph.$$eval('#bottom-nav .nav-item', (els) => els.map((e) => e.textContent.trim()));
+ok('the phone tab bar ends with Menu', tabs[tabs.length - 1] === 'Menu', JSON.stringify(tabs));
+await ph.click('#bottom-nav .nav-item:last-child'); await ph.waitForSelector('.menu-group'); await ph.waitForTimeout(400); await shot(ph, '154-phone-menu');
+await ph.click('.menu-group button[data-grp="Money"]'); await ph.click('.menu-group button[data-grp="Projects"]');
+ok('on a phone several groups can be open too', (await ph.$$('.menu-group .pills.open')).length >= 2);
+await ph.locator('.menu-group .pills a', { hasText: 'Procurement' }).click(); await ph.waitForTimeout(700); ok('a page opens from the phone menu', (await ph.textContent('h1')).includes('Procurement'));
+await ph.evaluate(() => navigate('dashboard')); await ph.waitForTimeout(1200); await shot(ph, '155-phone-home');
+const od = await pageAt('owner', 1360, 880); await od.waitForTimeout(1500); await shot(od, '157-desktop-home');
+await browser.close(); console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);

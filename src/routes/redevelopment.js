@@ -227,6 +227,7 @@ export function registerRedevelopment(router, h) {
 
   router.post('/api/redev/members/:id/remove', async (req, env) => withAuth(req, env, 'redevelopment', 'E', async (req, env) => {
     try {
+      if (req.user.role !== 'owner') return json({ ok: false, error: 'Only the Owner can remove a member.' }, 403);
       const { mem, err } = await loadMember(env, req, Number(req.params.id)); if (err) return err;
       const reason = txt((await req.json().catch(() => ({}))).reason, 200); if (!reason) return bad('Say why this member is being removed.');
       await env.DB.batch([env.DB.prepare("UPDATE red_members SET deleted_at = ? WHERE id = ? AND deleted_at IS NULL").bind(nowStr(), mem.id), audit(env, req.user, 'delete', 'red_members', mem.id, `Removed member ${mem.member_name} (${mem.unit_label}): ${reason}`)]);

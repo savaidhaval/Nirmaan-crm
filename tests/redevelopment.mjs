@@ -71,7 +71,8 @@ ok('counting by carpet area works and the threshold is editable (area basis, 40%
 await o.call('PUT', `/api/redev/societies/${soc}`, { count_basis: 'members', consent_threshold_pct: 51 });
 ok('the legal note is returned with the society', /advocate/.test((await pm.call('GET', `/api/redev/societies/${soc}`)).data.legal_note));
 // removing a member needs a reason; paging
-ok('removing a member needs a reason', (await pm.call('POST', `/api/redev/members/${m1.data.id}/remove`, {})).status === 400 && (await pm.call('POST', `/api/redev/members/${m1.data.id}/remove`, { reason: 'Entered by mistake' })).status === 200);
+ok('only the Owner can remove a member: the PM is refused', (await pm.call('POST', `/api/redev/members/${m1.data.id}/remove`, { reason: 'Entered by mistake' })).status === 403);
+ok('removing a member needs a reason', (await o.call('POST', `/api/redev/members/${m1.data.id}/remove`, {})).status === 400 && (await o.call('POST', `/api/redev/members/${m1.data.id}/remove`, { reason: 'Entered by mistake' })).status === 200);
 await pm.call('POST', `/api/redev/societies/${soc}/members/import`, { rows: Array.from({ length: 30 }, (_, i) => ({ wing: 'C', unit_label: 'C' + i, member_name: 'Bulk ' + i })) });
 ok('second page of members', (await pm.call('GET', `/api/redev/societies/${soc}/members?page=2`)).data.members.length === 15 && (await pm.call('GET', `/api/redev/societies/${soc}/members`)).data.total === 40);
 // documents

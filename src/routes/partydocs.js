@@ -87,6 +87,7 @@ export function registerPartyDocs(router, h) {
 
   router.delete('/api/partydocs/:id', guard('E', async (req, env) => {
     try {
+      if (req.user.role !== 'owner') return json({ ok: false, error: 'Only the Owner can delete a document.' }, 403);
       const r = await env.DB.prepare('UPDATE pro_party_docs SET deleted_at = ? WHERE id = ? AND party_type = ? AND deleted_at IS NULL').bind(nowStr(), Number(req.params.id), req.partyType).run();
       if (!r.meta.changes) return json({ ok: false, error: 'Document not found.' }, 404);
       return json({ ok: true });
