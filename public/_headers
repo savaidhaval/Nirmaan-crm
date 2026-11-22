@@ -13,3 +13,8 @@
 
 /brand/*
   Cache-Control: public, max-age=86400
+
+/enquiry.html
+  ! X-Frame-Options
+  ! Content-Security-Policy
+  Content-Security-Policy: default-src 'self'; script-src 'self' https://challenges.cloudflare.com; frame-src https://challenges.cloudflare.com; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://challenges.cloudflare.com; frame-ancestors *; base-uri 'self'; form-action 'self'

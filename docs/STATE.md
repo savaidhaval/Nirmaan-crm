@@ -137,3 +137,6 @@ Code complete; 24 API suites and 12 browser walkthroughs pass locally. Migration
 
 ## Design refresh status
 Code complete; 24 API suites and 13 browser walkthroughs pass locally. No migration. Delete is Owner-only everywhere. Install is a web app install (no app-store account, no paid service). The Tally package (PR 16) and this refresh are on the same branch.
+
+## WP-24 (part 1) and WP-25 status
+Code complete; 26 API suites and 14 browser walkthroughs pass locally. No new migration. WP-24 part 2 (portal email parsing) and a live buyer-statement page are intentionally NOT built: each needs Dhaval's decision. The enquiry form stays off until Turnstile keys are set. Tally export (WP-17) is live (PR 16 merged by Dhaval).

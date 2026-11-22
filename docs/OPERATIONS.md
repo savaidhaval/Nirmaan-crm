@@ -27,3 +27,13 @@ npx wrangler d1 migrations apply nirmaan-db --remote
 npx wrangler deploy
 ```
 Test on staging first: `npx wrangler deploy --env staging`.
+
+
+## Website enquiry form (WP-24)
+1. In the Cloudflare dashboard open Turnstile and add a widget for crm.mysociety.tech (free). Copy the Site key and the Secret key.
+2. Set the Secret as a Worker secret named TURNSTILE_SECRET (wrangler secret put TURNSTILE_SECRET) and the Site key as TURNSTILE_SITE_KEY (a plain variable). Never type either into a chat or a file in the repository.
+3. Open "Website form" in the Sales group to copy the link or the embed code. Until both values are set the form shows "not switched on" and accepts nothing.
+Troubleshooting: "We could not confirm you are a person" means the Turnstile check failed (ad blocker, wrong site key, or a bot). "Too many enquiries" is the per-connection limit (5 an hour).
+
+## Installing the app
+NirmaanCRM installs from the browser as a web app: Chrome or Edge (Windows, Mac, Android) show Install; Safari on iPhone/iPad uses Share, Add to Home Screen; Safari 17 on Mac uses File, Add to Dock. There is no app-store listing or download file, so no store account or fee is needed.

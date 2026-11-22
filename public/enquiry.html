@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Enquiry</title>
+  <link rel="stylesheet" href="/app.css">
+  <meta name="robots" content="noindex">
+</head>
+<body style="background:transparent">
+  <div class="login-card" style="max-width:520px;margin:0 auto;box-shadow:none;background:transparent;padding:16px 12px" id="enq-card">
+    <h1 id="enq-title" style="text-align:left;font-size:1.6rem;margin-bottom:6px">Enquire now</h1>
+    <p class="muted" id="enq-sub" style="margin-bottom:16px">Leave your details and we will call you.</p>
+    <div id="enq-off" class="error" hidden>This form is not switched on yet. Please call us instead.</div>
+    <form id="enq-form" novalidate>
+      <div class="field"><label for="enq-name">Your name</label><input id="enq-name" autocomplete="name" maxlength="120"></div>
+      <div class="field"><label for="enq-phone">Mobile number</label><input id="enq-phone" type="tel" inputmode="tel" autocomplete="tel" placeholder="10-digit number" maxlength="20"></div>
+      <div class="field"><label for="enq-email">Email (optional)</label><input id="enq-email" type="email" autocomplete="email" maxlength="120"></div>
+      <div class="field"><label for="enq-msg">Anything you would like us to know (optional)</label><textarea id="enq-msg" rows="3" maxlength="500"></textarea></div>
+      <div style="position:absolute;left:-9999px" aria-hidden="true"><label>Leave this empty<input id="enq-trap" tabindex="-1" autocomplete="off"></label></div>
+      <div class="field"><label class="check"><input type="checkbox" id="enq-consent"> I agree that you may contact me about this enquiry by phone, SMS, WhatsApp or email.</label></div>
+      <div id="enq-turnstile" style="margin-bottom:12px"></div>
+      <div class="error" id="enq-error" hidden></div>
+      <button class="btn btn-primary btn-full" type="submit" id="enq-send">Send my enquiry</button>
+      <p class="help">We keep only what you type here, and use it only to respond to you. <a href="/privacy.html" target="_blank" rel="noopener">Privacy</a></p>
+    </form>
+    <div id="enq-done" class="card" hidden><h2>Thank you</h2><p>We have your details and will call you soon.</p></div>
+  </div>
+  <script src="/enquiry.js"></script>
+</body>
+</html>

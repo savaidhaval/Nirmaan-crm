@@ -23,6 +23,8 @@ import { registerFeasibility, feasibilitySweep } from './routes/feasibility.js';
 import { registerRedevelopment, redevSweep } from './routes/redevelopment.js';
 import { registerBank, bankSweep } from './routes/bank.js';
 import { registerTally } from './routes/tally.js';
+import { registerEnquiry } from './routes/enquiry.js';
+import { registerStatements } from './routes/statements.js';
 import { registerDrawingAcks, drawingAckSweep } from './routes/drw_acks.js';
 import { registerVisits, visitOptions, cleanFeedback } from './routes/visits.js';
 import { registerRera, reraSweep } from './routes/rera.js';
@@ -465,7 +467,7 @@ router.get('/api/documents', async (req, env) => {
         params.push(...ids);
       }
       if (!canSeeRestricted(user)) sql += " AND COALESCE(category, '') NOT IN ('kyc', 'legal', 'agreement')";
-      if (!['owner', 'pm', 'accounts', 'viewer'].includes(user.role)) sql += " AND COALESCE(category, '') NOT IN ('feasibility', 'society')";
+      if (!['owner', 'pm', 'accounts', 'viewer'].includes(user.role)) sql += " AND COALESCE(category, '') NOT IN ('feasibility', 'society', 'statement')";
       sql += ' ORDER BY created_at DESC';
       const rows = await query(env.DB, sql, params);
       return json({ ok: true, data: { documents: rows.results } });
@@ -2099,6 +2101,8 @@ registerRedevelopment(router, { withAuth, json, serverError, visibleProjectIds, 
   // when the consent threshold is crossed, leave a note on the project's "Society consent" approval row (approvals stays in this file, not in the module)
   onConsent: (env, p) => env.DB.prepare("UPDATE apr_items SET notes = ?1 WHERE project_id = ?2 AND deleted_at IS NULL AND name LIKE 'Society consent%'")
     .bind(`${p.reached ? 'Threshold reached' : 'Dropped below the threshold'} (${p.text}) on ${new Date(Date.now() + 19800000).toISOString().substring(0, 10)}. Confirm the required majority with your advocate.`, p.society.project_id).run() });
+registerStatements(router, { withAuth, json, serverError, visibleProjectIds, nowStr, getSetting });
+registerEnquiry(router, { json, serverError, nowStr, getSetting, clientIp, checkRateLimit, printBrand });
 registerTally(router, { withAuth, json, serverError, visibleProjectIds, nowStr, getSetting, setSetting });
 registerBank(router, { withAuth, json, serverError, visibleProjectIds, nowStr, getSetting, csvBom });
 registerBulkDemands(router, { withAuth, json, serverError, visibleProjectIds, getSetting, nowStr, printBrand, csvBom });
@@ -2390,7 +2394,7 @@ router.post('/api/files/upload', async (req, env) => {
       const user = req.user;
       const formData = await req.formData();
       const modForPerm = formData.get('module');
-      const mayUpload = userCan(user, 'projects', 'C') || (['site', 'procurement', 'petty'].includes(modForPerm) && userCan(user, modForPerm, 'C') && !formData.get('series_key'));
+      const mayUpload = userCan(user, 'projects', 'C') || (['site', 'procurement', 'petty'].includes(modForPerm) && userCan(user, modForPerm, 'C') && !formData.get('series_key')) || (modForPerm === 'statement' && ['owner', 'accounts'].includes(user.role) && formData.get('category') === 'statement' && !formData.get('series_key'));
       if (!mayUpload) return json({ ok: false, error: 'Not allowed.' }, 403);
       const file = formData.get('file');
       const projectId = formData.get('project_id');
@@ -2983,7 +2987,7 @@ function sniffOk(type, h, body) {
 const RESTRICTED_DOC_CATS = ['kyc', 'legal', 'agreement'];
 const canSeeRestricted = (user) => ['owner', 'pm', 'sales', 'accounts'].includes(user.role);
 // Feasibility studies carry cost and revenue forecasts: Owner, PM, Accounts and the CA (viewer) only.
-const docVisible = (user, doc) => (['feasibility', 'society'].includes(doc.category) ? ['owner', 'pm', 'accounts', 'viewer'].includes(user.role) : (!RESTRICTED_DOC_CATS.includes(doc.category) || canSeeRestricted(user)));
+const docVisible = (user, doc) => (['feasibility', 'society', 'statement'].includes(doc.category) ? ['owner', 'pm', 'accounts', 'viewer'].includes(user.role) : (!RESTRICTED_DOC_CATS.includes(doc.category) || canSeeRestricted(user)));
 
 // D1 returns BLOB columns as plain number arrays; turn them back into bytes before responding.
 function blobBytes(d) {

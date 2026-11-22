@@ -1,0 +1,70 @@
+import { createRequire } from 'node:module';
+const { chromium } = createRequire(import.meta.url)('/opt/node-tools/node_modules/playwright');
+const BASE = process.env.BASE || 'http://localhost:8787', SHOTS = '/tmp/claude-0/scratch/shots';
+const run = Date.now().toString(36);
+let pass = 0, fail = 0; const ok = (n, c, x = '') => { c ? pass++ : fail++; console.log(`${c ? 'PASS' : 'FAIL'}  ${n}${c ? '' : '  ' + x}`); };
+class C { constructor() { this.cookie = ''; } async call(m, p, b) { const h = { 'X-NirmaanCRM': '1' }; if (this.cookie) h.cookie = this.cookie; let body; if (b) { h['Content-Type'] = 'application/json'; body = JSON.stringify(b); }
+  const r = await fetch(BASE + p, { method: m, headers: h, body }); const sc = r.headers.get('set-cookie'); if (sc) this.cookie = sc.split(';')[0]; let d = null; try { d = await r.json(); } catch (e) {} return { status: r.status, data: d && d.data, err: d && d.error }; } }
+const o = new C(); await o.call('POST', '/api/auth/login', { email: 'owner@test.local', password: 'CiStrongPass-12345' });
+const pid = (await o.call('POST', '/api/projects', { name: 'UI Tower ' + run, code: 'UI' + run.toUpperCase().slice(-5), budget_paise: 5e9 })).data.id;
+await o.call('POST', '/api/settings/con.enabled', { value: 'on' });
+await o.call('POST', '/api/settings/con.pm_approval_limit_paise', { value: 50000000 });
+const users = {};
+for (const role of ['site', 'pm', 'purchase', 'accounts', 'sales', 'viewer']) {
+  const email = `ui-${role}-${run}@test.local`; const r = await o.call('POST', '/api/users', { name: 'UI ' + role + ' ' + run, email, role, projects: role === 'site' ? [pid] : [] });
+  const c = new C(); await c.call('POST', '/api/auth/login', { email, password: r.data.temporaryPassword }); const pw = 'UiStrongPass-' + run;
+  await c.call('POST', '/api/auth/change-password', { currentPassword: r.data.temporaryPassword, newPassword: pw }); users[role] = { email, pw };
+}
+const browser = await chromium.launch();
+const ctxs = {};
+async function page(role) {
+  if (!ctxs[role]) {
+    const ctx = await browser.newContext({ viewport: { width: 390, height: 800 } });
+    const email = role === 'owner' ? 'owner@test.local' : users[role].email, password = role === 'owner' ? 'CiStrongPass-12345' : users[role].pw;
+    const r = await ctx.request.post(BASE + '/api/auth/login', { headers: { 'X-NirmaanCRM': '1', 'Content-Type': 'application/json' }, data: { email, password } });
+    if (!r.ok()) throw new Error('login ' + role + ' ' + r.status());
+    ctxs[role] = ctx;
+  }
+  const p = await ctxs[role].newPage(); p.on('dialog', (d) => d.accept()); p.on('pageerror', (e) => console.log('PAGEERROR', role, e.message));
+  await p.goto(BASE + '/'); await p.waitForFunction(() => typeof navigate === 'function' && typeof currentUser !== 'undefined' && currentUser, null, { timeout: 15000 }); return p;
+}
+const go = async (p, route) => { await p.evaluate((r) => navigate(r), route); await p.waitForTimeout(800); };
+const toastText = async (p) => { await p.waitForTimeout(500); return p.evaluate(() => (document.getElementById('toast') || {}).textContent || ''); };
+const submit = (p) => p.click('#modal-form button[type=submit]');
+const pick = (p, sel, label) => p.selectOption(sel, { label });
+const shot = (p, n) => p.screenshot({ path: `${SHOTS}/${n}.png` });
+const proj = 'UI Tower ' + run;
+const code = 'UI' + run.toUpperCase().slice(-5);
+await o.call('POST', '/api/sales/plan-stages', { project_id: pid, stages: [{ stage_name: 'All', pct_bp: 10000 }] });
+const u = (await o.call('POST', '/api/sales/inventory', { project_id: pid, wing: 'Z', floor: 1, unit_no: 'SZ' + run.slice(-3), type: '2BHK', carpet_sqft: 600, rera_carpet_sqft: 500, price_paise: 100000000 })).data.id;
+const cust = 'Mr Statement ' + run;
+const bk = (await o.call('POST', '/api/sales/bookings', { unit_id: u, customer_name: cust, phone: '9766000111', agreed_price_paise: 100000000, token_paise: 0 })).data.id;
+await import('node:fs').then((f) => f.writeFileSync('/tmp/claude-0/scratch/stmt.pdf', '%PDF-1.4 statement for ' + cust));
+// ===== statement link =====
+const a = await page('accounts'); await a.evaluate((id) => { bookingDetail(id); }, bk); await a.waitForSelector('#stm-open', { timeout: 15000 });
+ok('Accounts sees "Customer statement" on the booking', (await a.textContent('.modal')).includes('Customer statement'));
+await a.click('#stm-open'); await a.waitForSelector('#stm-go'); await shot(a, '160-statement-steps');
+ok('three plain steps and an "Open the statement" button', (await a.locator('.modal').last().textContent()).includes('Open the statement') && (await a.$('a[href*="k=statement"]')) !== null);
+await a.setInputFiles('#stm-file', '/tmp/claude-0/scratch/stmt.pdf'); await a.click('#stm-go'); await a.waitForSelector('#stm-url', { timeout: 15000 }); await shot(a, '161-statement-link');
+const url = await a.inputValue('#stm-url'); ok('a link is made, with Copy, WhatsApp and Email', /\/s\/[A-Za-z0-9_-]{40,}$/.test(url) && (await a.$('#stm-copy')) !== null && (await a.$('a[href*="wa.me"]')) !== null && (await a.$('a[href^="mailto:"]')) !== null, url);
+const anon = await browser.newContext(); const resp = await anon.request.get(url + '/file'); ok('the customer opens the PDF without any login', resp.status() === 200 && /pdf/.test(resp.headers()['content-type'] || ''));
+const sp = await anon.newPage(); await sp.goto(url); await sp.waitForTimeout(1200); ok('the share page loads for the customer too', (await sp.textContent('body')).length > 10);
+await a.evaluate(() => { document.querySelectorAll('.modal-overlay').forEach((x) => x.parentNode.removeChild(x)); });
+await a.evaluate((id) => { bookingDetail(id); }, bk); await a.waitForSelector('#stm-open'); await a.click('#stm-open'); await a.waitForSelector('[data-rv]'); await a.click('[data-rv]'); await a.waitForTimeout(1200);
+const resp2 = await anon.request.get(url + '/file'); ok('Accounts turns it off and the customer is told it has expired', resp2.status() === 410);
+const s = await page('sales'); await s.evaluate((id) => { bookingDetail(id); }, bk); await s.waitForTimeout(2000); ok('Sales does not get the statement button', (await s.$('#stm-open')) === null);
+
+// ===== website enquiry form (public, no login) =====
+const pub = await browser.newContext({ viewport: { width: 420, height: 800 } }); const ep = await pub.newPage();
+await ep.goto(BASE + '/enquiry.html?project=' + code); await ep.waitForSelector('#enq-form:not([hidden])'); await ep.waitForTimeout(600);
+ok('the form names the project', (await ep.textContent('#enq-title')).includes(proj));
+await shot(ep, '162-enquiry-form');
+await ep.fill('#enq-name', 'Walk In Buyer ' + run); await ep.fill('#enq-phone', '9' + String(Date.now()).slice(-9)); await ep.fill('#enq-msg', 'Looking for a 3 BHK');
+await ep.click('#enq-send'); await ep.waitForTimeout(500); ok('without the consent tick it asks politely', (await ep.textContent('#enq-error')).includes('tick the box'));
+await ep.check('#enq-consent'); await ep.click('#enq-send'); await ep.waitForSelector('#enq-done:not([hidden])'); await shot(ep, '163-enquiry-thanks');
+const leads = (await o.call('GET', '/api/sales/leads')).data.leads; const lead = leads.find((l) => l.name === 'Walk In Buyer ' + run);
+ok('a lead appears for the sales team with source website and consent recorded', lead && lead.source === 'website' && lead.consent === 1 && lead.project_id === pid);
+const og = await page('owner'); await go(og, 'enquiryform'); await og.waitForSelector('#eq-embed'); await og.selectOption('#eq-proj', { label: proj });
+ok('the Owner can copy the link and the embed code for the project', (await og.inputValue('#eq-link')).includes('enquiry.html?project=' + code) && (await og.inputValue('#eq-embed')).includes('<iframe'));
+await shot(og, '164-form-page');
+await browser.close(); console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);

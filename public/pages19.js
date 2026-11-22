@@ -11,7 +11,7 @@ Object.assign(ICONS, {
 const NAV_GROUPS = [
   ['Projects', 'g-projects', ['projects', 'approvals', 'drawings', 'site', 'stores', 'redevelopment']],
   ['Money', 'g-money', ['procurement', 'contractors', 'budget', 'petty', 'rera', 'feasibility', 'bank', 'tally', 'finance', 'reports']],
-  ['Sales', 'g-sales', ['sales', 'stacking', 'demandletters', 'brochures']],
+  ['Sales', 'g-sales', ['sales', 'stacking', 'demandletters', 'enquiryform', 'brochures']],
   ['People', 'g-people', ['team', 'people']],
   ['Library', 'g-library', ['documents', 'professionals', 'branding', 'sharelinks']],
   ['Admin', 'g-admin', ['users', 'audit', 'datatools', 'storage', 'email', 'settings']],
