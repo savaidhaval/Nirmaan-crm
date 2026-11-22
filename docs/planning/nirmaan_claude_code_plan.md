@@ -1,6 +1,16 @@
 # NirmaanCRM: action plan and prompt pack for Claude Code
 Prepared 2026-11-22 for Dhaval Savai. Source of truth: `NirmaanCRM_Claude_Build_Guide_v1.3.md` (referred to as "the guide", § numbers). Built from the two comparison reports (`nirmaan_vs_selldo.md`, `nirmaan_construction_todo.md`) plus Dhaval's answers: labour is by contractors; accounting = Tally export only; 51% redevelopment consent threshold; member-document list pending.
 
+> **UPDATE 2026-11-22 (after S0 on the real repo, see docs/STATE.md and docs/planning/README.md).** This pack was written from the guide alone. The repo shows: (1) guide Phases 1-13 are already built or exceeded, so ignore every "Guide Phase N" row in section 3 and start at S1; S0 is DONE; (2) the code is a monolith (`src/index.js`, `src/routes/*.js`, `public/pages*.js`, `tests/*.mjs`, `wrangler.toml`), so wherever a prompt says "src/modules/<key>/... registry entry", build it as `src/routes/<name>.js` + `registerX(router, deps)` + a line in `src/index.js` + a `public/pagesN.js` screen + a test in `tests/`; (3) next migration is 0013; (4) `sal_inventory.category` and the `pro_bills` GST/TDS columns already exist: skip those ALTERs in WP-2 and S2 and use `proposed-migrations/0013_proposed_reconcile.sql`; (5) `deploy.yml` applies migrations to production on merge to `main`, so staging and a D1 export must happen before merging; (6) new package **B0** (complete backup/export of all 26 un-exported tables, chunked) goes before any feature work; (7) several WPs are partly built (WP-11, 12, 13, 15, 17, 25: see STATE.md section 3), so each begins with a verify-first step and builds only the gap. Follow the repo's conventions over this pack wherever they conflict.
+
+### Prompt B0: backup and export completeness (new, run after S1)
+```text
+PACKAGE B0. Branch fix/b0-backup-completeness. Read docs/STATE.md sections 4 and 7 first.
+Problem: buildExport() in src/index.js and nightlyBackup() cover 27 of 53 tables (full list in STATE.md). counters, settings, project_members, brands, brand_profiles, share_links, ppl_*, sal_refunds, sal_interest_waivers, sal_brokerage_payments, mkt_spend, user_totp/recovery codes, notifications, email_log, file_blobs are missing, and everything is read in one request.
+Do: (1) export every data table except transient ones (sessions, otp_codes, rate_limits, oauth_states, mfa_challenges, webhook_seen); never export secrets: mask settings values whose key ends in _enc or contains token/secret, never export password hashes, TOTP secrets or recovery-code hashes without a flag that the Owner must tick, never export full PAN or bank numbers. (2) Make it chunked and resumable: one table per cron run or paged API (<=500 rows per page, <40 queries), so it fits 10 ms CPU and 50 queries; list progress in backup_log. (3) Add a table-list test in tests/ that fails when a migration adds a table that is neither exported nor on the transient list. (4) Extend scripts/restore.mjs and docs/RESTORE.md; run the restore drill into a local DB and compare row counts for all tables. (5) In the 02:00 housekeeping, also delete expired rate_limits rows. (6) Add LIMITs to the hourly sweep jobs and report measured query counts.
+Staging first; no production migration is needed. Update CHANGELOG and docs/OPERATIONS.md. Give the 3-click test and the measured CPU/queries.
+```
+
 ## How to use this file
 1. Do the three setup prompts first (S0, S1, S2).
 2. Then work through the packages in the order of the release table in section 3. Where the table says "Guide Phase N", use the guide's own prompt in §8 (with the patched spec from S2). Where it says "WP-n", paste the prompt from this file.
@@ -205,8 +215,7 @@ Add the new tables to the backup list. Staging first, then CHANGELOG + DATA_DICT
 **WP-2 Rehab/PAP allotment, transit rent, corpus ledger** | Goal: track rehab flat allotment per member, transit rent payments and corpus. Depends: WP-1; `sal_inventory` exists (schema). Effort L. Risk: schedule generation must not exceed 50 queries (generate month rows in small batches or lazily); money rows are reversed, never deleted; rent rules pending D5.
 ```text
 Extend module "redevelopment" (guide §4.2, §10.3). Purpose: allot rehab flats to members, run the transit-rent schedule, bank guarantees and corpus, with reminders.
-Migration (additive): ALTER TABLE sal_inventory ADD COLUMN category TEXT NOT NULL DEFAULT 'sale' (sale|rehab|other) with an index; the Sales booking flow must refuse rehab units
- (change only via sales/service.js, not raw SQL from this module).
+Migration (additive): (sal_inventory.category already exists from migration 0011 and rehab units are already refused by Sales; do NOT add it again; reuse it, only add an index if missing).
  New tables: red_rehab_allotments(member_id UNIQUE, inventory_id, entitlement_sqft, allotted_on, status [proposed|allotted|possessed|cancelled]);
  red_transit_terms(member_id UNIQUE, monthly_rent_paise, start_date, end_date, deposit_paise, bg_ref, bg_amount_paise, bg_expiry, notes);
  red_transit_payments(member_id, period 'YYYY-MM', due_paise, paid_paise DEFAULT 0, paid_on, mode, ref_no, reversed_at, reversal_note);
