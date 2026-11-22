@@ -1,4 +1,4 @@
-# NirmaanCRM data dictionary (real schema from migrations 0001-0020, updated 2026-11-22)
+# NirmaanCRM data dictionary (real schema from migrations 0001-0022, updated 2026-11-22)
 
 Source: replaying migrations/*.sql into an empty SQLite DB. Live D1 not verified (see docs/STATE.md). Money = paise INTEGER, percentages = basis points (_bp). NN = NOT NULL, PK = primary key.
 
@@ -7,6 +7,8 @@ Source: replaying migrations/*.sql into an empty SQLite DB. Live D1 not verified
 - tables not in guide: brands, mfa_challenges, user_totp, user_recovery_codes, sal_interest_waivers, sal_refunds, mkt_spend, webhook_seen
 - pro_bills already has gst/tds columns; sal_inventory.category and sal_receipts.receipt_no already exist
 
+### ai_log
+id INTEGER PK, user_id INTEGER, feature TEXT NN, ok INTEGER NN, created_at TEXT
 ### apr_events
 id INTEGER PK, item_id INTEGER NN, event TEXT NN, note TEXT, by_user INTEGER, created_at TEXT
 ### apr_items
@@ -76,13 +78,15 @@ id INTEGER PK, indent_id INTEGER NN, description TEXT NN, qty REAL, unit TEXT
 ### pro_indents
 id INTEGER PK, project_id INTEGER NN, indent_no TEXT NN, needed_by TEXT, note TEXT, status TEXT NN, requested_by INTEGER, decided_by INTEGER, decided_at TEXT, decision_note TEXT, rfq_id INTEGER, client_uuid TEXT, created_at TEXT, deleted_at TEXT
 ### pro_party_docs
-id INTEGER PK, party_type TEXT NN, party_id INTEGER NN, party_label TEXT, doc_type TEXT NN, valid_till TEXT, reminder_days INTEGER NN, document_id INTEGER, note TEXT, superseded_by INTEGER, created_by INTEGER, created_at TEXT, deleted_at TEXT
+id INTEGER PK, party_type TEXT NN, party_id INTEGER NN, party_label TEXT, doc_type TEXT NN, valid_till TEXT, reminder_days INTEGER NN, document_id INTEGER, note TEXT, superseded_by INTEGER, created_by INTEGER, created_at TEXT, deleted_at TEXT, kind TEXT NN
 ### pro_payments
 id INTEGER PK, bill_id INTEGER NN, amount_paise INTEGER NN, tds_paise INTEGER NN, paid_on TEXT NN, mode TEXT, ref_no TEXT, note TEXT, reversed_at TEXT, reversal_note TEXT, created_by INTEGER, created_at TEXT
 ### pro_po_items
 id INTEGER PK, po_id INTEGER NN, description TEXT NN, qty REAL, unit TEXT, rate_paise INTEGER, amount_paise INTEGER, budget_head_id INTEGER, stock_item_id INTEGER
 ### pro_pos
 id INTEGER PK, project_id INTEGER NN, vendor_id INTEGER NN, rfq_id INTEGER, po_no TEXT, po_seq INTEGER NN, amount_paise INTEGER NN, gst_bp INTEGER, gst_paise INTEGER NN, total_paise INTEGER NN, terms TEXT, status TEXT, approved_by INTEGER, approved_at TEXT, created_by INTEGER, created_at TEXT, deleted_at TEXT
+### pro_professionals
+id INTEGER PK, name TEXT NN, profession TEXT, firm TEXT, phone TEXT, email TEXT, gstin TEXT, pan_enc TEXT, notes TEXT, active INTEGER NN, created_at TEXT, deleted_at TEXT
 ### pro_quote_items
 id INTEGER PK, quote_id INTEGER NN, rfq_item_id INTEGER NN, rate_paise INTEGER NN
 ### pro_quotes
@@ -157,6 +161,7 @@ id INTEGER PK, name TEXT NN, email TEXT NN, phone TEXT, role TEXT NN, password_h
 id TEXT PK, source TEXT, seen_at TEXT
 
 ## Indexes
+- ai_log:idx_ai_log_day
 - apr_events:idx_apr_events_item
 - apr_items:idx_apr_project
 - apr_items:idx_apr_valid
@@ -215,6 +220,7 @@ id TEXT PK, source TEXT, seen_at TEXT
 - pro_po_items:idx_poitem_stock
 - pro_pos:idx_po_project
 - pro_pos:uq_po_seq
+- pro_professionals:idx_prof_active
 - pro_quote_items:idx_quote_items
 - pro_quotes:idx_quote_rfq
 - pro_rfq_items:idx_rfq_items
@@ -290,3 +296,7 @@ id TEXT PK, source TEXT, seen_at TEXT
 - Stores: stk_items, stk_balance (one row per project and item, changed only in the same batch as its move), stk_moves (append-only; kinds receipt, issue, transfer_out, transfer_in, adjust; adjust waits as pending for a PM). pro_po_items.stock_item_id ties a PO line to a store item so goods received go into stock.
 - pro_party_docs: documents of vendors and contractors with valid_till, reminder_days, superseded_by (a newer copy replaces the old one and stops its reminders). party_label is stored so reminders need no lookup in another module.
 - Petty cash: pty_funds (one custodian per fund), pty_entries (expense, top_up, return; balance counts approved entries only; cancelled or rejected entries stay on record).
+
+## 0021-0022 additions
+- pro_professionals: register of architects, engineers, advocates, CAs and other consultants (PAN encrypted). pro_party_docs.kind = contract | document, and party_type can now be 'professional' as well as 'vendor' and 'contractor'.
+- ai_log: AI usage counts only (no questions or answers stored). See docs/AI.md.

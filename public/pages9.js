@@ -175,14 +175,17 @@ async function partyDocsModal(type, id) {
   const d = (await api(`/api/partydocs?party_type=${type}&party_id=${id}`)).data.docs;
   const canE = isRole('owner', 'pm', 'purchase', 'accounts');
   const ov = document.createElement('div'); ov.className = 'modal-overlay';
-  ov.innerHTML = `<div class="modal"><h2>Documents</h2>${canE ? '<button class="btn btn-primary btn-full" id="pd-add">+ Add a document</button>' : ''}
-    ${d.map((x) => `<div class="card" style="${x.state === 'replaced' ? 'opacity:.6' : ''}"><div class="row"><div><b>${esc(x.doc_type)}</b><p class="muted">${x.valid_till ? 'Valid till ' + esc(x.valid_till) + (x.days_left != null && x.state !== 'replaced' ? (x.days_left < 0 ? ` (${-x.days_left} days ago)` : ` (${x.days_left} days left)`) : '') : 'No expiry date'}${x.note ? ' · ' + esc(x.note) : ''}</p></div>${chip(DOC_WORD[x.state], DOC_TONE[x.state])}</div>
-      <div class="row-btns">${x.document_id ? `<a class="btn small" href="/api/files/download/${x.document_id}" target="_blank" rel="noopener">Open file</a>` : ''}${canE && x.current ? `<button class="btn small btn-primary" data-renew="${x.id}" data-type="${esc(x.doc_type)}">Replace with new copy</button><button class="btn small" data-rm="${x.id}">Remove</button>` : ''}</div></div>`).join('') || '<p class="muted">No documents yet. Add the ones you want to keep an eye on, like licences, insurance or agreements.</p>'}
+  const card = (x) => `<div class="card" style="${x.state === 'replaced' ? 'opacity:.6' : ''}"><div class="row"><div><b>${esc(x.doc_type)}</b><p class="muted">${x.valid_till ? 'Valid till ' + esc(x.valid_till) + (x.days_left != null && x.state !== 'replaced' ? (x.days_left < 0 ? ` (${-x.days_left} days ago)` : ` (${x.days_left} days left)`) : '') : 'No expiry date'}${x.note ? ' · ' + esc(x.note) : ''}</p></div>${chip(DOC_WORD[x.state], DOC_TONE[x.state])}</div>
+      <div class="row-btns">${x.document_id ? `<a class="btn small" href="/api/files/download/${x.document_id}" target="_blank" rel="noopener">Open file</a>` : ''}${canE && x.current ? `<button class="btn small btn-primary" data-renew="${x.id}" data-type="${esc(x.doc_type)}" data-kind="${esc(x.kind)}">Replace with new copy</button><button class="btn small" data-rm="${x.id}">Remove</button>` : ''}</div></div>`;
+  const contracts = d.filter((x) => x.kind === 'contract'), others = d.filter((x) => x.kind !== 'contract');
+  ov.innerHTML = `<div class="modal"><h2>Contracts and documents</h2>${canE ? '<button class="btn btn-primary btn-full" id="pd-add-c">+ Upload a contract</button><button class="btn btn-full" id="pd-add">+ Add another document</button>' : ''}
+    <h3>Contracts</h3>${contracts.map(card).join('') || '<p class="muted">No contract uploaded yet.</p>'}
+    <h3>Other documents</h3>${others.map(card).join('') || '<p class="muted">Licences, insurance, registrations and anything else you want to keep an eye on.</p>'}
     <div class="modal-actions"><button class="btn btn-primary" id="pd-x">Close</button></div></div>`;
   document.body.appendChild(ov); $('pd-x').onclick = () => ov.remove();
-  const addDoc = async (docType, replacesId) => {
-    const v = await openForm({ title: replacesId ? 'New copy' : 'Add a document', intro: 'Type what the document is. You are reminded before it expires.', fields: [
-      { name: 'doc_type', label: 'What is it? (e.g. GST certificate, insurance)', required: true, value: docType || '' }, { name: 'valid_till', label: 'Valid till (leave empty if it never expires)', type: 'date' },
+  const addDoc = async (docType, replacesId, kind) => {
+    const v = await openForm({ title: replacesId ? 'New copy' : kind === 'contract' ? 'Upload a contract' : 'Add a document', intro: kind === 'contract' ? 'Name the contract (for example: Supply contract, Architect agreement). Add its end date to be reminded before it runs out. For a big scanned contract, connect Google Drive under Storage.' : 'Type what the document is. You are reminded before it expires.', fields: [
+      { name: 'doc_type', label: kind === 'contract' ? 'Contract name' : 'What is it? (e.g. GST certificate, insurance)', required: true, value: docType || '' }, { name: 'valid_till', label: kind === 'contract' ? 'Contract ends on (leave empty if open-ended)' : 'Valid till (leave empty if it never expires)', type: 'date' },
       { name: 'reminder_days', label: 'Remind me this many days before', type: 'number', value: 30 }, { name: 'file', label: 'File (photo or PDF)', type: 'file' }] });
     if (!v) return;
     let documentId = null;
@@ -190,11 +193,45 @@ async function partyDocsModal(type, id) {
       const fd = new FormData(); fd.append('file', v.file); fd.append('title', `${v.doc_type} (${type})`); fd.append('category', 'party_doc'); fd.append('module', 'procurement'); fd.append('audience', 'internal');
       const up = await act(api('/api/files/upload', { method: 'POST', body: fd })); if (!up) return; documentId = up.data.id;
     }
-    const body = { party_type: type, party_id: Number(id), doc_type: v.doc_type, valid_till: v.valid_till || null, reminder_days: v.reminder_days === '' ? 30 : v.reminder_days, document_id: documentId };
+    const body = { party_type: type, party_id: Number(id), doc_type: v.doc_type, valid_till: v.valid_till || null, reminder_days: v.reminder_days === '' ? 30 : v.reminder_days, document_id: documentId, kind: kind || 'document' };
     if (replacesId) body.replaces_id = Number(replacesId);
     if (await act(api('/api/partydocs', { method: 'POST', body }), replacesId ? 'Replaced. Reminders start again from the new date.' : 'Document added')) { ov.remove(); partyDocsModal(type, id); }
   };
-  if ($('pd-add')) $('pd-add').onclick = () => addDoc('', null);
-  ov.querySelectorAll('[data-renew]').forEach((b) => { b.onclick = () => addDoc(b.dataset.type, b.dataset.renew); });
+  if ($('pd-add')) $('pd-add').onclick = () => addDoc('', null, 'document');
+  if ($('pd-add-c')) $('pd-add-c').onclick = () => addDoc('', null, 'contract');
+  ov.querySelectorAll('[data-renew]').forEach((b) => { b.onclick = () => addDoc(b.dataset.type, b.dataset.renew, b.dataset.kind); });
   ov.querySelectorAll('[data-rm]').forEach((b) => { b.onclick = async () => { if (confirm('Remove this document from the list?') && await act(api(`/api/partydocs/${b.dataset.rm}?party_type=${type}`, { method: 'DELETE' }), 'Removed')) { ov.remove(); partyDocsModal(type, id); } }; });
+}
+
+// ======================= PROFESSIONALS =======================
+async function renderProfessionals(main) {
+  const canC = isRole('owner', 'pm', 'purchase', 'accounts');
+  main.innerHTML = `<h1>Professionals</h1><p class="help">Architects, engineers, advocates, CAs and other consultants. Keep each one's contracts and documents here.</p>
+    ${canC ? '<button class="btn btn-primary btn-full" id="pf-new">+ Add a professional</button>' : ''}<div class="field"><input id="pf-q" placeholder="Search by name, profession or firm"></div><div id="pf-list">Loading...</div>`;
+  if (canC) $('pf-new').onclick = () => professionalForm(null);
+  let t = null; $('pf-q').oninput = () => { clearTimeout(t); t = setTimeout(loadProfessionals, 300); };
+  loadProfessionals();
+}
+
+async function loadProfessionals() {
+  const box = $('pf-list'); if (!box) return;
+  try {
+    const q = encodeURIComponent(($('pf-q') || {}).value || '');
+    const list = (await api(`/api/professionals?q=${q}`)).data.professionals;
+    const canE = isRole('owner', 'pm', 'purchase', 'accounts');
+    box.innerHTML = list.map((p) => `<div class="card"><div class="row"><div><b>${esc(p.name)}</b><p class="muted">${esc(p.profession || '')}${p.firm ? ' · ' + esc(p.firm) : ''}${p.phone ? ` · <a href="tel:${esc(p.phone)}">${esc(p.phone)}</a>` : ''}${p.pan_masked ? ' · PAN ' + esc(p.pan_masked) : ''}</p></div>${p.active ? '' : chip('Inactive')}</div>
+      <div class="row-btns"><button class="btn small btn-primary" data-pdocs="${p.id}">Contracts &amp; documents</button>${canE ? `<button class="btn small" data-pedit="${p.id}">Edit</button>` : ''}</div></div>`).join('') || '<div class="card"><p>No professionals yet.</p><p class="muted">Add your architect, structural engineer, advocate and others.</p></div>';
+    box.querySelectorAll('[data-pdocs]').forEach((b) => { b.onclick = () => partyDocsModal('professional', Number(b.dataset.pdocs)); });
+    box.querySelectorAll('[data-pedit]').forEach((b) => { b.onclick = () => professionalForm(list.find((p) => p.id === Number(b.dataset.pedit))); });
+  } catch (e) { box.innerHTML = `<div class="error">${esc(e.message)}</div>`; }
+}
+
+async function professionalForm(p) {
+  const v = await openForm({ title: p ? 'Edit professional' : 'Add a professional', fields: [
+    { name: 'name', label: 'Name', required: true, value: p ? p.name : '' }, { name: 'profession', label: 'Profession (Architect, Structural engineer, Advocate, CA…)', value: p ? p.profession : '' },
+    { name: 'firm', label: 'Firm', value: p ? p.firm : '' }, { name: 'phone', label: 'Phone', value: p ? p.phone : '' }, { name: 'email', label: 'Email', value: p ? p.email : '' },
+    { name: 'gstin', label: 'GSTIN', value: p ? p.gstin : '' }, { name: 'pan', label: p && p.has_pan ? 'PAN (leave empty to keep the saved one)' : 'PAN (kept private)' }, { name: 'notes', label: 'Notes', type: 'textarea', value: p ? p.notes : '' }] });
+  if (!v) return;
+  const ok = p ? await act(api(`/api/professionals/${p.id}`, { method: 'PUT', body: v }), 'Saved') : await act(api('/api/professionals', { method: 'POST', body: v }), 'Added');
+  if (ok) loadProfessionals();
 }

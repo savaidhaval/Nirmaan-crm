@@ -99,3 +99,6 @@ Code complete; all 11 suites and 3 browser walkthroughs pass locally. Migration 
 
 ## WP-8/9/10 status
 Code complete; 14 API suites and 4 browser walkthroughs pass locally. Migrations 0018-0020 NOT applied to staging or production.
+
+## Professionals, contracts, AI status
+Code complete; 16 API suites and 5 browser walkthroughs pass locally. Migrations 0018-0022 NOT applied to production. AI never run against the real Cloudflare model (mock only).

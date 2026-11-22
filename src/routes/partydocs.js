@@ -2,19 +2,21 @@
 // Document types are typed freely (no fixed list). A newer copy replaces the old one, which stops its reminders.
 import { vendorName } from './procurement2.js';
 import { contractorNames } from './contractors.js';
+import { professionalName } from './professionals.js';
 
-const TYPES = ['vendor', 'contractor'];
-const MODULE_OF = { vendor: 'procurement', contractor: 'contractors' };
+const TYPES = ['vendor', 'contractor', 'professional'];
+const KINDS = ['contract', 'document'];
+const MODULE_OF = { vendor: 'procurement', contractor: 'contractors', professional: 'professionals' };
 const isDate = (s) => /^\d{4}-\d{2}-\d{2}$/.test(String(s || '')) && !Number.isNaN(Date.parse(s));
 
 // Hourly (one statement): PM and Purchase hear about documents inside their reminder window, again once expired. Once per document per week.
 export async function partyDocsSweep(env) {
   await env.DB.prepare(`INSERT INTO notifications (user_id, title, body, link, created_at)
-    SELECT u.id, (CASE WHEN d.valid_till < date('now') THEN 'Document EXPIRED: ' ELSE 'Document expiring: ' END) || d.party_label || ' – ' || d.doc_type || ' (#' || d.id || ')',
+    SELECT u.id, (CASE WHEN d.kind = 'contract' THEN 'Contract ' ELSE 'Document ' END) || (CASE WHEN d.valid_till < date('now') THEN 'EXPIRED: ' ELSE 'expiring: ' END) || d.party_label || ' – ' || d.doc_type || ' (#' || d.id || ')',
            'Valid till ' || d.valid_till || '. Upload the renewed copy and it replaces this one.', 'procurement', datetime('now')
     FROM pro_party_docs d JOIN users u ON u.role IN ('pm', 'purchase') AND u.active = 1 AND u.deleted_at IS NULL
     WHERE d.deleted_at IS NULL AND d.superseded_by IS NULL AND d.valid_till IS NOT NULL AND d.valid_till <= date('now', '+' || d.reminder_days || ' days')
-      AND NOT EXISTS (SELECT 1 FROM notifications n WHERE n.user_id = u.id AND n.title LIKE '%(#' || d.id || ')' AND n.title LIKE (CASE WHEN d.valid_till < date('now') THEN 'Document EXPIRED:%' ELSE 'Document expiring:%' END) AND n.created_at > datetime('now', '-7 days'))`).run();
+      AND NOT EXISTS (SELECT 1 FROM notifications n WHERE n.user_id = u.id AND n.title LIKE '%(#' || d.id || ')' AND n.title LIKE (CASE WHEN d.valid_till < date('now') THEN '%EXPIRED:%' ELSE '%expiring:%' END) AND n.created_at > datetime('now', '-7 days'))`).run();
 }
 
 export function registerPartyDocs(router, h) {
@@ -37,14 +39,15 @@ export function registerPartyDocs(router, h) {
 
   async function label(env, type, id) {
     if (type === 'vendor') return vendorName(env, id);
+    if (type === 'professional') return professionalName(env, id);
     const m = await contractorNames(env, [id]); return m[id] ? m[id].name : null;
   }
 
   router.get('/api/partydocs', guard('V', async (req, env) => {
     try {
       const id = Number(new URL(req.url).searchParams.get('party_id'));
-      const rows = (await env.DB.prepare(`SELECT d.id, d.doc_type, d.valid_till, d.reminder_days, d.document_id, d.note, d.created_at, d.superseded_by, doc.title AS file_title
-        FROM pro_party_docs d LEFT JOIN documents doc ON doc.id = d.document_id WHERE d.party_type = ? AND d.party_id = ? AND d.deleted_at IS NULL ORDER BY d.superseded_by IS NOT NULL, d.valid_till IS NULL, d.valid_till LIMIT 100`).bind(req.partyType, id).all()).results;
+      const rows = (await env.DB.prepare(`SELECT d.id, d.doc_type, d.valid_till, d.reminder_days, d.document_id, d.note, d.created_at, d.superseded_by, d.kind, doc.title AS file_title
+        FROM pro_party_docs d LEFT JOIN documents doc ON doc.id = d.document_id WHERE d.party_type = ? AND d.party_id = ? AND d.deleted_at IS NULL ORDER BY d.superseded_by IS NOT NULL, d.kind != 'contract', d.valid_till IS NULL, d.valid_till LIMIT 100`).bind(req.partyType, id).all()).results;
       const t = today();
       for (const r of rows) {
         r.current = r.superseded_by == null;
@@ -61,6 +64,7 @@ export function registerPartyDocs(router, h) {
       const docType = String(b.doc_type || '').trim().slice(0, 80);
       if (!docType) return json({ ok: false, error: 'Type in what this document is (for example: GST certificate).' }, 400);
       if (b.valid_till && !isDate(b.valid_till)) return json({ ok: false, error: 'The valid-till date looks wrong.' }, 400);
+      const kind = KINDS.includes(b.kind) ? b.kind : 'document';
       const days = b.reminder_days === undefined || b.reminder_days === '' ? 30 : Math.round(Number(b.reminder_days));
       if (!(days >= 0 && days <= 365)) return json({ ok: false, error: 'Reminder days should be between 0 and 365.' }, 400);
       const name = await label(env, type, pid);
@@ -72,10 +76,10 @@ export function registerPartyDocs(router, h) {
       }
       // New copy and the "replaced" mark go in together, so a reminder can never fire for the old one by mistake.
       const res = await env.DB.batch([
-        env.DB.prepare('INSERT INTO pro_party_docs (party_type, party_id, party_label, doc_type, valid_till, reminder_days, document_id, note, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-          .bind(type, pid, name, docType, b.valid_till || null, days, b.document_id ? Number(b.document_id) : null, String(b.note || '').slice(0, 200), req.user.user_id, nowStr()),
+        env.DB.prepare('INSERT INTO pro_party_docs (party_type, party_id, party_label, doc_type, valid_till, reminder_days, document_id, note, kind, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+          .bind(type, pid, name, docType, b.valid_till || null, days, b.document_id ? Number(b.document_id) : null, String(b.note || '').slice(0, 200), kind, req.user.user_id, nowStr()),
         ...(old ? [env.DB.prepare('UPDATE pro_party_docs SET superseded_by = last_insert_rowid() WHERE id = ? AND superseded_by IS NULL').bind(old.id)] : []),
-        env.DB.prepare('INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, ?, ?, last_insert_rowid(), ?, ?)').bind(req.user.user_id, old ? 'replace' : 'create', 'pro_party_docs', `${old ? 'Replaced' : 'Added'} ${docType} for ${name}`, nowStr()),
+        env.DB.prepare('INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, ?, ?, last_insert_rowid(), ?, ?)').bind(req.user.user_id, old ? 'replace' : 'create', 'pro_party_docs', `${old ? 'Replaced' : 'Added'} ${kind} ${docType} for ${name}`, nowStr()),
       ]);
       return json({ ok: true, data: { id: res[0].meta.last_row_id } });
     } catch (e) { return serverError(e, 'partydocs-create'); }

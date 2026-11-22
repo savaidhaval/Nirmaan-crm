@@ -57,3 +57,9 @@
 - Documents with expiry for vendors and contractors: type freely, valid-till date, reminder days, file upload, replace with a new copy (stops the old reminder); PM and Purchase are reminded once per document per week, again when expired.
 - Petty cash: fund per custodian, expenses with bill photo (offline-capable) wait for PM approval, Accounts adds cash, cash can be returned, entries are cancelled never deleted, low-balance warning (setting petty.low_balance_paise), statement CSV with category totals.
 - Fix found by browser tests: the screens used the wrong field for the signed-in user's id. Migrations 0018-0020; tests stores (41), partydocs (26), petty (34) in CI; browser walkthrough 29 checks. CI now starts the dev server with --test-scheduled so hourly sweeps can be tested.
+
+## Professionals, contracts and the AI assistant (2026-11-22)
+- Professionals register (architect, structural engineer, advocate, CA...). Every vendor, contractor and professional has a "Contracts and documents" block: upload contracts (with end date and reminders) and other documents, replace with a new signed copy, history kept. Reminders say "Contract expiring" or "Document expiring".
+- AI assistant (Cloudflare Workers AI, free allowance, off until the Owner switches it on): Ask the CRM (permission-filtered facts, shows its sources), write messages in English/Hindi/Marathi, summaries. Nothing is sent or changed by AI. See docs/AI.md.
+- Deploy workflow adds the AI binding at deploy time; CI starts the dev server with AI_MOCK so tests need no real model.
+- Migrations 0021-0022; tests professionals (23), ai (38) in CI; browser walkthrough (17 checks).
