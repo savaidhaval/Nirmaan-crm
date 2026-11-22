@@ -40,7 +40,7 @@ jobs:
           OWNER_PASSWORD: CiStrongPass-12345
         run: |
           set -e
-          for t in security features multibrand sales2 audit reports phase2 procurement2 contractors dprlabour budget stores partydocs petty professionals ai sales3 rera_visits profile bulk_demands redevelopment bank; do
+          for t in security features multibrand sales2 audit reports phase2 procurement2 contractors dprlabour budget stores partydocs petty professionals ai sales3 rera_visits profile bulk_demands redevelopment bank drw_acks; do
             echo "== $t"; node tests/$t.mjs
             # the login limiter counts failures only, but clear any leftovers between suites
             npx wrangler d1 execute nirmaan-db --local --command "DELETE FROM rate_limits" > /dev/null

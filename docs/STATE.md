@@ -128,3 +128,6 @@ Remaining, in this order, with the extra items folded in:
 - WP-20 Dashboard extras and reports (guide Phase 12 baseline; adds redevelopment, bank, bulk letters, work-report and feasibility lines).
 - WP-21 Offline queues and Hindi/Marathi (new screens including profile, team, demand letters, redevelopment consent taps).
 - WP-23 Hardening and Phase 13 (also: D1 100-variable limit above 100 projects, measured CPU/queries for every new route, real email and real AI trial, restore drill including all new tables).
+
+## WP-22 status
+Code complete; 23 API suites and 11 browser walkthroughs pass locally. Migration 0030 NOT applied to production. Sweep adds 2 statements to the hourly run. WP-18 is live.

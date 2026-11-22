@@ -22,6 +22,7 @@ import { registerProfile } from './routes/profile.js';
 import { registerFeasibility, feasibilitySweep } from './routes/feasibility.js';
 import { registerRedevelopment, redevSweep } from './routes/redevelopment.js';
 import { registerBank, bankSweep } from './routes/bank.js';
+import { registerDrawingAcks, drawingAckSweep } from './routes/drw_acks.js';
 import { registerVisits, visitOptions, cleanFeedback } from './routes/visits.js';
 import { registerRera, reraSweep } from './routes/rera.js';
 import { registerAi } from './routes/ai.js';
@@ -546,7 +547,7 @@ const EDITABLE_SETTINGS = ['po.pm_approval_limit_paise', 'access.allow_second_ow
   'demand.due_days_after_milestone', 'share.default_expiry_days', 'share.default_max_views', 'files.brochure_max_mb', 'branding.apply_colours_to_app',
   'brochure.price_list_default_audience', 'storage.warn_percent', 'sales.max_holds_per_user', 'sales.max_discount_bp', 'sales.pm_max_discount_bp',
   'interest.rate_bp', 'interest.grace_days', 'interest.enabled', 'security.require_mfa_roles', 'tax.stamp_duty_bp', 'tax.metro_cess_bp', 'tax.women_concession_bp', 'tax.registration_bp', 'tax.registration_cap_paise', 'tax.gst_bp',
-  'con.enabled', 'con.pm_approval_limit_paise', 'con.gst_bp', 'con.tds_bp', 'budget.gst_basis', 'petty.low_balance_paise', 'ai.enabled', 'ai.daily_limit', 'ai.model', 'rera.designated_pct_bp', 'fea.review_days', 'red.member_doc_checklist', 'red.rent_due_day', 'bank.keep_days', 'sales.bulk_daily_limit', 'sales.bulk_chunk', 'sales.demand_link_days', 'sales.visit_objections', 'sales.visit_radius_m',
+  'con.enabled', 'con.pm_approval_limit_paise', 'con.gst_bp', 'con.tds_bp', 'budget.gst_basis', 'petty.low_balance_paise', 'ai.enabled', 'ai.daily_limit', 'ai.model', 'rera.designated_pct_bp', 'fea.review_days', 'red.member_doc_checklist', 'red.rent_due_day', 'bank.keep_days', 'drawing.ack_hours', 'sales.bulk_daily_limit', 'sales.bulk_chunk', 'sales.demand_link_days', 'sales.visit_objections', 'sales.visit_radius_m',
   'sales.receipt_approval_limit_paise', 'sales.discount_pm_limit_paise', 'sales.handover_template'];
 
 router.post('/api/settings/:key', async (req, env) => {
@@ -711,6 +712,8 @@ router.post('/api/approvals/:id/event', async (req, env) => {
 });
 
 // ---------- Drawings routes ----------
+registerDrawingAcks(router, { withAuth, json, serverError, visibleProjectIds, nowStr });
+
 router.get('/api/drawings', async (req, env) => {
   return withAuth(req, env, 'drawings', 'V', async (req, env) => {
     try {
@@ -1496,7 +1499,7 @@ const EXPORT_TABLES = ['projects', 'apr_items', 'apr_events', 'drw_drawings', 'd
     'sal_leads', 'sal_activities', 'sal_visits', 'sal_inventory', 'sal_partners', 'sal_bookings', 'sal_plan_stages', 'sal_demands', 'sal_receipts', 'documents', 'audit_log',
     'pro_grn_items', 'pro_payments', 'ppl_staff', 'ppl_hiring', 'ppl_candidates', 'sal_brokerage_payments', 'sal_refunds', 'sal_interest_waivers', 'mkt_spend', 'brands', 'counters',
     'pro_indents', 'pro_indent_items', 'pro_rfq_items', 'pro_quote_items',
-    'site_dpr_labour', 'bud_heads', 'stk_items', 'stk_balance', 'stk_moves', 'pro_party_docs', 'pro_professionals', 'ai_log', 'sal_receipt_requests', 'sal_adjustments', 'sal_booking_parties', 'sal_cost_sheets', 'sal_cost_sheet_lines', 'sal_handover', 'sal_handover_items', 'sal_booking_loans', 'rera_account_entries', 'eng_kudos', 'fea_versions', 'sal_bulk_runs', 'sal_bulk_items', 'bank_profiles', 'bank_import_batches', 'bank_import_rows', 'red_societies', 'red_members', 'red_consent_events', 'red_member_docs', 'red_rehab_allotments', 'red_transit_terms', 'red_transit_schedule', 'red_transit_payments', 'red_corpus_entries', 'red_meetings', 'pty_funds', 'pty_entries', 'con_contractors', 'con_work_orders', 'con_wo_items', 'con_ra_bills', 'con_ra_lines', 'con_payments', 'con_ledger'];
+    'site_dpr_labour', 'bud_heads', 'stk_items', 'stk_balance', 'stk_moves', 'pro_party_docs', 'pro_professionals', 'ai_log', 'sal_receipt_requests', 'sal_adjustments', 'sal_booking_parties', 'sal_cost_sheets', 'sal_cost_sheet_lines', 'sal_handover', 'sal_handover_items', 'sal_booking_loans', 'rera_account_entries', 'eng_kudos', 'fea_versions', 'sal_bulk_runs', 'sal_bulk_items', 'drw_acks', 'bank_profiles', 'bank_import_batches', 'bank_import_rows', 'red_societies', 'red_members', 'red_consent_events', 'red_member_docs', 'red_rehab_allotments', 'red_transit_terms', 'red_transit_schedule', 'red_transit_payments', 'red_corpus_entries', 'red_meetings', 'pty_funds', 'pty_entries', 'con_contractors', 'con_work_orders', 'con_wo_items', 'con_ra_bills', 'con_ra_lines', 'con_payments', 'con_ledger'];
 const EXPORT_PARTS = 3;
 
 async function buildExport(env, part = 1) {
@@ -3162,6 +3165,7 @@ async function runCron(cron, env) {
     await feasibilitySweep(env, getSetting);
     await redevSweep(env, getSetting);
     await bankSweep(env, getSetting);
+    await drawingAckSweep(env, getSetting);
   } else if (cron === '30 2 * * *') {
     // 08:00 IST digest to every active Owner
     const owners = await env.DB.prepare("SELECT email FROM users WHERE role = 'owner' AND active = 1 AND deleted_at IS NULL").all();
