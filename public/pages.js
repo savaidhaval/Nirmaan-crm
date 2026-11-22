@@ -222,7 +222,7 @@ const PAGES = {
 let brandChrome = null;
 async function loadBrandChrome() {
   if (brandChrome) return brandChrome;
-  let name = 'NirmaanCRM';
+  let name = 'Nirman';
   try { name = JSON.parse(sessionStorage.getItem('nirmaan.brandname') || '"NirmaanCRM"'); } catch (e) { /* ignore */ }
   brandChrome = { name };
   try {
@@ -234,7 +234,7 @@ async function loadBrandChrome() {
 }
 
 function paintChrome() {
-  const name = (brandChrome && brandChrome.name) || 'NirmaanCRM';
+  const name = (brandChrome && brandChrome.name) || 'Nirman';
   const initial = esc(name.trim().charAt(0).toUpperCase() || 'N');
   for (const id of ['side-name', 'topbar-trade-name']) { const el = $(id); if (el) el.textContent = name; }
   for (const id of ['side-logo', 'top-logo']) {
@@ -294,7 +294,7 @@ function renderApp() {
   // top bar
   $('avatar').textContent = (currentUser.name || '?').split(/\s+/).map((w) => w[0]).slice(0, 2).join('').toUpperCase();
   $('um-name').textContent = currentUser.name; $('um-role').textContent = `${currentUser.role} · ${currentUser.email}`;
-  document.title = `${t(ROUTE_TITLES[currentPage] || (sidebarItems(currentUser.role).flatMap((g) => g[1]).find((i) => i.route === currentPage) || {}).label || 'NirmaanCRM')} — NirmaanCRM`;
+  document.title = `${t(ROUTE_TITLES[currentPage] || (sidebarItems(currentUser.role).flatMap((g) => g[1]).find((i) => i.route === currentPage) || {}).label || 'NirmaanCRM')} — Nirman`;
   window.scrollTo(0, 0);
   (PAGES[currentPage] || renderHome)(main);
 }
@@ -1067,12 +1067,12 @@ if ('serviceWorker' in navigator) {
 // ---------- Login (password or emailed code) ----------
 function renderLogin() {
   document.body.classList.add('guest');
-  document.title = 'Sign in — NirmaanCRM';
+  document.title = 'Sign in — Nirman';
   $('app-main').innerHTML = `
     <div class="login-card">
-      <div class="brand"><div class="logo-mark">N</div></div>
+      <img class="login-logo" src="/identity/logo-horizontal.png" alt="Nirman: Construction CRM" width="300" height="61">
       <h1>Welcome back</h1>
-      <p class="sub">Sign in to NirmaanCRM</p>
+      <p class="sub">Sign in to Nirman</p>
       <div class="field"><label for="login-email">Email</label><input type="email" id="login-email" autocomplete="username" placeholder="you@yourcompany.in"></div>
       <div id="login-pw-block">
         <div class="field"><label for="login-password">Password</label><div class="password-input"><input type="password" id="login-password" autocomplete="current-password"><button type="button" id="login-toggle">Show</button></div></div>

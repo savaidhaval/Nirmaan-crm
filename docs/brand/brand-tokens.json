@@ -1,0 +1,21 @@
+{
+  "name": "NIRMAN",
+  "tagline": "Modern Construction CRM & Site Intelligence",
+  "colors": {
+    "blueprint_navy": "#0F2537",
+    "safety_amber": "#E86F2C",
+    "steel_slate": "#2C4A63",
+    "concrete_light": "#F6F8FA",
+    "pure_white": "#FFFFFF",
+    "charcoal_ink": "#111827",
+    "muted_gray": "#64748B",
+    "border_line": "#E2E8F0",
+    "success_green": "#16A34A",
+    "warning_gold": "#D97706"
+  },
+  "fonts": {
+    "display": "Noto Sans Display / Plus Jakarta Sans",
+    "body": "Lato / Inter",
+    "mono": "Noto Sans Mono / JetBrains Mono"
+  }
+}
