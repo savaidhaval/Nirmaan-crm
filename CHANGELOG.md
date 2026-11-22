@@ -20,3 +20,6 @@
 - Email: SMTP client rewritten (multi-line replies, AUTH PLAIN/LOGIN, STARTTLS, MIME with UTF-8, dot-stuffing, header-injection guard);
   encrypted SMTP password; Email settings screen; working OTP login; digest escapes content.
 - New: users admin, approvals template, drawing revisions, PO approval, sales bookings/receipts, share links with revoke, document upload/links.
+
+## S0/S1 (2026-11-22)
+- Docs only: added `docs/STATE.md` (reconciliation, remote checks pending), `docs/DATA_DICTIONARY.md` (real schema), `docs/proposed/0010_reconcile.sql` (NOT applied), `CLAUDE.md` (standing rules).
