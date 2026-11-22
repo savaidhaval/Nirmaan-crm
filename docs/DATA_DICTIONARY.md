@@ -357,3 +357,6 @@ id TEXT PK, source TEXT, seen_at TEXT
 
 ## 0029 additions (WP-18 bank statement import)
 - bank_profiles (saved column choices per bank format). bank_import_batches (file name, who, counts). bank_import_rows (credit lines only: date, scrubbed narration, amount in paise, reference, row_key UNIQUE so a statement can be imported twice safely, status unmatched|suggested|confirmed|ignored, links to demand/booking/receipt or waiting receipt request; a receipt or request can be linked to at most one line). No bank account numbers are stored: digit runs of 9 or more are masked to the last 4.
+
+## 0030 additions (WP-22 drawing acknowledgement)
+- drw_acks (revision_id, user_id, acked_at; UNIQUE per person per revision; never edited or deleted). Only role site (assigned to the project) confirms; only the current IFC revision can be confirmed. Reminder time limit: setting drawing.ack_hours.
