@@ -27,7 +27,7 @@ I (Dhaval) am not a programmer: explain terms plainly, give exact commands, and 
 
 ## UX contract (guide §2, §6)
 - A daily task takes 3 taps or fewer, no jargon, 18px+ text, 48px+ buttons, plain-language errors, empty states with one big action button, a ? help button on every screen.
-- Mobile-first for a Rs 10,000 Android phone on 4G; site-facing forms work offline (IndexedDB queue, client_uuid idempotency). Hindi/Marathi labels via i18n.js.
+- Mobile-first for a Rs 10,000 Android phone on 4G; site-facing forms work offline (IndexedDB queue, client_uuid idempotency). English only on the website (Dhaval's decision, Nov 2026: no Hindi or Marathi labels).
 
 ## Secrets and privacy
 - Never print, log, audit, return, commit or export any secret, token, key, password or Aadhaar number. Secrets only via wrangler secret. Aadhaar masked only.

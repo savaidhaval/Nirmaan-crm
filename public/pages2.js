@@ -1,5 +1,5 @@
 // pages2.js — brochure library, people (HR), branding & letterhead, site photos, project archive,
-// owner checklist, and Hindi/Marathi for every screen. Loaded after pages.js (later definitions win).
+// and the owner checklist. Loaded after pages.js (later definitions win).
 
 Object.assign(ICONS, {
   brochures: 'M4 4h12a2 2 0 012 2v14l-4-2-4 2-4-2-2 1V6a2 2 0 012-2zM8 9h6M8 13h6',
@@ -225,7 +225,7 @@ async function uploadBrochure(existing, asLink) {
     { name: 'title', label: 'Title', required: true, value: existing ? existing.title : '' },
     { name: 'project_id', label: 'Project', type: 'select', options: projects, value: existing ? existing.project_id : undefined },
     { name: 'category', label: 'Type', type: 'select', options: BROCHURE_CATS, value: existing ? existing.category : 'brochure' },
-    { name: 'language', label: 'Language', type: 'select', options: [['', '—'], ['en', 'English'], ['hi', 'हिन्दी'], ['mr', 'मराठी']], value: existing ? existing.language || '' : '' },
+    { name: 'language', label: 'Language', type: 'select', options: [['', '—'], ['en', 'English']], value: existing ? existing.language || '' : '' },
     { name: 'audience', label: 'Who may see it', type: 'select', options: [['internal', 'Our team only (e.g. internal price list)'], ['customer', 'Can be shared with customers']], value: existing ? existing.audience : 'internal' }] });
   if (!v) return;
   const series = existing ? existing.series_key : `${v.category}:${v.title.toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 40)}`;
@@ -450,43 +450,6 @@ renderDashboard = PAGES.dashboard = function (main) {
     main.querySelectorAll('.card [data-go]').forEach((el) => { el.onclick = () => navigate(el.dataset.go); });
   }).catch(() => {});
 };
-
-// ---------- Hindi / Marathi for every screen ----------
-const EXTRA_I18N = {
-  hi: { 'Projects': 'प्रोजेक्ट', '+ New project': '+ नया प्रोजेक्ट', 'Approvals & Compliance': 'मंज़ूरियाँ और अनुपालन', 'Drawings': 'ड्रॉइंग', 'Procurement': 'खरीद', 'Sales': 'बिक्री', 'Documents': 'दस्तावेज़', 'Brochures': 'ब्रोशर', 'People': 'लोग', 'Users & access': 'यूज़र और एक्सेस', 'Branding': 'ब्रांडिंग', 'Shared links': 'शेयर लिंक', 'Audit log': 'ऑडिट लॉग', 'Storage': 'स्टोरेज', 'Email': 'ईमेल', 'Settings': 'सेटिंग', 'Work': 'काम', 'Money': 'पैसा', 'Admin': 'एडमिन', 'Setup': 'सेटअप',
-    'Money in — this month': 'इस महीने की आमदनी', 'Overdue receivables': 'बकाया वसूली', 'Bills due in 7 days': '7 दिन में देय बिल', 'POs waiting for approval': 'मंज़ूरी के इंतज़ार में PO', 'Site reports yesterday': 'कल की साइट रिपोर्ट', 'Open high-severity snags': 'खुली गंभीर समस्याएँ', 'New leads this week': 'इस हफ़्ते के नए लीड',
-    'Purchase orders': 'खरीद आदेश', 'Bills': 'बिल', 'RFQs': 'कोटेशन अनुरोध', 'Vendors': 'विक्रेता', 'Flats': 'फ़्लैट', 'Bookings': 'बुकिंग', 'Leads': 'लीड', '🤝 New lead': '🤝 नया लीड', '🏠 Add flat': '🏠 फ़्लैट जोड़ें', '📊 Payment plan': '📊 भुगतान योजना', '📄 New purchase order': '📄 नया खरीद आदेश', '🛒 New vendor': '🛒 नया विक्रेता', '📋 New RFQ': '📋 नया कोटेशन अनुरोध',
-    'Send for approval': 'मंज़ूरी के लिए भेजें', 'Approve': 'मंज़ूर करें', 'Reject': 'अस्वीकार करें', 'Print': 'प्रिंट', 'Material received': 'माल प्राप्त', 'Add bill': 'बिल जोड़ें', 'Mark paid': 'भुगतान हुआ', 'Download': 'डाउनलोड', 'Open': 'खोलें', 'Close': 'बंद करें', 'Edit': 'बदलें', 'Add': 'जोड़ें', 'Delete': 'हटाएँ', 'Back': 'वापस', 'Yes': 'हाँ', 'No': 'नहीं', 'Loading...': 'लोड हो रहा है...',
-    'Welcome back': 'वापसी पर स्वागत है', 'Sign in': 'साइन इन', 'Email': 'ईमेल', 'Password': 'पासवर्ड', 'Show': 'दिखाएँ', 'Save password': 'पासवर्ड सेव करें', 'Choose your own password': 'अपना पासवर्ड चुनें', 'New password': 'नया पासवर्ड',
-    'Add item': 'आइटम जोड़ें', '+ Add item': '+ आइटम जोड़ें', 'Applied': 'आवेदन किया', 'Not started': 'शुरू नहीं हुआ', 'Approved': 'मंज़ूर', 'Rejected': 'अस्वीकृत', 'Expired': 'समाप्त', 'Timeline': 'समयरेखा', 'Mark applied': 'आवेदन किया', 'Query received': 'प्रश्न आया',
-    'Notifications': 'सूचनाएँ', 'No notifications.': 'कोई सूचना नहीं।', 'Nothing here yet.': 'अभी कुछ नहीं।', 'Active': 'सक्रिय', 'Deactivated': 'निष्क्रिय', 'Reset password': 'पासवर्ड रीसेट', 'Deactivate': 'निष्क्रिय करें', 'Reactivate': 'फिर चालू करें', '+ Add person': '+ व्यक्ति जोड़ें', 'Log everyone out': 'सबको लॉग आउट करें',
-    'Staff': 'स्टाफ़', 'Open positions': 'खुले पद', 'Interviews': 'इंटरव्यू', 'Candidates': 'उम्मीदवार', 'Upload': 'अपलोड', 'New version': 'नया संस्करण', 'Send to customer': 'ग्राहक को भेजें', 'Archive': 'आर्काइव', 'Restore': 'वापस लाएँ', 'Archived': 'आर्काइव किए गए',
-    'Mark fixed': 'ठीक हुआ', 'Verify fix': 'सुधार जाँचें', 'Photos': 'फ़ोटो', 'Material': 'सामग्री', 'Total': 'कुल', 'Status': 'स्थिति', 'Help': 'सहायता' },
-  mr: { 'Projects': 'प्रकल्प', '+ New project': '+ नवीन प्रकल्प', 'Approvals & Compliance': 'मंजुरी आणि अनुपालन', 'Drawings': 'ड्रॉइंग्ज', 'Procurement': 'खरेदी', 'Sales': 'विक्री', 'Documents': 'कागदपत्रे', 'Brochures': 'ब्रोशर', 'People': 'माणसे', 'Users & access': 'वापरकर्ते आणि प्रवेश', 'Branding': 'ब्रँडिंग', 'Shared links': 'शेअर लिंक', 'Audit log': 'ऑडिट लॉग', 'Storage': 'साठवण', 'Email': 'ईमेल', 'Settings': 'सेटिंग्ज', 'Work': 'काम', 'Money': 'पैसा', 'Admin': 'प्रशासन', 'Setup': 'सेटअप',
-    'Money in — this month': 'या महिन्यातील जमा', 'Overdue receivables': 'थकबाकी वसुली', 'Bills due in 7 days': '7 दिवसांत देय बिले', 'POs waiting for approval': 'मंजुरीच्या प्रतीक्षेतील PO', 'Site reports yesterday': 'कालचे साइट अहवाल', 'Open high-severity snags': 'उघड्या गंभीर अडचणी', 'New leads this week': 'या आठवड्यातील नवे लीड',
-    'Purchase orders': 'खरेदी आदेश', 'Bills': 'बिले', 'RFQs': 'दरपत्रक विनंत्या', 'Vendors': 'पुरवठादार', 'Flats': 'सदनिका', 'Bookings': 'बुकिंग', 'Leads': 'लीड', '🤝 New lead': '🤝 नवीन लीड', '🏠 Add flat': '🏠 सदनिका जोडा', '📊 Payment plan': '📊 पेमेंट योजना', '📄 New purchase order': '📄 नवीन खरेदी आदेश', '🛒 New vendor': '🛒 नवीन पुरवठादार', '📋 New RFQ': '📋 नवीन दरपत्रक विनंती',
-    'Send for approval': 'मंजुरीसाठी पाठवा', 'Approve': 'मंजूर करा', 'Reject': 'नाकारा', 'Print': 'प्रिंट', 'Material received': 'माल मिळाला', 'Add bill': 'बिल जोडा', 'Mark paid': 'दिले म्हणून नोंदवा', 'Download': 'डाउनलोड', 'Open': 'उघडा', 'Close': 'बंद करा', 'Edit': 'बदला', 'Add': 'जोडा', 'Delete': 'काढा', 'Back': 'मागे', 'Yes': 'होय', 'No': 'नाही', 'Loading...': 'लोड होत आहे...',
-    'Welcome back': 'पुन्हा स्वागत', 'Sign in': 'साइन इन', 'Email': 'ईमेल', 'Password': 'पासवर्ड', 'Show': 'दाखवा', 'Save password': 'पासवर्ड जतन करा', 'Choose your own password': 'आपला स्वतःचा पासवर्ड निवडा', 'New password': 'नवीन पासवर्ड',
-    'Add item': 'बाब जोडा', '+ Add item': '+ बाब जोडा', 'Applied': 'अर्ज केला', 'Not started': 'सुरू नाही', 'Approved': 'मंजूर', 'Rejected': 'नाकारले', 'Expired': 'मुदत संपली', 'Timeline': 'कालरेषा', 'Mark applied': 'अर्ज केला', 'Query received': 'प्रश्न आला',
-    'Notifications': 'सूचना', 'No notifications.': 'सूचना नाहीत.', 'Nothing here yet.': 'अजून काही नाही.', 'Active': 'सक्रिय', 'Deactivated': 'निष्क्रिय', 'Reset password': 'पासवर्ड रीसेट', 'Deactivate': 'निष्क्रिय करा', 'Reactivate': 'पुन्हा सुरू करा', '+ Add person': '+ व्यक्ती जोडा', 'Log everyone out': 'सर्वांना लॉग आउट करा',
-    'Staff': 'कर्मचारी', 'Open positions': 'रिक्त पदे', 'Interviews': 'मुलाखती', 'Candidates': 'उमेदवार', 'Upload': 'अपलोड', 'New version': 'नवी आवृत्ती', 'Send to customer': 'ग्राहकाला पाठवा', 'Archive': 'संग्रहित करा', 'Restore': 'परत आणा', 'Archived': 'संग्रहित',
-    'Mark fixed': 'दुरुस्त झाले', 'Verify fix': 'दुरुस्ती तपासा', 'Photos': 'फोटो', 'Material': 'साहित्य', 'Total': 'एकूण', 'Status': 'स्थिती', 'Help': 'मदत' },
-};
-for (const lang of ['hi', 'mr']) Object.assign(I18N[lang], EXTRA_I18N[lang]);
-
-function translateTree(root) {
-  const lang = currentUser && currentUser.lang;
-  if (!lang || lang === 'en' || !I18N[lang]) return;
-  const dict = I18N[lang];
-  const w = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-  const nodes = []; while (w.nextNode()) nodes.push(w.currentNode);
-  for (const n of nodes) {
-    const raw = n.nodeValue; const key = raw.trim();
-    if (key && dict[key] && !/^(SCRIPT|STYLE|TEXTAREA)$/.test(n.parentNode.nodeName)) n.nodeValue = raw.replace(key, dict[key]);
-  }
-  if (root.querySelectorAll) root.querySelectorAll('[placeholder],[title]').forEach((el) => { for (const a of ['placeholder', 'title']) { const v = el.getAttribute(a); if (v && dict[v]) el.setAttribute(a, dict[v]); } });
-}
-new MutationObserver((muts) => { for (const m of muts) m.addedNodes.forEach((n) => { if (n.nodeType === 1) translateTree(n); else if (n.nodeType === 3 && n.parentNode) translateTree(n.parentNode); }); }).observe(document.body, { childList: true, subtree: true });
 
 newProject = async function () {
   let brands = []; try { brands = (await api('/api/brands')).data.brands; } catch (e) { /* ignore */ }

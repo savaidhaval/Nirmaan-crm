@@ -100,25 +100,8 @@ function copyText(t) {
 }
 
 
-// ---------- Language (en / hi / mr) ----------
-const I18N = {
-  hi: { 'Home': 'होम', 'Drawings': 'ड्रॉइंग', 'Site': 'साइट', 'More': 'और', 'Projects': 'प्रोजेक्ट', 'Approvals': 'मंज़ूरियाँ', 'Sales': 'बिक्री', 'Procurement': 'खरीद',
-    'Site work': 'साइट का काम', "Today's work report": 'आज की कार्य रिपोर्ट', 'Raise a snag': 'समस्या दर्ज करें', 'Milestones': 'माइलस्टोन', 'Recent reports': 'हाल की रिपोर्ट', 'Snags': 'समस्याएँ',
-    'Done today': 'आज पूरा', 'Project': 'प्रोजेक्ट', 'Date': 'तारीख', 'What work happened today?': 'आज क्या काम हुआ?', 'Labour on site': 'साइट पर मज़दूर', 'Problems / delays': 'समस्या / देरी',
-    'Save': 'सेव करें', 'Cancel': 'रद्द करें', 'What is wrong?': 'क्या गड़बड़ है?', 'Where (wing / floor)': 'कहाँ (विंग / मंज़िल)', 'How serious?': 'कितनी गंभीर?', 'Low': 'कम', 'Medium': 'मध्यम', 'High': 'ज़्यादा',
-    'Report saved': 'रिपोर्ट सेव हुई', 'Snag raised': 'समस्या दर्ज हुई', 'Latest drawings': 'नवीनतम ड्रॉइंग', 'Hello': 'नमस्ते', 'Language': 'भाषा', 'Log out': 'लॉग आउट', 'Documents': 'दस्तावेज़',
-    'Notifications': 'सूचनाएँ', 'Help': 'सहायता', 'Change password': 'पासवर्ड बदलें', 'Please fill in': 'कृपया भरें', 'Waiting to send': 'भेजना बाकी', 'Saved on this phone. It will be sent when you are online.': 'फ़ोन में सेव हुआ। नेट आने पर भेज दिया जाएगा।', 'Send now': 'अभी भेजें' },
-  mr: { 'Home': 'होम', 'Drawings': 'ड्रॉइंग्ज', 'Site': 'साइट', 'More': 'अधिक', 'Projects': 'प्रकल्प', 'Approvals': 'मंजुरी', 'Sales': 'विक्री', 'Procurement': 'खरेदी',
-    'Site work': 'साइटचे काम', "Today's work report": 'आजचा कामाचा अहवाल', 'Raise a snag': 'अडचण नोंदवा', 'Milestones': 'टप्पे', 'Recent reports': 'अलीकडील अहवाल', 'Snags': 'अडचणी',
-    'Done today': 'आज पूर्ण', 'Project': 'प्रकल्प', 'Date': 'तारीख', 'What work happened today?': 'आज कोणते काम झाले?', 'Labour on site': 'साइटवरील कामगार', 'Problems / delays': 'अडचणी / उशीर',
-    'Save': 'जतन करा', 'Cancel': 'रद्द करा', 'What is wrong?': 'काय चुकले आहे?', 'Where (wing / floor)': 'कुठे (विंग / मजला)', 'How serious?': 'किती गंभीर?', 'Low': 'कमी', 'Medium': 'मध्यम', 'High': 'जास्त',
-    'Report saved': 'अहवाल जतन झाला', 'Snag raised': 'अडचण नोंदवली', 'Latest drawings': 'ताजी ड्रॉइंग्ज', 'Hello': 'नमस्कार', 'Language': 'भाषा', 'Log out': 'लॉग आउट', 'Documents': 'कागदपत्रे',
-    'Notifications': 'सूचना', 'Help': 'मदत', 'Change password': 'पासवर्ड बदला', 'Please fill in': 'कृपया भरा', 'Waiting to send': 'पाठवायचे बाकी', 'Saved on this phone. It will be sent when you are online.': 'फोनमध्ये जतन झाले. नेट आल्यावर पाठवले जाईल.', 'Send now': 'आता पाठवा' },
-};
-function t(s) {
-  const lang = (currentUser && currentUser.lang) || 'en';
-  return (I18N[lang] && I18N[lang][s]) || s;
-}
+// ---------- Labels: English only (decision: no Hindi or Marathi on the website) ----------
+function t(s) { return s; }
 
 // ---------- Offline queue (text only; photos are not queued) ----------
 const QKEY = 'nirmaan.queue.v1';
@@ -411,10 +394,7 @@ function renderMore(main) {
   const canCsv = ['owner', 'pm', 'accounts', 'viewer'].includes(currentUser.role);
   main.innerHTML = `<h1>${esc(t('More'))}</h1><div class="grid">${items.map((i) => `<button class="btn btn-full" style="justify-content:flex-start;gap:12px" data-go="${i.route}">${icon(i.icon, 20)}${esc(t(i.label))}</button>`).join('')}</div>
     ${canCsv ? `<div class="card"><b>Download for Excel</b><div class="row-btns"><a class="btn small" href="/api/export/receipts">Receipts</a><a class="btn small" href="/api/export/receivables">Receivables</a><a class="btn small" href="/api/export/purchases">Purchases</a><a class="btn small" href="/api/export/leads">Leads</a>${o ? '<a class="btn small" href="/api/export-all?part=1">Backup 1 of 3</a><a class="btn small" href="/api/export-all?part=2">Backup 2 of 3</a><a class="btn small" href="/api/export-all?part=3">Backup 3 of 3</a>' : ''}</div></div>` : ''}
-    <div class="field"><label>${esc(t('Language'))}</label><select id="more-lang"><option value="en">English</option><option value="hi">हिन्दी</option><option value="mr">मराठी</option></select></div>
     <button class="btn btn-full" style="margin-top:12px;color:#dc2626" id="more-logout">${esc(t('Log out'))}</button>`;
-  $('more-lang').value = currentUser.lang || 'en';
-  $('more-lang').onchange = async () => { if (await act(api('/api/auth/lang', { method: 'POST', body: { lang: $('more-lang').value } }))) { currentUser.lang = $('more-lang').value; renderApp(); } };
   main.querySelectorAll('[data-go]').forEach((b) => { b.onclick = () => navigate(b.dataset.go); });
   $('more-logout').onclick = logout;
 }
@@ -511,12 +491,11 @@ async function addUser() {
       { name: 'name', label: 'Full name', required: true }, { name: 'email', label: 'Email', type: 'email', required: true },
       { name: 'phone', label: 'Mobile' },
       { name: 'role', label: 'Role', type: 'select', options: roleOpts() },
-      { name: 'lang', label: 'Language', type: 'select', options: [['en', 'English'], ['hi', 'हिन्दी'], ['mr', 'मराठी']] },
       ...projects.map(([id, n]) => ({ name: 'p' + id, type: 'checkbox', label: n, checkLabel: `Can see project: ${n}` })),
     ],
   });
   if (!v) return;
-  const body = { name: v.name, email: v.email, phone: v.phone, role: v.role, lang: v.lang, projects: projects.filter(([id]) => v['p' + id]).map(([id]) => id) };
+  const body = { name: v.name, email: v.email, phone: v.phone, role: v.role, projects: projects.filter(([id]) => v['p' + id]).map(([id]) => id) };
   const r = await act(api('/api/users', { method: 'POST', body }));
   if (r) { showTempPassword(v.name, r.data.temporaryPassword); loadUsers(); }
 }

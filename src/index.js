@@ -1571,15 +1571,6 @@ router.get('/api/export-all', async (req, env) => {
   });
 });
 
-router.post('/api/auth/lang', async (req, env) => {
-  return withAuth(req, env, 'projects', 'V', async (req, env) => {
-    const { lang } = await req.json();
-    if (!['en', 'hi', 'mr'].includes(lang)) return json({ ok: false, error: 'Unknown language.' }, 400);
-    await env.DB.prepare('UPDATE users SET lang = ? WHERE id = ?').bind(lang, req.user.user_id).run();
-    return json({ ok: true });
-  });
-});
-
 // ---------- Versioned series helper (brochures, brand pictures) ----------
 async function nextVersion(env, seriesKey, projectId) {
   const prev = await env.DB.prepare('SELECT id, version FROM documents WHERE series_key = ? AND COALESCE(project_id, 0) = COALESCE(?, 0) AND is_latest = 1 AND deleted_at IS NULL').bind(seriesKey, projectId || null).first();

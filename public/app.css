@@ -454,3 +454,8 @@ h3 { font-size: .75rem; letter-spacing: .07em; font-weight: 600; }
 
 @media (min-width: 900px) { html { font-size: 16px; } .main { padding: 32px 44px 64px; } }
 @media (max-width: 699px) { #btn-install { display: none !important; } .top-right { gap: 2px; } .picker { max-width: 110px; } .topbar { padding: 8px 10px; } }
+
+/* offline mode */
+.offline-bar { display: block; width: 100%; box-sizing: border-box; border: 0; text-align: left; background: #fff4e0; color: #8a4600; padding: 11px 18px; font: inherit; font-weight: 500; font-size: .92rem; cursor: pointer; position: sticky; top: 60px; z-index: 85; border-bottom: 1px solid rgba(0, 0, 0, .06); }
+.offline-bar.bad { background: #fdecea; color: #a1241a; }
+.offline-bar[hidden] { display: none; }
