@@ -29,3 +29,9 @@
 - New: indents (site raises, PM approves, Purchase converts to RFQ), items on RFQs, per-line quotes with server-calculated totals, material received by PO line (PO becomes part_received/received from the totals in one batch), bill part-payments with atomic over-payment guard, payment reversal, exact vendor ledger, reports (pending indents, PO vs received; CSV).
 - Changed: old "mark paid" now records a normal payment for the balance; project financials count payments; site engineers can open the Procurement screen (lists they may not view are skipped).
 - Migration 0014; code in `src/routes/procurement2.js`, `public/pages6.js`; test `tests/procurement2.mjs` (39 checks, added to CI).
+
+## WP-5 contractors (2026-11-22)
+- New module "Contractors" (switched off until the Owner turns it on in Settings): contractors with private PAN, work orders (lump sum / item rate / measured, retention per work order, advance), maker-checker approval with a PM limit, running-account (RA) bills with retention, advance recovery, GST/TDS from settings, over-quantity warning, check then approve, part payments with reversal, retention release, closing rules, append-only ledger, reports (CSV), letterhead print for work orders and RA bills (DRAFT until approved), hourly RA-due reminder.
+- Changed: Export-everything and the nightly backup now come in 3 parts (the free plan allows 50 database reads per run). `scripts/restore.mjs` takes all parts and now restores every table, including ones it used to skip.
+- Changed: `api()` errors carry `.data` so screens can offer "save anyway". Staging workers.dev address switched off; crm.mysociety.tech is the only public address.
+- Migration 0015; code in `src/routes/contractors.js`, `public/pages7.js`; test `tests/contractors.mjs` (61 checks, in CI).

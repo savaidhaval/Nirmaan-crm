@@ -85,4 +85,8 @@ npx wrangler secret list
 Decisions: option B (adapt WPs to current structure; new code goes in `src/routes/<area>.js` + `public/pagesN.js`), S2 items already in schema dropped. `migrations/0013_guide_fixes.sql` written; replays clean on empty SQLite. Guide text edits skipped (guide not in repo). Backup export list in `buildExport` extended with the 2 new tables plus 9 existing tables it omitted (`ppl_*`, `sal_brokerage_payments`, `sal_refunds`, `sal_interest_waivers`, `mkt_spend`, `brands`, `counters`). `docs/proposed/0010_reconcile.sql` removed (superseded by 0013).
 
 ## WP-4 status
-Code complete and tested locally (all 8 suites pass). Migration 0014 NOT applied to staging/production yet. Export-everything/nightly backup now reads 41 tables (+users, +auth lookups, about 44 queries): close to the 50-query cap, move to chunked export in WP-23 before adding more tables.
+Code complete and tested locally (all 8 suites pass). Migration 0014 NOT applied to staging/production yet. Export/backup is now split into 3 parts (done in WP-5).
+
+## WP-5 status
+Code complete, tested locally (all 9 suites pass). Migration 0015 NOT applied to staging/production. Contractors module is OFF by default (setting con.enabled). Staging has no URL now (workers.dev off).
+Decisions taken by default: D4 both bases, retention per work order, contractor-supplied materials not tracked; PM approval limit default Rs 5,00,000 (setting). contractors table is standalone (vendor_id optional) instead of raw SQL on pro_vendors.

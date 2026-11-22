@@ -1,4 +1,4 @@
-# NirmaanCRM data dictionary (real schema from migrations 0001-0014, updated 2026-11-22)
+# NirmaanCRM data dictionary (real schema from migrations 0001-0015, updated 2026-11-22)
 
 Source: replaying migrations/*.sql into an empty SQLite DB. Live D1 not verified (see docs/STATE.md). Money = paise INTEGER, percentages = basis points (_bp). NN = NOT NULL, PK = primary key.
 
@@ -19,6 +19,20 @@ id INTEGER PK, kind TEXT, status TEXT, cursor_json TEXT, files_written INTEGER, 
 id INTEGER PK, project_id INTEGER, legal_name TEXT, trade_name TEXT, tagline TEXT, address TEXT, phone TEXT, email TEXT, website TEXT, gstin TEXT, cin_or_llpin TEXT, promoter_rera_ref TEXT, pan_enc TEXT, bank_account_name TEXT, bank_name TEXT, bank_branch TEXT, bank_ifsc TEXT, bank_account_enc TEXT, signatory_name TEXT, signatory_title TEXT, footer_text TEXT, wa_intro_text TEXT, colour_primary TEXT, colour_secondary TEXT, colour_accent TEXT, letterhead_mode TEXT, margin_top_mm INTEGER, margin_bottom_mm INTEGER, margin_side_mm INTEGER, updated_by INTEGER, updated_at TEXT, created_at TEXT, brand_id INTEGER
 ### brands
 id INTEGER PK, name TEXT NN, is_default INTEGER NN, created_at TEXT, deleted_at TEXT
+### con_contractors
+id INTEGER PK, vendor_id INTEGER, name TEXT NN, phone TEXT, trade TEXT, pan_enc TEXT, gstin TEXT, agreement_document_id INTEGER, active INTEGER NN, created_at TEXT, deleted_at TEXT
+### con_ledger
+id INTEGER PK, contractor_id INTEGER NN, project_id INTEGER NN, wo_id INTEGER NN, kind TEXT NN, amount_paise INTEGER NN, ref_table TEXT, ref_id INTEGER, created_at TEXT
+### con_payments
+id INTEGER PK, wo_id INTEGER NN, ra_id INTEGER, kind TEXT NN, amount_paise INTEGER NN, paid_on TEXT NN, mode TEXT, ref_no TEXT, note TEXT, reversed_at TEXT, reversal_note TEXT, client_uuid TEXT, created_by INTEGER, created_at TEXT
+### con_ra_bills
+id INTEGER PK, wo_id INTEGER NN, ra_no INTEGER NN, period_from TEXT, period_to TEXT, due_date TEXT, gross_paise INTEGER NN, retention_paise INTEGER NN, advance_recovery_paise INTEGER NN, other_deductions_paise INTEGER NN, gst_bp INTEGER NN, gst_paise INTEGER NN, tds_bp INTEGER NN, tds_paise INTEGER NN, net_paise INTEGER NN, status TEXT NN, note TEXT, created_by INTEGER, checked_by INTEGER, approved_by INTEGER, approved_at TEXT, cancel_note TEXT, created_at TEXT
+### con_ra_lines
+id INTEGER PK, ra_id INTEGER NN, wo_item_id INTEGER NN, qty_this_bill REAL NN, rate_paise INTEGER NN, amount_paise INTEGER NN
+### con_wo_items
+id INTEGER PK, wo_id INTEGER NN, description TEXT NN, qty REAL NN, unit TEXT, rate_paise INTEGER NN, amount_paise INTEGER NN
+### con_work_orders
+id INTEGER PK, project_id INTEGER NN, contractor_id INTEGER NN, wo_no TEXT NN, scope TEXT, basis TEXT NN, value_paise INTEGER NN, retention_bp INTEGER NN, advance_paise INTEGER NN, status TEXT NN, created_by INTEGER, approved_by INTEGER, approved_at TEXT, decision_note TEXT, created_at TEXT
 ### counters
 key TEXT PK, value INTEGER NN
 ### documents
@@ -134,6 +148,20 @@ id TEXT PK, source TEXT, seen_at TEXT
 - backup_log:idx_backup_started
 - brand_profiles:uq_brand_scope
 - brands:uq_brand_name
+- con_contractors:idx_con_active
+- con_ledger:idx_conledger_contractor
+- con_ledger:idx_conledger_wo
+- con_ledger:idx_conledger_ref
+- con_payments:idx_conpay_wo
+- con_payments:idx_conpay_ra
+- con_ra_bills:uq_ra_no
+- con_ra_bills:idx_ra_status_due
+- con_ra_lines:idx_ra_lines_ra
+- con_ra_lines:idx_ra_lines_item
+- con_wo_items:idx_wo_items
+- con_work_orders:uq_wo_no
+- con_work_orders:idx_wo_project
+- con_work_orders:idx_wo_contractor
 - documents:idx_documents_link
 - documents:idx_documents_project
 - documents:uq_doc_latest
@@ -209,3 +237,8 @@ id TEXT PK, source TEXT, seen_at TEXT
 ## 0014 additions (WP-4)
 - pro_indents, pro_indent_items (site material requests; status submitted/approved/rejected/converted; numbers from counters key `ind:<project_id>`), pro_rfq_items, pro_quote_items (per-line quote rates), pro_rfqs.indent_id.
 - pro_bills.status gains `part_paid`. Paid amounts come from pro_payments (reversed rows ignored); legacy bills marked paid before 0013 have no payment rows and count as fully paid.
+
+## 0015 additions (WP-5 Contractors)
+- con_contractors (PAN encrypted, optional vendor_id link), con_work_orders (basis lump_sum|item_rate|measured; retention_bp, advance_paise per work order; numbers `WO-<code>-0001` from counters `wo:<project>`), con_wo_items, con_ra_bills (numbers per work order from counters `ra:<wo_id>`; status draft/checked/approved/part_paid/paid/cancelled), con_ra_lines, con_payments (kind ra | advance | retention_release; reversed, never deleted; client_uuid for retries), con_ledger (append-only; reversals are negative rows).
+- Net payable on an RA bill = gross - retention - advance recovery - other deductions + GST - TDS. GST/TDS rates come from settings con.gst_bp / con.tds_bp (confirm with CA), editable per bill.
+- Settings: con.enabled (off by default), con.pm_approval_limit_paise (default Rs 5,00,000), con.gst_bp, con.tds_bp.

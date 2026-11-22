@@ -166,6 +166,7 @@ const ICONS = {
   home: 'M3 12l9-9 9 9M5 10v10h14V10', dashboard: 'M3 3h7v9H3zM14 3h7v5h-7zM14 12h7v9h-7zM3 16h7v5H3z',
   projects: 'M3 21h18M5 21V7l7-4 7 4v14M9 9h2M9 13h2M13 9h2M13 13h2M10 21v-4h4v4',
   approvals: 'M9 12l2 2 4-4M12 21a9 9 0 100-18 9 9 0 000 18z', drawings: 'M12 20h9M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z',
+  contractors: 'M17 21v-2a4 4 0 00-4-4H7a4 4 0 00-4 4v2M10 11a4 4 0 100-8 4 4 0 000 8zM20 8v6M23 11h-6',
   site: 'M2 18h20M4 18a8 8 0 0116 0M12 6V3', procurement: 'M6 6h15l-1.5 9h-12zM6 6L5 3H2M9 20.5a.5.5 0 100-1 .5.5 0 000 1zM18 20.5a.5.5 0 100-1 .5.5 0 000 1z',
   sales: 'M3 17l6-6 4 4 8-8M15 7h6v6', documents: 'M14 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V8zM14 3v5h5M9 13h6M9 17h6',
   users: 'M17 21v-2a4 4 0 00-4-4H7a4 4 0 00-4 4v2M10 11a4 4 0 100-8 4 4 0 000 8zM21 21v-2a4 4 0 00-3-3.9M16 3.1a4 4 0 010 7.8',
@@ -190,13 +191,13 @@ function sidebarItems(role) {
   const H = { label: 'Home', route: role === 'owner' ? 'dashboard' : 'home', icon: role === 'owner' ? 'dashboard' : 'home' };
   const I = (label, route) => ({ label, route, icon: route });
   const by = {
-    owner: [[null, [H]], ['Work', [I('Projects', 'projects'), I('Approvals', 'approvals'), I('Drawings', 'drawings'), I('Site', 'site')]], ['Money', [I('Procurement', 'procurement'), I('Sales', 'sales')]],
+    owner: [[null, [H]], ['Work', [I('Projects', 'projects'), I('Approvals', 'approvals'), I('Drawings', 'drawings'), I('Site', 'site')]], ['Money', [I('Procurement', 'procurement'), I('Contractors', 'contractors'), I('Sales', 'sales')]],
       ['Admin', [I('Documents', 'documents'), I('Brochures', 'brochures'), I('People', 'people'), I('Users & access', 'users'), I('Branding', 'branding'), I('Shared links', 'sharelinks'), I('Audit log', 'audit')]], ['Setup', [I('Storage', 'storage'), I('Email', 'email'), I('Settings', 'settings')]]],
-    pm: [[null, [H]], ['Work', [I('Projects', 'projects'), I('Approvals', 'approvals'), I('Drawings', 'drawings'), I('Site', 'site')]], ['Money', [I('Procurement', 'procurement'), I('Sales', 'sales')]], ['Admin', [I('Documents', 'documents'), I('Brochures', 'brochures'), I('People', 'people'), I('Branding', 'branding'), I('Shared links', 'sharelinks'), I('Audit log', 'audit')]]],
-    site: [[null, [H]], ['Work', [I('Drawings', 'drawings'), I('Site', 'site'), I('Procurement', 'procurement')]], ['Admin', [I('Documents', 'documents')]]],
+    pm: [[null, [H]], ['Work', [I('Projects', 'projects'), I('Approvals', 'approvals'), I('Drawings', 'drawings'), I('Site', 'site')]], ['Money', [I('Procurement', 'procurement'), I('Contractors', 'contractors'), I('Sales', 'sales')]], ['Admin', [I('Documents', 'documents'), I('Brochures', 'brochures'), I('People', 'people'), I('Branding', 'branding'), I('Shared links', 'sharelinks'), I('Audit log', 'audit')]]],
+    site: [[null, [H]], ['Work', [I('Drawings', 'drawings'), I('Site', 'site'), I('Procurement', 'procurement'), I('Contractors', 'contractors')]], ['Admin', [I('Documents', 'documents')]]],
     sales: [[null, [H]], ['Work', [I('Sales', 'sales'), I('Brochures', 'brochures')]], ['Admin', [I('Documents', 'documents')]]],
-    accounts: [[null, [H]], ['Money', [I('Sales', 'sales'), I('Procurement', 'procurement')]], ['Admin', [I('Documents', 'documents'), I('Brochures', 'brochures'), I('Branding', 'branding')]]],
-    purchase: [[null, [H]], ['Work', [I('Procurement', 'procurement'), I('Drawings', 'drawings')]], ['Admin', [I('Documents', 'documents')]]],
+    accounts: [[null, [H]], ['Money', [I('Sales', 'sales'), I('Procurement', 'procurement'), I('Contractors', 'contractors')]], ['Admin', [I('Documents', 'documents'), I('Brochures', 'brochures'), I('Branding', 'branding')]]],
+    purchase: [[null, [H]], ['Work', [I('Procurement', 'procurement'), I('Contractors', 'contractors'), I('Drawings', 'drawings')]], ['Admin', [I('Documents', 'documents')]]],
     hr: [[null, [H]], ['Work', [I('People', 'people')]]],
     viewer: [[null, [H]], ['Work', [I('Projects', 'projects'), I('Approvals', 'approvals'), I('Drawings', 'drawings'), I('Site', 'site')]], ['Admin', [I('Documents', 'documents')]]],
   };
@@ -224,7 +225,7 @@ function getBottomNavItems(role) {
 
 const PAGES = {
   home: renderHome, dashboard: renderDashboard, projects: renderProjects, users: renderUsers, documents: renderDocuments,
-  settings: renderSettings, approvals: renderApprovals, drawings: renderDrawings, site: renderSite, procurement: renderProcurement,
+  settings: renderSettings, approvals: renderApprovals, drawings: renderDrawings, site: renderSite, procurement: renderProcurement, contractors: renderContractors,
   sales: renderSales, storage: renderStorage, branding: (m) => renderBranding(m), sharelinks: renderShareLinks, more: renderMore,
   audit: renderAudit, notifications: renderNotifications, help: renderHelp, password: renderChangePassword, email: renderEmailSettings,
 };
@@ -403,7 +404,7 @@ function renderMore(main) {
     { label: 'Notifications', route: 'notifications', icon: 'bell' }, { label: 'Help', route: 'help', icon: 'help' }, { label: 'Change password', route: 'password', icon: 'password' }];
   const canCsv = ['owner', 'pm', 'accounts', 'viewer'].includes(currentUser.role);
   main.innerHTML = `<h1>${esc(t('More'))}</h1><div class="grid">${items.map((i) => `<button class="btn btn-full" style="justify-content:flex-start;gap:12px" data-go="${i.route}">${icon(i.icon, 20)}${esc(t(i.label))}</button>`).join('')}</div>
-    ${canCsv ? `<div class="card"><b>Download for Excel</b><div class="row-btns"><a class="btn small" href="/api/export/receipts">Receipts</a><a class="btn small" href="/api/export/receivables">Receivables</a><a class="btn small" href="/api/export/purchases">Purchases</a><a class="btn small" href="/api/export/leads">Leads</a>${o ? '<a class="btn small" href="/api/export-all">Everything (backup)</a>' : ''}</div></div>` : ''}
+    ${canCsv ? `<div class="card"><b>Download for Excel</b><div class="row-btns"><a class="btn small" href="/api/export/receipts">Receipts</a><a class="btn small" href="/api/export/receivables">Receivables</a><a class="btn small" href="/api/export/purchases">Purchases</a><a class="btn small" href="/api/export/leads">Leads</a>${o ? '<a class="btn small" href="/api/export-all?part=1">Backup 1 of 3</a><a class="btn small" href="/api/export-all?part=2">Backup 2 of 3</a><a class="btn small" href="/api/export-all?part=3">Backup 3 of 3</a>' : ''}</div></div>` : ''}
     <div class="field"><label>${esc(t('Language'))}</label><select id="more-lang"><option value="en">English</option><option value="hi">हिन्दी</option><option value="mr">मराठी</option></select></div>
     <button class="btn btn-full" style="margin-top:12px;color:#dc2626" id="more-logout">${esc(t('Log out'))}</button>`;
   $('more-lang').value = currentUser.lang || 'en';
@@ -627,6 +628,10 @@ function renderShareLinks(main) {
 
 const SETTING_LABELS = {
   'po.pm_approval_limit_paise': ['PM approval limit for purchase orders (₹)', 'money'],
+  'con.enabled': ['Contractors module (work orders, RA bills)', 'onoff'],
+  'con.pm_approval_limit_paise': ['PM approval limit for work orders and RA bills (₹)', 'money'],
+  'con.gst_bp': ['GST on contractor bills, in basis points (1800 = 18%). Confirm with your CA', 'number'],
+  'con.tds_bp': ['TDS on contractor bills, in basis points (100 = 1%). Confirm with your CA', 'number'],
   'access.allow_second_owner': ['Allow a second Owner', 'onoff'],
   'sales.share_all_leads': ['Sales team can see everyone’s leads', 'onoff'],
   'demand.due_days_after_milestone': ['Days to pay after a milestone is done', 'number'],

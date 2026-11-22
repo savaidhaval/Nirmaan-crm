@@ -101,6 +101,26 @@ async function render(d) {
       ${r.tds_paise ? `<tr><td colspan="2">TDS deducted by customer</td><td class="r">${inr(r.tds_paise)}</td></tr>` : ''}</table>
       <div class="words">${rupeeWords(r.amount_paise)}</div>
       <p style="font-size:10pt;color:#555">Subject to realisation of cheque, if paid by cheque.</p>`;
+  } else if (d.kind === 'wo') {
+    const w = d.wo;
+    body = `<div class="doc-title">Work Order</div>
+      <div class="two"><div><b>To:</b><br>${e(w.contractor)}<br>${w.contractor_gstin ? 'GSTIN ' + e(w.contractor_gstin) : ''}</div>
+      <div style="text-align:right"><b>WO No:</b> ${e(w.wo_no)}<br><b>Date:</b> ${e(String(w.created_at).substring(0, 10))}<br><b>Project:</b> ${e(w.project_name)}<br>${e(w.project_address || '')}</div></div>
+      <p><b>Scope:</b> ${e(w.scope || '')}</p>
+      ${d.items.length ? `<table><tr><th>#</th><th>Description</th><th class="r">Qty</th><th>Unit</th><th class="r">Rate</th><th class="r">Amount</th></tr>${d.items.map((i, n) => `<tr><td>${n + 1}</td><td>${e(i.description)}</td><td class="r">${e(i.qty)}</td><td>${e(i.unit)}</td><td class="r">${inr(i.rate_paise)}</td><td class="r">${inr(i.amount_paise)}</td></tr>`).join('')}<tr><th colspan="5" class="r">Total</th><th class="r">${inr(w.value_paise)}</th></tr></table>`
+        : `<table><tr><th>Lump-sum value</th><th class="r">${inr(w.value_paise)}</th></tr></table>`}
+      <div class="words">${rupeeWords(w.value_paise)}</div>
+      <p><b>Retention:</b> ${(w.retention_bp / 100).toFixed(1)}% of each bill is held back until closure.${w.advance_paise ? ` <b>Advance:</b> ${inr(w.advance_paise)}, recovered from running bills.` : ''}</p>`;
+  } else if (d.kind === 'ra') {
+    const r = d.ra;
+    body = `<div class="doc-title">Running Account Bill No. ${e(r.ra_no)}</div>
+      <div class="two"><div><b>Contractor:</b> ${e(r.contractor)}<br><b>Work order:</b> ${e(r.wo_no)}</div><div style="text-align:right"><b>Project:</b> ${e(r.project_name)}<br><b>Period:</b> ${e(r.period_from || '')} to ${e(r.period_to || '')}</div></div>
+      ${d.lines.length ? `<table><tr><th>Item</th><th class="r">Qty</th><th>Unit</th><th class="r">Rate</th><th class="r">Amount</th></tr>${d.lines.map((l) => `<tr><td>${e(l.description)}</td><td class="r">${e(l.qty_this_bill)}</td><td>${e(l.unit)}</td><td class="r">${inr(l.rate_paise)}</td><td class="r">${inr(l.amount_paise)}</td></tr>`).join('')}</table>` : ''}
+      <table><tr><td>Gross value of work</td><td class="r">${inr(r.gross_paise)}</td></tr>
+      <tr><td>Less retention (${(r.retention_bp / 100).toFixed(1)}%)</td><td class="r">− ${inr(r.retention_paise)}</td></tr>
+      ${r.advance_recovery_paise ? `<tr><td>Less advance recovery</td><td class="r">− ${inr(r.advance_recovery_paise)}</td></tr>` : ''}${r.other_deductions_paise ? `<tr><td>Less other deductions</td><td class="r">− ${inr(r.other_deductions_paise)}</td></tr>` : ''}
+      ${r.gst_paise ? `<tr><td>Add GST (${(r.gst_bp / 100).toFixed(1)}%)</td><td class="r">${inr(r.gst_paise)}</td></tr>` : ''}${r.tds_paise ? `<tr><td>Less TDS (${(r.tds_bp / 100).toFixed(1)}%)</td><td class="r">− ${inr(r.tds_paise)}</td></tr>` : ''}
+      <tr><th>Net payable</th><th class="r">${inr(r.net_paise)}</th></tr></table><div class="words">${rupeeWords(r.net_paise)}</div>`;
   } else if (d.kind === 'statement') {
     const bk = d.booking; const it = d.interest || { accrued: 0, waived: 0, paid: 0, due: 0 };
     const totalDem = d.demands.reduce((t, x) => t + x.amount_paise + (x.gst_paise || 0), 0); const rec = d.receipts.filter((r) => r.kind !== 'interest').reduce((t, r) => t + r.amount_paise + (r.tds_paise || 0), 0);

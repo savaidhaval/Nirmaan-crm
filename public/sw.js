@@ -1,8 +1,8 @@
 // sw.js — PWA service worker. Caches the static shell only, never API or file responses.
 // Network-first so a new deploy is picked up immediately; cache is the offline fallback.
 
-const CACHE_NAME = 'nirmaan-shell-v7';
-const SHELL_URLS = ['/', '/login.html', '/app.css', '/ui.js', '/app.js', '/pages.js', '/pages2.js', '/pages3.js', '/pages4.js', '/pages5.js', '/pages6.js', '/manifest.json'];
+const CACHE_NAME = 'nirmaan-shell-v8';
+const SHELL_URLS = ['/', '/login.html', '/app.css', '/ui.js', '/app.js', '/pages.js', '/pages2.js', '/pages3.js', '/pages4.js', '/pages5.js', '/pages6.js', '/pages7.js', '/manifest.json'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
