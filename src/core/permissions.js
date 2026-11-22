@@ -20,6 +20,12 @@ const MATRIX = {
   procurement: {
     owner: 'VCEAX', pm: 'VCEA', site: 'C', sales: '–', accounts: 'VCE', purchase: 'VCE', hr: '–', viewer: 'V',
   },
+  redevelopment: {
+    owner: 'VCEAX', pm: 'VCE', site: '–', sales: '–', accounts: 'V', purchase: '–', hr: '–', viewer: 'V',
+  },
+  transit: {
+    owner: 'VCEAX', pm: 'V', site: '–', sales: '–', accounts: 'VCE', purchase: '–', hr: '–', viewer: 'V',
+  },
   feasibility: {
     owner: 'VCEAX', pm: 'VCE', site: '–', sales: '–', accounts: 'V', purchase: '–', hr: '–', viewer: 'V',
   },

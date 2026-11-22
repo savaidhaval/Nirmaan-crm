@@ -348,3 +348,9 @@ id TEXT PK, source TEXT, seen_at TEXT
 - sal_bulk_runs: one bulk send (who, when, how many). sal_bulk_items: one demand in a run; status queued | sent | failed | skipped, plain-words error, attempts (retry stops after 5). A demand can wait in only one unfinished run at a time.
 - sal_demand_links: expiring, revocable links (token stored only as a SHA-256 hash) to a read-only copy of one demand letter. Not exported (ephemeral); a revoked or expired link shows a plain message. Days valid: setting sales.demand_link_days.
 - Index idx_email_template_sent on email_log (template, sent_at) for the daily-limit count. Demand `sent_at` is the "sent" mark; the payment status (ready/partial/paid) is never changed by sending.
+
+## 0028 additions (WP-1 to WP-3 Redevelopment)
+- red_societies (project, name, registration, threshold in basis points default 5100, count_basis members|area, threshold_reached = last announced state). red_members (one row per member; consent_status pending|consented|declined; phone shown to Owner/PM only; soft delete; client_uuid for offline idempotency). red_consent_events (every status change: who, when, why; never edited). red_member_docs (checklist item per member; items come from setting red.member_doc_checklist, empty by default).
+- red_rehab_allotments (one per member; flat must be a sal_inventory row with category rehab; one active allotment per flat). red_transit_terms (rent, start/end, deposit, bank guarantee ref/amount/expiry), red_transit_schedule (one row per member per month, UNIQUE member+period), red_transit_payments (money in paise, reversed with a reason, never deleted), red_corpus_entries (charge, paid_on, reversal).
+- red_meetings (kind, date, agenda, attendees, resolution text and passed flag, minutes document, next action + due + done).
+- Society documents use documents.category 'society' and are visible only to Owner, PM, Accounts and the CA.

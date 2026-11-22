@@ -20,6 +20,7 @@ import { csvBom } from './core/util.js';
 import { registerPetty } from './routes/petty.js';
 import { registerProfile } from './routes/profile.js';
 import { registerFeasibility, feasibilitySweep } from './routes/feasibility.js';
+import { registerRedevelopment, redevSweep } from './routes/redevelopment.js';
 import { registerVisits, visitOptions, cleanFeedback } from './routes/visits.js';
 import { registerRera, reraSweep } from './routes/rera.js';
 import { registerAi } from './routes/ai.js';
@@ -461,7 +462,7 @@ router.get('/api/documents', async (req, env) => {
         params.push(...ids);
       }
       if (!canSeeRestricted(user)) sql += " AND COALESCE(category, '') NOT IN ('kyc', 'legal', 'agreement')";
-      if (!['owner', 'pm', 'accounts', 'viewer'].includes(user.role)) sql += " AND COALESCE(category, '') != 'feasibility'";
+      if (!['owner', 'pm', 'accounts', 'viewer'].includes(user.role)) sql += " AND COALESCE(category, '') NOT IN ('feasibility', 'society')";
       sql += ' ORDER BY created_at DESC';
       const rows = await query(env.DB, sql, params);
       return json({ ok: true, data: { documents: rows.results } });
@@ -544,7 +545,7 @@ const EDITABLE_SETTINGS = ['po.pm_approval_limit_paise', 'access.allow_second_ow
   'demand.due_days_after_milestone', 'share.default_expiry_days', 'share.default_max_views', 'files.brochure_max_mb', 'branding.apply_colours_to_app',
   'brochure.price_list_default_audience', 'storage.warn_percent', 'sales.max_holds_per_user', 'sales.max_discount_bp', 'sales.pm_max_discount_bp',
   'interest.rate_bp', 'interest.grace_days', 'interest.enabled', 'security.require_mfa_roles', 'tax.stamp_duty_bp', 'tax.metro_cess_bp', 'tax.women_concession_bp', 'tax.registration_bp', 'tax.registration_cap_paise', 'tax.gst_bp',
-  'con.enabled', 'con.pm_approval_limit_paise', 'con.gst_bp', 'con.tds_bp', 'budget.gst_basis', 'petty.low_balance_paise', 'ai.enabled', 'ai.daily_limit', 'ai.model', 'rera.designated_pct_bp', 'fea.review_days', 'sales.bulk_daily_limit', 'sales.bulk_chunk', 'sales.demand_link_days', 'sales.visit_objections', 'sales.visit_radius_m',
+  'con.enabled', 'con.pm_approval_limit_paise', 'con.gst_bp', 'con.tds_bp', 'budget.gst_basis', 'petty.low_balance_paise', 'ai.enabled', 'ai.daily_limit', 'ai.model', 'rera.designated_pct_bp', 'fea.review_days', 'red.member_doc_checklist', 'red.rent_due_day', 'sales.bulk_daily_limit', 'sales.bulk_chunk', 'sales.demand_link_days', 'sales.visit_objections', 'sales.visit_radius_m',
   'sales.receipt_approval_limit_paise', 'sales.discount_pm_limit_paise', 'sales.handover_template'];
 
 router.post('/api/settings/:key', async (req, env) => {
@@ -1494,7 +1495,7 @@ const EXPORT_TABLES = ['projects', 'apr_items', 'apr_events', 'drw_drawings', 'd
     'sal_leads', 'sal_activities', 'sal_visits', 'sal_inventory', 'sal_partners', 'sal_bookings', 'sal_plan_stages', 'sal_demands', 'sal_receipts', 'documents', 'audit_log',
     'pro_grn_items', 'pro_payments', 'ppl_staff', 'ppl_hiring', 'ppl_candidates', 'sal_brokerage_payments', 'sal_refunds', 'sal_interest_waivers', 'mkt_spend', 'brands', 'counters',
     'pro_indents', 'pro_indent_items', 'pro_rfq_items', 'pro_quote_items',
-    'site_dpr_labour', 'bud_heads', 'stk_items', 'stk_balance', 'stk_moves', 'pro_party_docs', 'pro_professionals', 'ai_log', 'sal_receipt_requests', 'sal_adjustments', 'sal_booking_parties', 'sal_cost_sheets', 'sal_cost_sheet_lines', 'sal_handover', 'sal_handover_items', 'sal_booking_loans', 'rera_account_entries', 'eng_kudos', 'fea_versions', 'sal_bulk_runs', 'sal_bulk_items', 'pty_funds', 'pty_entries', 'con_contractors', 'con_work_orders', 'con_wo_items', 'con_ra_bills', 'con_ra_lines', 'con_payments', 'con_ledger'];
+    'site_dpr_labour', 'bud_heads', 'stk_items', 'stk_balance', 'stk_moves', 'pro_party_docs', 'pro_professionals', 'ai_log', 'sal_receipt_requests', 'sal_adjustments', 'sal_booking_parties', 'sal_cost_sheets', 'sal_cost_sheet_lines', 'sal_handover', 'sal_handover_items', 'sal_booking_loans', 'rera_account_entries', 'eng_kudos', 'fea_versions', 'sal_bulk_runs', 'sal_bulk_items', 'red_societies', 'red_members', 'red_consent_events', 'red_member_docs', 'red_rehab_allotments', 'red_transit_terms', 'red_transit_schedule', 'red_transit_payments', 'red_corpus_entries', 'red_meetings', 'pty_funds', 'pty_entries', 'con_contractors', 'con_work_orders', 'con_wo_items', 'con_ra_bills', 'con_ra_lines', 'con_payments', 'con_ledger'];
 const EXPORT_PARTS = 3;
 
 async function buildExport(env, part = 1) {
@@ -2089,6 +2090,10 @@ registerContractors(router, { withAuth, json, serverError, visibleProjectIds, no
   onWoApproved: (env, wo) => checkHeadOver(env, getSetting, nowStr, wo.project_id, [wo.budget_head_id]) });
 registerBudget(router, { withAuth, json, serverError, visibleProjectIds, nowStr, getSetting, csvBom });
 registerSalesOps(router, { withAuth, json, serverError, visibleProjectIds, userCan, getSetting, nowStr, encryptSetting, clientIp, checkRateLimit });
+registerRedevelopment(router, { withAuth, json, serverError, visibleProjectIds, nowStr, getSetting, csvBom,
+  // when the consent threshold is crossed, leave a note on the project's "Society consent" approval row (approvals stays in this file, not in the module)
+  onConsent: (env, p) => env.DB.prepare("UPDATE apr_items SET notes = ?1 WHERE project_id = ?2 AND deleted_at IS NULL AND name LIKE 'Society consent%'")
+    .bind(`${p.reached ? 'Threshold reached' : 'Dropped below the threshold'} (${p.text}) on ${new Date(Date.now() + 19800000).toISOString().substring(0, 10)}. Confirm the required majority with your advocate.`, p.society.project_id).run() });
 registerBulkDemands(router, { withAuth, json, serverError, visibleProjectIds, getSetting, nowStr, printBrand, csvBom });
 registerSales3(router, { withAuth, json, serverError, visibleProjectIds, getSetting, nowStr, encryptSetting, decryptSetting, csvBom, printBrand, shared: salesShared });
 
@@ -2971,7 +2976,7 @@ function sniffOk(type, h, body) {
 const RESTRICTED_DOC_CATS = ['kyc', 'legal', 'agreement'];
 const canSeeRestricted = (user) => ['owner', 'pm', 'sales', 'accounts'].includes(user.role);
 // Feasibility studies carry cost and revenue forecasts: Owner, PM, Accounts and the CA (viewer) only.
-const docVisible = (user, doc) => (doc.category === 'feasibility' ? ['owner', 'pm', 'accounts', 'viewer'].includes(user.role) : (!RESTRICTED_DOC_CATS.includes(doc.category) || canSeeRestricted(user)));
+const docVisible = (user, doc) => (['feasibility', 'society'].includes(doc.category) ? ['owner', 'pm', 'accounts', 'viewer'].includes(user.role) : (!RESTRICTED_DOC_CATS.includes(doc.category) || canSeeRestricted(user)));
 
 // D1 returns BLOB columns as plain number arrays; turn them back into bytes before responding.
 function blobBytes(d) {
@@ -3153,6 +3158,7 @@ async function runCron(cron, env) {
     await handoverDueSweep(env);
     await reraSweep(env, getSetting);
     await feasibilitySweep(env, getSetting);
+    await redevSweep(env, getSetting);
   } else if (cron === '30 2 * * *') {
     // 08:00 IST digest to every active Owner
     const owners = await env.DB.prepare("SELECT email FROM users WHERE role = 'owner' AND active = 1 AND deleted_at IS NULL").all();

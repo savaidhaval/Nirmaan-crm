@@ -640,6 +640,8 @@ const SETTING_LABELS = {
   'sales.bulk_daily_limit': ['Most demand-letter emails to send in one day (check your email provider\'s daily limit)', 'number'],
   'sales.bulk_chunk': ['Demand letters sent per step in a bulk send (1 to 4; keep at 3 on the free plan)', 'number'],
   'sales.demand_link_days': ['Days a demand-letter link in an email keeps working (default 30)', 'number'],
+  'red.member_doc_checklist': ['Redevelopment: documents to collect from each society member (type the items separated by ; , for example: Share certificate; Photo ID). Leave empty until you decide', 'text'],
+  'red.rent_due_day': ['Redevelopment: day of the month transit rent is due (1 to 28)', 'number'],
   'fea.review_days': ['Remind the Owner and PM to refresh a project\'s feasibility study after this many days (default 90)', 'number'],
   'rera.designated_pct_bp': ['RERA: share of buyers\' money to deposit in the designated account, in basis points (7000 = 70%). Confirm with your CA', 'number'],
   'sales.visit_objections': ['Site-visit objection choices, separated by ; (blank = starter list)', 'text'],

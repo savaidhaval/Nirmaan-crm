@@ -1,0 +1,84 @@
+import { createRequire } from 'node:module';
+const { chromium } = createRequire(import.meta.url)('/opt/node-tools/node_modules/playwright');
+const BASE = process.env.BASE || 'http://localhost:8787', SHOTS = '/tmp/claude-0/scratch/shots';
+const run = Date.now().toString(36);
+let pass = 0, fail = 0; const ok = (n, c, x = '') => { c ? pass++ : fail++; console.log(`${c ? 'PASS' : 'FAIL'}  ${n}${c ? '' : '  ' + x}`); };
+class C { constructor() { this.cookie = ''; } async call(m, p, b) { const h = { 'X-NirmaanCRM': '1' }; if (this.cookie) h.cookie = this.cookie; let body; if (b) { h['Content-Type'] = 'application/json'; body = JSON.stringify(b); }
+  const r = await fetch(BASE + p, { method: m, headers: h, body }); const sc = r.headers.get('set-cookie'); if (sc) this.cookie = sc.split(';')[0]; let d = null; try { d = await r.json(); } catch (e) {} return { status: r.status, data: d && d.data, err: d && d.error }; } }
+const o = new C(); await o.call('POST', '/api/auth/login', { email: 'owner@test.local', password: 'CiStrongPass-12345' });
+const pid = (await o.call('POST', '/api/projects', { name: 'UI Tower ' + run, code: 'UI' + run.toUpperCase().slice(-5), budget_paise: 5e9 })).data.id;
+await o.call('POST', '/api/settings/con.enabled', { value: 'on' });
+await o.call('POST', '/api/settings/con.pm_approval_limit_paise', { value: 50000000 });
+const users = {};
+for (const role of ['site', 'pm', 'purchase', 'accounts', 'sales', 'viewer']) {
+  const email = `ui-${role}-${run}@test.local`; const r = await o.call('POST', '/api/users', { name: 'UI ' + role + ' ' + run, email, role, projects: role === 'site' ? [pid] : [] });
+  const c = new C(); await c.call('POST', '/api/auth/login', { email, password: r.data.temporaryPassword }); const pw = 'UiStrongPass-' + run;
+  await c.call('POST', '/api/auth/change-password', { currentPassword: r.data.temporaryPassword, newPassword: pw }); users[role] = { email, pw };
+}
+const browser = await chromium.launch();
+const ctxs = {};
+async function page(role) {
+  if (!ctxs[role]) {
+    const ctx = await browser.newContext({ viewport: { width: 390, height: 800 } });
+    const email = role === 'owner' ? 'owner@test.local' : users[role].email, password = role === 'owner' ? 'CiStrongPass-12345' : users[role].pw;
+    const r = await ctx.request.post(BASE + '/api/auth/login', { headers: { 'X-NirmaanCRM': '1', 'Content-Type': 'application/json' }, data: { email, password } });
+    if (!r.ok()) throw new Error('login ' + role + ' ' + r.status());
+    ctxs[role] = ctx;
+  }
+  const p = await ctxs[role].newPage(); p.on('dialog', (d) => d.accept()); p.on('pageerror', (e) => console.log('PAGEERROR', role, e.message));
+  await p.goto(BASE + '/'); await p.waitForFunction(() => typeof navigate === 'function' && typeof currentUser !== 'undefined' && currentUser, null, { timeout: 15000 }); return p;
+}
+const go = async (p, route) => { await p.evaluate((r) => navigate(r), route); await p.waitForTimeout(800); };
+const toastText = async (p) => { await p.waitForTimeout(500); return p.evaluate(() => (document.getElementById('toast') || {}).textContent || ''); };
+const submit = (p) => p.click('#modal-form button[type=submit]');
+const pick = (p, sel, label) => p.selectOption(sel, { label });
+const shot = (p, n) => p.screenshot({ path: `${SHOTS}/${n}.png` });
+const proj = 'UI Tower ' + run;
+const iso = (d) => new Date(Date.now() + 19800000 + d * 86400000).toISOString().slice(0, 10);
+await o.call('PUT', `/api/projects/${pid}`, { type: 'redevelopment' });
+await o.call('POST', '/api/approvals/load-template', { project_id: pid, redevelopment: true });
+await o.call('POST', '/api/settings/red.member_doc_checklist', { value: 'Share certificate; Photo ID' });
+const pm = await page('pm');
+await go(pm, 'redevelopment'); await pm.waitForSelector('#rd-new');
+await pm.click('#rd-new'); await pm.waitForSelector('#f_name'); await pm.fill('#f_name', 'Sai Krupa CHS ' + run); await pm.fill('#f_registration_no', 'MUM/77'); await pick(pm, '#f_project_id', proj); await submit(pm);
+ok('PM creates a society', /Society added/.test(await toastText(pm))); await pm.waitForSelector('[data-soc]'); await pm.locator('[data-soc]', { hasText: 'Sai Krupa CHS ' + run }).click();
+await pm.waitForSelector('#rd-paste');
+await pm.click('#rd-paste'); await pm.waitForSelector('#f_csv');
+await pm.fill('#f_csv', Array.from({ length: 10 }, (_, i) => `A, ${101 + i}, Member ${i + 1}, 98200000${10 + i}, owner, ${400 + i * 10}`).join('\n')); await submit(pm);
+{ const tt = await toastText(pm); ok('10 members pasted in one go', /10 added/.test(tt), tt); } await pm.waitForTimeout(900);
+ok('the meter shows 0 of 10 and the legal note', (await pm.textContent('#rd-meter')).includes('0 of 10 members = 0%') && (await pm.textContent('#rd-body')).includes('advocate'), (await pm.textContent('#rd-meter')).replace(/\s+/g,' '));
+await shot(pm, '110-society-empty');
+const tap = async (n) => { await pm.locator('.card', { hasText: 'Member ' + n + ' ' }).locator('[data-cs$=":consented"]').first().click(); await pm.waitForTimeout(700); };
+const cardOf = (n) => pm.locator('#rd-pane .card').filter({ has: pm.locator(`b:text-is("Member ${n}")`) });
+for (let n = 1; n <= 5; n++) { await cardOf(n).locator('[data-cs$=":consented"]').click(); await pm.waitForTimeout(700); }
+ok('5 consented = 50%: not reached', (await pm.textContent('#rd-meter')).includes('= 50%') && (await pm.textContent('#rd-meter')).includes('not reached'), (await pm.textContent('#rd-meter')).replace(/\s+/g,' '));
+await cardOf(6).locator('[data-cs$=":consented"]').click(); await pm.waitForTimeout(900);
+ok('the 6th takes it to 60%: threshold reached', (await pm.textContent('#rd-meter')).includes('= 60%') && (await pm.textContent('#rd-meter')).includes('reached'));
+await shot(pm, '111-threshold-reached');
+const ow = await page('owner'); await ow.evaluate(() => navigate('notifications')); await ow.waitForTimeout(1200);
+ok('the Owner has the notification', (await ow.textContent('main')).includes('Consent threshold reached'));
+const apr = JSON.stringify((await o.call('GET', `/api/approvals?project_id=${pid}`)).data); ok('the Society consent approval row carries a note', apr.includes('Threshold reached'), apr.slice(0, 300));
+await pm.click('[data-tab="followup"]'); await pm.waitForSelector('text=Consent log'); await pm.waitForTimeout(500);
+ok('the log lists the six changes', ((await pm.textContent('#rd-pane')).match(/pending → consented/g) || []).length === 6);
+await pm.click('[data-tab="rent"]'); await pm.waitForTimeout(900);
+ok('the PM sees transit rent but cannot record payments', (await pm.$('#rn-pick')) === null);
+// Accounts sets a rent term and pays
+const ac = await page('accounts'); await go(ac, 'redevelopment'); await ac.waitForSelector('[data-soc]'); await ac.locator('[data-soc]', { hasText: 'Sai Krupa CHS ' + run }).click(); await ac.waitForSelector('[data-tab="rent"]'); await ac.click('[data-tab="rent"]'); await ac.waitForSelector('#rn-pick'); await ac.waitForTimeout(500);
+await ac.selectOption('#rn-pick', { index: 1 }); await ac.waitForSelector('#f_monthly_rent_paise'); await ac.fill('#f_monthly_rent_paise', '25000'); await submit(ac);
+ok('Accounts sets rent; 12+ months are scheduled', /months scheduled/.test(await toastText(ac))); await ac.waitForTimeout(900);
+await shot(ac, '112-transit-grid');
+await ac.click('[data-pay]'); await ac.waitForSelector('#f_amount_paise'); await ac.fill('#f_ref_no', 'CHQ 4455'); await submit(ac);
+ok('Accounts records month 1 paid', /Recorded/.test(await toastText(ac))); await ac.waitForTimeout(900);
+ok('the grid shows it paid', (await ac.textContent('#rd-pane')).includes('paid'));
+await ac.click('[data-hist]'); await ac.waitForSelector('[data-rev]'); await ac.click('[data-rev]'); await ac.waitForSelector('#f_reason'); await ac.fill('#f_reason', 'Cheque bounced'); await submit(ac);
+ok('Accounts reverses it with a reason', /Reversed/.test(await toastText(ac)));
+// meetings
+await pm.click('[data-tab="meetings"]'); await pm.waitForSelector('#mt-new'); await pm.click('#mt-new'); await pm.waitForSelector('#f_held_on');
+await pm.fill('#f_agenda', 'Appoint architect'); await pm.fill('#f_next_action', 'Collect signatures'); await pm.fill('#f_next_action_due', iso(2));
+await pm.setInputFiles('#f_file', { name: 'minutes.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4 minutes') }); await submit(pm);
+ok('PM logs a meeting with minutes and a next action', /Meeting saved/.test(await toastText(pm))); await pm.waitForTimeout(900);
+ok('it is listed with the minutes and the open action', (await pm.textContent('#rd-pane')).includes('Collect signatures') && (await pm.textContent('#rd-pane')).includes('Minutes:'));
+await shot(pm, '113-meetings');
+// Sales cannot open it
+const sl = await page('sales'); ok('Sales has no Redevelopment menu', !(await sl.evaluate(() => sidebarItems(currentUser.role).flatMap((g) => g[1]).some((i) => i.route === 'redevelopment'))));
+await browser.close(); console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);
