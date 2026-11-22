@@ -42,3 +42,5 @@
 - Report saved in one batch (report + labour lines + audit). Contractors are checked server-side; unknown, duplicate or absurd lines are refused and nothing is half-saved.
 - New: monthly man-days by contractor and trade (`/api/site/reports/labour`, CSV link on the Site screen for Owner/PM).
 - Backup/restore include `site_dpr_labour`. Migration 0016; test `tests/dprlabour.mjs` (20 checks, in CI); browser walkthrough with airplane mode (11 checks).
+
+- WP-6 merged and deployed after GitHub checks passed.
