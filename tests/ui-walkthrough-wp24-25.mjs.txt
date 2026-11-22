@@ -65,6 +65,6 @@ await ep.check('#enq-consent'); await ep.click('#enq-send'); await ep.waitForSel
 const leads = (await o.call('GET', '/api/sales/leads')).data.leads; const lead = leads.find((l) => l.name === 'Walk In Buyer ' + run);
 ok('a lead appears for the sales team with source website and consent recorded', lead && lead.source === 'website' && lead.consent === 1 && lead.project_id === pid);
 const og = await page('owner'); await go(og, 'enquiryform'); await og.waitForSelector('#eq-embed'); await og.selectOption('#eq-proj', { label: proj });
-ok('the Owner can copy the link and the embed code for the project', (await og.inputValue('#eq-link')).includes('enquiry.html?project=' + code) && (await og.inputValue('#eq-embed')).includes('<iframe'));
+ok('the Owner can copy the link and the embed code for the project', (await og.inputValue('#eq-link')).includes('enquiry?project=' + code) && (await og.inputValue('#eq-embed')).includes('<iframe'));
 await shot(og, '164-form-page');
 await browser.close(); console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);
