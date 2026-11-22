@@ -363,3 +363,6 @@ id TEXT PK, source TEXT, seen_at TEXT
 
 ## 0031 additions (WP-17 Tally export)
 - tally_export_log (what was exported, dates, voucher count, held-back count, total in paise, who, when). Ledger names are in the setting tally.ledger_map (JSON: one name per ledger role, an optional ledger per party, auto_party flag, optional Tally company name). The CRM does no accounting: vouchers are built from existing records (receipts, adjustments, bills, payments, RA bills, petty expenses); reversed or cancelled money records are not exported.
+
+## 0032 additions (WP-20 dashboard)
+- dash_snapshot (key, value_json, updated_at): a derived cache of each project's budget status (how many heads are over or close to their budget), refreshed one project per hour by the sweep. It holds nothing that is not in the budget screens, so it is NOT in the backup list: it rebuilds itself within a few hours of a restore.

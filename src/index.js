@@ -25,6 +25,7 @@ import { registerBank, bankSweep } from './routes/bank.js';
 import { registerTally } from './routes/tally.js';
 import { registerEnquiry } from './routes/enquiry.js';
 import { registerStatements } from './routes/statements.js';
+import { registerDashExtras, dashSnapshotSweep } from './routes/dash_extras.js';
 import { registerDrawingAcks, drawingAckSweep } from './routes/drw_acks.js';
 import { registerVisits, visitOptions, cleanFeedback } from './routes/visits.js';
 import { registerRera, reraSweep } from './routes/rera.js';
@@ -2101,6 +2102,7 @@ registerRedevelopment(router, { withAuth, json, serverError, visibleProjectIds, 
   // when the consent threshold is crossed, leave a note on the project's "Society consent" approval row (approvals stays in this file, not in the module)
   onConsent: (env, p) => env.DB.prepare("UPDATE apr_items SET notes = ?1 WHERE project_id = ?2 AND deleted_at IS NULL AND name LIKE 'Society consent%'")
     .bind(`${p.reached ? 'Threshold reached' : 'Dropped below the threshold'} (${p.text}) on ${new Date(Date.now() + 19800000).toISOString().substring(0, 10)}. Confirm the required majority with your advocate.`, p.society.project_id).run() });
+registerDashExtras(router, { withAuth, json, serverError, visibleProjectIds, getSetting, csvBom });
 registerStatements(router, { withAuth, json, serverError, visibleProjectIds, nowStr, getSetting });
 registerEnquiry(router, { json, serverError, nowStr, getSetting, clientIp, checkRateLimit, printBrand });
 registerTally(router, { withAuth, json, serverError, visibleProjectIds, nowStr, getSetting, setSetting });
@@ -3172,6 +3174,7 @@ async function runCron(cron, env) {
     await redevSweep(env, getSetting);
     await bankSweep(env, getSetting);
     await drawingAckSweep(env, getSetting);
+    await dashSnapshotSweep(env, getSetting);
   } else if (cron === '30 2 * * *') {
     // 08:00 IST digest to every active Owner
     const owners = await env.DB.prepare("SELECT email FROM users WHERE role = 'owner' AND active = 1 AND deleted_at IS NULL").all();
