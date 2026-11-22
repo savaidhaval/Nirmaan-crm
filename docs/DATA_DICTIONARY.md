@@ -343,3 +343,8 @@ id TEXT PK, source TEXT, seen_at TEXT
 - 0026 users: position, about (free text), avatar_blob_id (points to file_blobs; the picture is served only to signed-in users at /api/users/:id/avatar), avatar_updated_at (cache key).
 - eng_kudos: thank-you notes (from_user, to_user, message, created_at, deleted_at). Limit 5 per sender per day.
 - fea_versions: one row per feasibility study version per project (UNIQUE project_id + version; the number is MAX+1 inside the insert so two saves at once never collide). Money in paise; document_id points to a documents row of category feasibility, which only Owner, PM, Accounts and the CA can see or download. Rows are never edited or deleted: a new version is added instead.
+
+## 0027 additions (WP-16 bulk demand letters)
+- sal_bulk_runs: one bulk send (who, when, how many). sal_bulk_items: one demand in a run; status queued | sent | failed | skipped, plain-words error, attempts (retry stops after 5). A demand can wait in only one unfinished run at a time.
+- sal_demand_links: expiring, revocable links (token stored only as a SHA-256 hash) to a read-only copy of one demand letter. Not exported (ephemeral); a revoked or expired link shows a plain message. Days valid: setting sales.demand_link_days.
+- Index idx_email_template_sent on email_log (template, sent_at) for the daily-limit count. Demand `sent_at` is the "sent" mark; the payment status (ready/partial/paid) is never changed by sending.

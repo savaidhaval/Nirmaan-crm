@@ -181,7 +181,18 @@ async function render(d) {
 
 document.getElementById('btn-print').addEventListener('click', () => window.print());
 document.getElementById('btn-back').addEventListener('click', () => window.close());
+if (kind === 'demandbatch') {
+  // several demand letters, one per page: render each into the sheet, keep a copy, then show all copies
+  api('/api/print/demands?ids=' + encodeURIComponent(q.get('ids') || '')).then(async (r) => {
+    const pages = [];
+    for (const l of r.data.letters) { await render({ kind: 'demand', draft: l.draft, demand: l.demand, brand: l.brand }); const c = sheet.cloneNode(true); c.removeAttribute('id'); c.classList.add('pg-break'); pages.push(c); }
+    pages[pages.length - 1].classList.toggle('pg-break', false); // no blank page after the last letter
+    pages.forEach((p) => sheet.parentNode.insertBefore(p, sheet));
+    sheet.remove();
+  }).catch((err) => { sheet.textContent = err.message; });
+} else {
 const load = kind === 'sample'
   ? api('/api/branding?brand_id=' + (Number(q.get('brand')) || 0)).then((r) => ({ kind: 'sample', draft: true, brand: r.data.branding || {} }))
   : api(`/api/print/${kind}/${id}` + (kind === 'workreport' ? '?from=' + encodeURIComponent(q.get('from') || '') + '&to=' + encodeURIComponent(q.get('to') || '') : '')).then((r) => r.data);
 load.then(render).catch((err) => { sheet.textContent = err.message; });
+}

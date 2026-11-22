@@ -1,0 +1,68 @@
+import { createRequire } from 'node:module';
+const { chromium } = createRequire(import.meta.url)('/opt/node-tools/node_modules/playwright');
+const BASE = process.env.BASE || 'http://localhost:8787', SHOTS = '/tmp/claude-0/scratch/shots';
+const run = Date.now().toString(36);
+let pass = 0, fail = 0; const ok = (n, c, x = '') => { c ? pass++ : fail++; console.log(`${c ? 'PASS' : 'FAIL'}  ${n}${c ? '' : '  ' + x}`); };
+class C { constructor() { this.cookie = ''; } async call(m, p, b) { const h = { 'X-NirmaanCRM': '1' }; if (this.cookie) h.cookie = this.cookie; let body; if (b) { h['Content-Type'] = 'application/json'; body = JSON.stringify(b); }
+  const r = await fetch(BASE + p, { method: m, headers: h, body }); const sc = r.headers.get('set-cookie'); if (sc) this.cookie = sc.split(';')[0]; let d = null; try { d = await r.json(); } catch (e) {} return { status: r.status, data: d && d.data, err: d && d.error }; } }
+const o = new C(); await o.call('POST', '/api/auth/login', { email: 'owner@test.local', password: 'CiStrongPass-12345' });
+const pid = (await o.call('POST', '/api/projects', { name: 'UI Tower ' + run, code: 'UI' + run.toUpperCase().slice(-5), budget_paise: 5e9 })).data.id;
+await o.call('POST', '/api/settings/con.enabled', { value: 'on' });
+await o.call('POST', '/api/settings/con.pm_approval_limit_paise', { value: 50000000 });
+const users = {};
+for (const role of ['site', 'pm', 'purchase', 'accounts', 'sales', 'viewer']) {
+  const email = `ui-${role}-${run}@test.local`; const r = await o.call('POST', '/api/users', { name: 'UI ' + role + ' ' + run, email, role, projects: role === 'site' ? [pid] : [] });
+  const c = new C(); await c.call('POST', '/api/auth/login', { email, password: r.data.temporaryPassword }); const pw = 'UiStrongPass-' + run;
+  await c.call('POST', '/api/auth/change-password', { currentPassword: r.data.temporaryPassword, newPassword: pw }); users[role] = { email, pw };
+}
+const browser = await chromium.launch();
+const ctxs = {};
+async function page(role) {
+  if (!ctxs[role]) {
+    const ctx = await browser.newContext({ viewport: { width: 390, height: 800 } });
+    const email = role === 'owner' ? 'owner@test.local' : users[role].email, password = role === 'owner' ? 'CiStrongPass-12345' : users[role].pw;
+    const r = await ctx.request.post(BASE + '/api/auth/login', { headers: { 'X-NirmaanCRM': '1', 'Content-Type': 'application/json' }, data: { email, password } });
+    if (!r.ok()) throw new Error('login ' + role + ' ' + r.status());
+    ctxs[role] = ctx;
+  }
+  const p = await ctxs[role].newPage(); p.on('dialog', (d) => d.accept()); p.on('pageerror', (e) => console.log('PAGEERROR', role, e.message));
+  await p.goto(BASE + '/'); await p.waitForFunction(() => typeof navigate === 'function' && typeof currentUser !== 'undefined' && currentUser, null, { timeout: 15000 }); return p;
+}
+const go = async (p, route) => { await p.evaluate((r) => navigate(r), route); await p.waitForTimeout(800); };
+const toastText = async (p) => { await p.waitForTimeout(500); return p.evaluate(() => (document.getElementById('toast') || {}).textContent || ''); };
+const submit = (p) => p.click('#modal-form button[type=submit]');
+const pick = (p, sel, label) => p.selectOption(sel, { label });
+const shot = (p, n) => p.screenshot({ path: `${SHOTS}/${n}.png` });
+const proj = 'UI Tower ' + run;
+await o.call('POST', '/api/sales/plan-stages', { project_id: pid, stages: [{ stage_name: 'On booking', pct_bp: 10000 }] });
+await o.call('POST', '/api/settings/sales.bulk_daily_limit', { value: 1000 });
+for (let n = 1; n <= 7; n++) {
+  const u = (await o.call('POST', '/api/sales/inventory', { project_id: pid, wing: 'D', floor: n, unit_no: 'L' + n + run.slice(-3), type: '2BHK', carpet_sqft: 600, rera_carpet_sqft: 500, price_paise: 100000000 })).data.id;
+  const email = n === 3 ? '' : n === 5 ? 'fail-' + run + '@test.local' : `ui${n}-${run}@test.local`;
+  const b = await o.call('POST', '/api/sales/bookings', { unit_id: u, customer_name: 'Buyer ' + n + ' ' + run, phone: '97' + String(20000000 + n), email, agreed_price_paise: 100000000, token_paise: 1000000 });
+  if (b.status !== 200) throw new Error('booking ' + JSON.stringify(b));
+}
+const s = await page('sales'); await go(s, 'demandletters'); await s.waitForSelector('.dl-cb'); await pick(s, '#dl-project', proj); await s.waitForTimeout(1200);
+ok('Sales sees the ready demands with 6 ticked (the one with no email is not)', (await s.$$('.dl-cb')).length === 7 && (await s.$$('.dl-cb:checked')).length === 6, String((await s.$$('.dl-cb:checked')).length));
+ok('the count line is in plain words', (await s.textContent('#dl-count')).includes('6 ticked'));
+await shot(s, '100-demand-letters');
+// add the missing email from the card
+await s.locator('.card', { hasText: 'Buyer 3 ' + run }).locator('[data-em]').click(); await s.waitForSelector('#f_email'); await s.fill('#f_email', 'buyer3-' + run + '@test.local'); await submit(s);
+ok('Add email works from the card', /Email saved/.test(await toastText(s))); await s.waitForTimeout(1000);
+ok('the card no longer says "No email address"', !(await s.textContent('#dl-body')).includes('No email address'));
+await s.locator('.dl-cb').nth(2).check(); // tick the newly fixed one
+ok('print sheet link opens many letters, one per page', (await s.$$('a[href*="k=demandbatch"]')).length >= 1);
+const href = await s.getAttribute('a[href*="k=demandbatch"]', 'href');
+const pr = await page('sales'); await pr.goto(BASE + href); await pr.waitForSelector('.doc-title', { timeout: 15000 }); await pr.waitForTimeout(800);
+ok('the printed sheet has seven letters, each with a Demand No', (await pr.$$('.doc-title')).length === 7 && (await pr.textContent('body')).match(/Demand No:\s*DL-/g).length === 7, String((await pr.$$('.doc-title')).length));
+await shot(pr, '101-print-sheet');
+await s.click('#dl-send'); await s.waitForSelector('text=Result', { timeout: 60000 }); await s.waitForTimeout(1500);
+let rt = (await s.textContent('#dl-result')).replace(/\s+/g, ' ');
+ok('result shows 6 sent and 1 failed with the reason', rt.includes('6Sent') && rt.includes('1Failed') && rt.includes('refused'), rt.slice(0, 300));
+await shot(s, '102-bulk-result');
+ok('there is a retry button and an Excel download', (await s.$('#dl-retry')) !== null && (await s.$('a[href*="csv=1"]')) !== null);
+// fix the address and retry
+await s.reload(); await s.waitForFunction(() => typeof navigate === 'function' && currentUser, null, { timeout: 15000 }); await go(s, 'demandletters'); await s.waitForSelector('#dl-project'); await pick(s, '#dl-project', proj); await s.waitForTimeout(1200);
+const body2 = (await s.textContent('#dl-body')).split(/\s+/).join(' ');
+ok('six demands now carry a green Sent mark and only the failed one is ticked for another go', (body2.match(/Sent \d{2}/g) || []).length === 6 && (await s.$$('.dl-cb:checked')).length === 1, body2.slice(0, 200));
+await browser.close(); console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);
