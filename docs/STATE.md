@@ -5,7 +5,7 @@ Read-only inspection. No code, migration, secret or data changed.
 
 ## 1. Repo facts
 - Branch `claude/clever-franklin-rjqgdp` = `main` at `df5fbdb` (PR #4 merged). Latest feature commit `a6ab8cf` (late interest, CSV import, TOTP, project financials, vendor TDS/GST + Tally, statements, DPDP).
-- Config is `wrangler.toml` (not `wrangler.jsonc`). Prod: custom domain `crm.mysociety.tech`, workers_dev off, D1 `nirmaan-db`. Staging: `[env.staging]`, D1 `nirmaan-db-staging`, workers.dev on, `crons = []`, cron handler also guards `ENVIRONMENT === 'staging'`.
+- Config is `wrangler.toml` (not `wrangler.jsonc`). Prod: custom domain `crm.mysociety.tech`, workers_dev off, D1 `nirmaan-db`. Staging: `[env.staging]`, D1 `nirmaan-db-staging`, workers.dev OFF since 2026-11-22 (no URL; test locally with `wrangler dev` or add a custom staging domain), `crons = []`, cron handler also guards `ENVIRONMENT === 'staging'`.
 - Crons (4): `30 2 * * *` (08:00 IST digest + approval reminders), `30 13 * * *` (19:00 IST DPR nudge), `30 * * * *` (hourly: email retry, lead SLA nudges, hold expiry), `30 20 * * *` (02:00 IST housekeeping + nightly backup).
 - `package.json`: only devDependency `wrangler ^4`. No runtime deps. No build step.
 - CI (`.github/workflows`): syntax check of `public/*.js`, dry-run bundle prod+staging, local-Worker test suites (`tests/*.mjs`), auto-PR for `claude/*`, auto-deploy on main (applies migrations).
