@@ -23,3 +23,4 @@
 
 ## S0/S1 (2026-11-22)
 - Docs only: added `docs/STATE.md` (reconciliation, remote checks pending), `docs/DATA_DICTIONARY.md` (real schema), `docs/proposed/0010_reconcile.sql` (NOT applied), `CLAUDE.md` (standing rules).
+- S2: migration 0013 (ppl_staff trade/project_id, pro_grn_items, pro_payments); export now includes those plus 9 previously omitted tables. Option B adopted.

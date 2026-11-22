@@ -1,4 +1,4 @@
-# NirmaanCRM data dictionary (real schema from migrations 0001-0012, generated 2026-11-22)
+# NirmaanCRM data dictionary (real schema from migrations 0001-0013, updated 2026-11-22)
 
 Source: replaying migrations/*.sql into an empty SQLite DB. Live D1 not verified (see docs/STATE.md). Money = paise INTEGER, percentages = basis points (_bp). NN = NOT NULL, PK = primary key.
 
@@ -48,11 +48,15 @@ id INTEGER PK, hiring_id INTEGER NN, name TEXT NN, phone TEXT, status TEXT, inte
 ### ppl_hiring
 id INTEGER PK, position TEXT NN, project_id INTEGER, status TEXT, opened_on TEXT, notes TEXT, created_at TEXT, deleted_at TEXT
 ### ppl_staff
-id INTEGER PK, name TEXT NN, role_title TEXT, department TEXT, phone TEXT, email TEXT, joined_on TEXT, employment TEXT, active INTEGER, notes TEXT, created_at TEXT, deleted_at TEXT
+id INTEGER PK, name TEXT NN, role_title TEXT, department TEXT, phone TEXT, email TEXT, joined_on TEXT, employment TEXT, active INTEGER, notes TEXT, created_at TEXT, deleted_at TEXT, trade TEXT, project_id INTEGER
 ### pro_bills
 id INTEGER PK, po_id INTEGER, vendor_id INTEGER NN, bill_no TEXT, amount_paise INTEGER NN, due_date TEXT, status TEXT, paid_on TEXT, payment_ref TEXT, document_id INTEGER, created_at TEXT, project_id INTEGER, taxable_paise INTEGER, gst_paise INTEGER NN, tds_section TEXT, tds_bp INTEGER NN, tds_paise INTEGER NN, tds_deposited_on TEXT, tds_challan TEXT
+### pro_grn_items
+id INTEGER PK, grn_id INTEGER NN, po_item_id INTEGER NN, qty_received REAL NN, note TEXT, created_at TEXT
 ### pro_grns
 id INTEGER PK, po_id INTEGER NN, received_on TEXT NN, qty_note TEXT, challan_no TEXT, received_by INTEGER, document_id INTEGER, client_uuid TEXT, created_at TEXT, deleted_at TEXT
+### pro_payments
+id INTEGER PK, bill_id INTEGER NN, amount_paise INTEGER NN, tds_paise INTEGER NN, paid_on TEXT NN, mode TEXT, ref_no TEXT, note TEXT, reversed_at TEXT, reversal_note TEXT, created_by INTEGER, created_at TEXT
 ### pro_po_items
 id INTEGER PK, po_id INTEGER NN, description TEXT NN, qty REAL, unit TEXT, rate_paise INTEGER, amount_paise INTEGER
 ### pro_pos
@@ -142,11 +146,15 @@ id TEXT PK, source TEXT, seen_at TEXT
 - ppl_candidates:idx_cand_hiring
 - pro_bills:idx_bill_due
 - pro_bills:idx_bill_project
+- pro_grn_items:idx_grn_items_grn
+- pro_grn_items:idx_grn_items_poitem
 - pro_grns:idx_grn_po
+- pro_payments:idx_pay_bill
 - pro_po_items:idx_poitem_po
 - pro_pos:idx_po_project
 - pro_pos:uq_po_seq
 - pro_quotes:idx_quote_rfq
+- pro_rfqs:idx_rfq_project
 - project_members:uq_project_member
 - project_members:idx_project_member_user
 - projects:idx_projects_brand
@@ -181,3 +189,6 @@ id TEXT PK, source TEXT, seen_at TEXT
 - site_snags:idx_snag_project
 - user_recovery_codes:idx_recovery_user
 - users:uq_primary_owner
+
+## 0013 additions (v1.3.1 fixes)
+- ppl_staff.trade, ppl_staff.project_id; pro_grn_items (per-PO-line received qty); pro_payments (partial bill payments, reversed never deleted). Not yet used by any screen.

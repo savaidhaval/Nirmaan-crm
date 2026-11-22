@@ -12,7 +12,7 @@ Read-only inspection. No code, migration, secret or data changed.
 - Guide file `docs/THIS_GUIDE.md` (NirmaanCRM_Claude_Build_Guide_v1.3.md) is **not in the repo**. Plan references it everywhere. Needs you.
 
 ## 2. Migrations (files)
-0001_core, 0002_approvals, 0003_drawings, 0004_site, 0005_procurement, 0006_sales, 0007_people, 0008_email, 0009_branding, 0010_brands, 0011_audit_hardening, 0012_interest_mfa_finance.
+0001_core, 0002_approvals, 0003_drawings, 0004_site, 0005_procurement, 0006_sales, 0007_people, 0008_email, 0009_branding, 0010_brands, 0011_audit_hardening, 0012_interest_mfa_finance, **0013_guide_fixes (S2, written 2026-11-22, NOT yet applied anywhere)**.
 - HANDOVER says "all 9 applied (0001-0009)". 0010-0012 arrive via CI auto-deploy on merge to main; applied status unverified.
 - Edited-after-applied check: not possible without remote list. Git: 0010-0012 added in last 2 PRs only; 0001-0009 untouched since first commit.
 - All 12 apply cleanly to an empty SQLite DB (checked locally with node:sqlite).
@@ -80,3 +80,6 @@ npx wrangler secret list
 2. Module structure: option A (retrofit the contract) or B (adapt WPs to current structure)? Default B.
 3. Plan S2 items already in schema (pro_bills GST/TDS): drop them from S2? Default yes.
 4. Is Drive (Mode G) actually connected in production, or are files in D1 blobs?
+
+## S2 status
+Decisions: option B (adapt WPs to current structure; new code goes in `src/routes/<area>.js` + `public/pagesN.js`), S2 items already in schema dropped. `migrations/0013_guide_fixes.sql` written; replays clean on empty SQLite. Guide text edits skipped (guide not in repo). Backup export list in `buildExport` extended with the 2 new tables plus 9 existing tables it omitted (`ppl_*`, `sal_brokerage_payments`, `sal_refunds`, `sal_interest_waivers`, `mkt_spend`, `brands`, `counters`). `docs/proposed/0010_reconcile.sql` removed (superseded by 0013).
