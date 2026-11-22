@@ -21,6 +21,19 @@ export async function raDueSweep(env, getSetting) {
       AND NOT EXISTS (SELECT 1 FROM notifications n WHERE n.user_id = u.id AND n.title = 'RA bill due: ' || w.wo_no || ' / RA ' || r.ra_no AND date(n.created_at) = date('now'))`).run();
 }
 
+// ----- Service functions other modules call (they never run SQL on con_* tables) -----
+// Active contractors holding an approved work order on this project.
+export async function activeContractorsForProject(env, projectId) {
+  return (await env.DB.prepare(`SELECT DISTINCT c.id, c.name, c.trade FROM con_contractors c JOIN con_work_orders w ON w.contractor_id = c.id
+    WHERE w.project_id = ? AND w.status = 'approved' AND c.active = 1 AND c.deleted_at IS NULL ORDER BY c.name LIMIT 100`).bind(projectId).all()).results;
+}
+export async function contractorNames(env, ids) {
+  const list = [...new Set(ids.map(Number).filter(Boolean))].slice(0, 100);
+  if (!list.length) return {};
+  const rows = (await env.DB.prepare(`SELECT id, name, trade FROM con_contractors WHERE id IN (${list.map(() => '?').join(',')})`).bind(...list).all()).results;
+  return Object.fromEntries(rows.map((r) => [r.id, r]));
+}
+
 export function registerContractors(router, h) {
   const { withAuth, json, serverError, visibleProjectIds, nowStr, getSetting, encryptSetting, decryptSetting, printBrand, csvBom } = h;
 
@@ -68,6 +81,16 @@ export function registerContractors(router, h) {
 
   // ---------- status (always readable, so menus can hide the module) ----------
   router.get('/api/contractors/status', async (req, env) => withAuth(req, env, 'contractors', 'V', async (req, env) => json({ ok: true, data: { enabled: await conEnabled(env, getSetting) } })));
+
+  // Site engineers use this to fill the daily report. Quiet when the module is off (they then see the single labour box).
+  router.get('/api/contractors/for-project', async (req, env) => withAuth(req, env, 'contractors', 'V', async (req, env) => {
+    try {
+      const pid = Number(new URL(req.url).searchParams.get('project_id'));
+      if (!pid || !(await visibleProjectIds(env, req.user)).includes(pid)) return json({ ok: false, error: 'Not allowed.' }, 403);
+      if (!(await conEnabled(env, getSetting))) return json({ ok: true, data: { enabled: false, contractors: [] } });
+      return json({ ok: true, data: { enabled: true, contractors: await activeContractorsForProject(env, pid) } });
+    } catch (e) { return serverError(e, 'con-for-project'); }
+  }));
 
   // ---------- contractors ----------
   router.get('/api/contractors/contractors', guard('V', async (req, env) => {

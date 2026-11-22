@@ -15,7 +15,7 @@ import { registerReports } from './routes/reports.js';
 import { registerFinance } from './routes/finance.js';
 import { registerProcurement2 } from './routes/procurement2.js';
 import { csvBom } from './core/util.js';
-import { registerContractors, raDueSweep } from './routes/contractors.js';
+import { registerContractors, raDueSweep, activeContractorsForProject, contractorNames } from './routes/contractors.js';
 import { registerMfa, mfaChallenge } from './routes/mfa.js';
 import { registerImporter } from './routes/importer.js';
 import { registerPrivacy } from './routes/privacy.js';
@@ -837,14 +837,65 @@ router.post('/api/site/dprs', async (req, env) => {
         const dup = await env.DB.prepare('SELECT id FROM site_dprs WHERE client_uuid = ?').bind(client_uuid).first();
         if (dup) return json({ ok: true, data: { id: dup.id, duplicate: true } });
       }
-      const result = await env.DB.prepare(`INSERT INTO site_dprs (project_id, report_date, wing, work_summary, labour_count, weather, materials_used, issues, safety_incident, created_by, client_uuid, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(project_id, report_date, wing || '', work_summary, labour_count || 0, weather || '', materials_used || '', issues || '', safety_incident || '', user.user_id, client_uuid || makeId(22), now).run();
-      await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, ?, 'site_dprs', ?, ?, ?)`).bind(user.user_id, 'create', result.meta.last_row_id, `DPR filed for ${report_date}`, now).run();
+      // Labour by contractor: [{contractor_id, headcount}]. Contractors are checked through the Contractors module's own function.
+      let lines = [];
+      if (Array.isArray(body.labour) && body.labour.length) {
+        const allowed = Object.fromEntries((await activeContractorsForProject(env, Number(project_id))).map((c) => [c.id, c]));
+        for (const l of body.labour) {
+          const head = Math.round(Number(l.headcount));
+          if (!(head > 0)) continue;
+          const c = allowed[Number(l.contractor_id)];
+          if (!c) return json({ ok: false, error: 'One of the contractors is not working on this project.' }, 400);
+          if (head > 5000) return json({ ok: false, error: 'That labour number looks wrong.' }, 400);
+          lines.push({ id: c.id, trade: String(l.trade || c.trade || '').slice(0, 40), head });
+        }
+        if (new Set(lines.map((x) => x.id + '|' + x.trade)).size !== lines.length) return json({ ok: false, error: 'A contractor is listed twice.' }, 400);
+      }
+      const labourTotal = lines.length ? lines.reduce((t, x) => t + x.head, 0) : (Number(labour_count) || 0);
+      const uuid = client_uuid || makeId(22);
+      // One batch: the report, its labour lines and the audit row go in together or not at all.
+      const res = await env.DB.batch([
+        env.DB.prepare(`INSERT INTO site_dprs (project_id, report_date, wing, work_summary, labour_count, weather, materials_used, issues, safety_incident, created_by, client_uuid, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+          .bind(project_id, report_date, wing || '', work_summary, labourTotal, weather || '', materials_used || '', issues || '', safety_incident || '', user.user_id, uuid, now),
+        ...lines.map((l) => env.DB.prepare('INSERT INTO site_dpr_labour (dpr_id, contractor_id, trade, headcount, created_at) VALUES ((SELECT id FROM site_dprs WHERE client_uuid = ?), ?, ?, ?, ?)').bind(uuid, l.id, l.trade, l.head, now)),
+        env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, 'create', 'site_dprs', (SELECT id FROM site_dprs WHERE client_uuid = ?), ?, ?)`).bind(user.user_id, uuid, `DPR filed for ${report_date}`, now),
+      ]);
+      const result = { meta: { last_row_id: res[0].meta.last_row_id } };
       return json({ ok: true, data: { id: result.meta.last_row_id } });
     } catch (e) {
       return serverError(e, 'dpr-create');
     }
   });
 });
+
+// Headcount per contractor from the latest report of this project: pre-fills today's form.
+router.get('/api/site/dprs/last-labour', async (req, env) => withAuth(req, env, 'site', 'C', async (req, env) => {
+  try {
+    const pid = Number(new URL(req.url).searchParams.get('project_id'));
+    if (!pid || !(await visibleProjectIds(env, req.user)).includes(pid)) return json({ ok: false, error: 'Not allowed.' }, 403);
+    const rows = await env.DB.prepare(`SELECT l.contractor_id, l.trade, l.headcount FROM site_dpr_labour l
+      WHERE l.dpr_id = (SELECT id FROM site_dprs WHERE project_id = ? AND deleted_at IS NULL AND EXISTS (SELECT 1 FROM site_dpr_labour x WHERE x.dpr_id = site_dprs.id) ORDER BY report_date DESC, id DESC LIMIT 1)`).bind(pid).all();
+    return json({ ok: true, data: { labour: rows.results } });
+  } catch (e) { return serverError(e, 'dpr-last-labour'); }
+}));
+
+// Monthly man-days by contractor and trade (checks RA bills against what the site reported). ?month=YYYY-MM&project_id=N&csv=1
+router.get('/api/site/reports/labour', async (req, env) => withAuth(req, env, 'site', 'V', async (req, env) => {
+  try {
+    const q = new URL(req.url).searchParams;
+    const month = /^\d{4}-\d{2}$/.test(q.get('month') || '') ? q.get('month') : new Date(Date.now() + 19800000).toISOString().substring(0, 7);
+    const ids = await visibleProjectIds(env, req.user);
+    if (!ids.length) return json({ ok: true, data: { month, rows: [] } });
+    const rows = (await env.DB.prepare(`SELECT p.name AS project, l.contractor_id, l.trade, SUM(l.headcount) AS man_days, COUNT(DISTINCT d.report_date) AS days_reported
+      FROM site_dpr_labour l JOIN site_dprs d ON d.id = l.dpr_id JOIN projects p ON p.id = d.project_id
+      WHERE d.deleted_at IS NULL AND d.report_date >= ? AND d.report_date < date(?, '+1 month') AND d.project_id IN (${ids.map(() => '?').join(',')})
+      GROUP BY d.project_id, l.contractor_id, l.trade ORDER BY p.name, man_days DESC LIMIT 300`).bind(month + '-01', month + '-01', ...ids).all()).results;
+    const names = await contractorNames(env, rows.map((r) => r.contractor_id));
+    for (const r of rows) r.contractor = (names[r.contractor_id] || {}).name || 'Unknown';
+    if (q.get('csv')) return csvResponse(`labour-${month}.csv`, ['Project', 'Contractor', 'Trade', 'Man-days', 'Days reported'], rows.map((r) => [r.project, r.contractor, r.trade || '', r.man_days, r.days_reported]));
+    return json({ ok: true, data: { month, rows } });
+  } catch (e) { return serverError(e, 'rep-labour'); }
+}));
 
 router.get('/api/site/snags', async (req, env) => {
   return withAuth(req, env, 'site', 'V', async (req, env) => {
@@ -1421,7 +1472,7 @@ const EXPORT_TABLES = ['projects', 'apr_items', 'apr_events', 'drw_drawings', 'd
     'sal_leads', 'sal_activities', 'sal_visits', 'sal_inventory', 'sal_partners', 'sal_bookings', 'sal_plan_stages', 'sal_demands', 'sal_receipts', 'documents', 'audit_log',
     'pro_grn_items', 'pro_payments', 'ppl_staff', 'ppl_hiring', 'ppl_candidates', 'sal_brokerage_payments', 'sal_refunds', 'sal_interest_waivers', 'mkt_spend', 'brands', 'counters',
     'pro_indents', 'pro_indent_items', 'pro_rfq_items', 'pro_quote_items',
-    'con_contractors', 'con_work_orders', 'con_wo_items', 'con_ra_bills', 'con_ra_lines', 'con_payments', 'con_ledger'];
+    'site_dpr_labour', 'con_contractors', 'con_work_orders', 'con_wo_items', 'con_ra_bills', 'con_ra_lines', 'con_payments', 'con_ledger'];
 const EXPORT_PARTS = 3;
 
 async function buildExport(env, part = 1) {

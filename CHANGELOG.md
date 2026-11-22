@@ -36,3 +36,9 @@
 - Changed: `api()` errors carry `.data` so screens can offer "save anyway". Staging workers.dev address switched off; crm.mysociety.tech is the only public address.
 - Migration 0015; code in `src/routes/contractors.js`, `public/pages7.js`; test `tests/contractors.mjs` (61 checks, in CI).
 - Fix (found by the browser walkthrough): the Contractors menu entry broke the whole app because it was wired before its script loaded; site engineers could not see any PO to receive material against (new money-free `/api/procurement/pos-to-receive`); the Contractors screen hid its buttons from Purchase/Accounts. Browser walkthrough: 26 checks as 5 roles on a phone-sized screen (`tests/ui-walkthrough.mjs.txt`, screenshots in `docs/ui-walkthrough/`).
+
+## WP-6 daily report labour by contractor (2026-11-22)
+- Daily report: one +/- row per contractor with an approved work order on the project, copied from the last report; contractor list is remembered on the phone so it works in airplane mode and syncs once. With Contractors off or no contractors, the old single labour box shows. Photos unchanged.
+- Report saved in one batch (report + labour lines + audit). Contractors are checked server-side; unknown, duplicate or absurd lines are refused and nothing is half-saved.
+- New: monthly man-days by contractor and trade (`/api/site/reports/labour`, CSV link on the Site screen for Owner/PM).
+- Backup/restore include `site_dpr_labour`. Migration 0016; test `tests/dprlabour.mjs` (20 checks, in CI); browser walkthrough with airplane mode (11 checks).

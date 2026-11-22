@@ -1,0 +1,84 @@
+import { createRequire } from 'node:module';
+const { chromium } = createRequire(import.meta.url)('/opt/node-tools/node_modules/playwright');
+const BASE = process.env.BASE || 'http://localhost:8787', SHOTS = '/tmp/claude-0/scratch/shots';
+const run = Date.now().toString(36);
+let pass = 0, fail = 0; const ok = (n, c, x = '') => { c ? pass++ : fail++; console.log(`${c ? 'PASS' : 'FAIL'}  ${n}${c ? '' : '  ' + x}`); };
+class C { constructor() { this.cookie = ''; } async call(m, p, b) { const h = { 'X-NirmaanCRM': '1' }; if (this.cookie) h.cookie = this.cookie; let body; if (b) { h['Content-Type'] = 'application/json'; body = JSON.stringify(b); }
+  const r = await fetch(BASE + p, { method: m, headers: h, body }); const sc = r.headers.get('set-cookie'); if (sc) this.cookie = sc.split(';')[0]; let d = null; try { d = await r.json(); } catch (e) {} return { status: r.status, data: d && d.data, err: d && d.error }; } }
+const o = new C(); await o.call('POST', '/api/auth/login', { email: 'owner@test.local', password: 'CiStrongPass-12345' });
+const pid = (await o.call('POST', '/api/projects', { name: 'UI Tower ' + run, code: 'UI' + run.toUpperCase().slice(-5), budget_paise: 5e9 })).data.id;
+await o.call('POST', '/api/settings/con.enabled', { value: 'on' });
+await o.call('POST', '/api/settings/con.pm_approval_limit_paise', { value: 50000000 });
+const users = {};
+for (const role of ['site', 'pm', 'purchase', 'accounts']) {
+  const email = `ui-${role}-${run}@test.local`; const r = await o.call('POST', '/api/users', { name: 'UI ' + role, email, role, projects: role === 'site' ? [pid] : [] });
+  const c = new C(); await c.call('POST', '/api/auth/login', { email, password: r.data.temporaryPassword }); const pw = 'UiStrongPass-' + run;
+  await c.call('POST', '/api/auth/change-password', { currentPassword: r.data.temporaryPassword, newPassword: pw }); users[role] = { email, pw };
+}
+const browser = await chromium.launch();
+const ctxs = {};
+async function page(role) {
+  if (!ctxs[role]) {
+    const ctx = await browser.newContext({ viewport: { width: 390, height: 800 } });
+    const email = role === 'owner' ? 'owner@test.local' : users[role].email, password = role === 'owner' ? 'CiStrongPass-12345' : users[role].pw;
+    const r = await ctx.request.post(BASE + '/api/auth/login', { headers: { 'X-NirmaanCRM': '1', 'Content-Type': 'application/json' }, data: { email, password } });
+    if (!r.ok()) throw new Error('login ' + role + ' ' + r.status());
+    ctxs[role] = ctx;
+  }
+  const p = await ctxs[role].newPage(); p.on('dialog', (d) => d.accept()); p.on('pageerror', (e) => console.log('PAGEERROR', role, e.message));
+  await p.goto(BASE + '/'); await p.waitForFunction(() => typeof navigate === 'function' && typeof currentUser !== 'undefined' && currentUser, null, { timeout: 15000 }); return p;
+}
+const go = async (p, route) => { await p.evaluate((r) => navigate(r), route); await p.waitForTimeout(800); };
+const toastText = async (p) => { await p.waitForTimeout(500); return p.evaluate(() => (document.getElementById('toast') || {}).textContent || ''); };
+const submit = (p) => p.click('#modal-form button[type=submit]');
+const pick = (p, sel, label) => p.selectOption(sel, { label });
+const shot = (p, n) => p.screenshot({ path: `${SHOTS}/${n}.png` });
+const ctxOf = (role) => ctxs[role];
+// contractors with approved work orders on the project
+const pc = new C(); await pc.call('POST', '/api/auth/login', { email: users.purchase.email, password: users.purchase.pw });
+const mk = async (n, t) => (await pc.call('POST', '/api/contractors/contractors', { name: n + ' ' + run, trade: t })).data.id;
+const A = await mk('Sharma Civil', 'civil'), B = await mk('Patil Plumbing', 'plumbing');
+for (const c of [A, B]) { const w = (await pc.call('POST', '/api/contractors/work-orders', { project_id: pid, contractor_id: c, scope: 'x', value_paise: 1000000 })).data; await pc.call('POST', `/api/contractors/work-orders/${w.id}/submit`, {}); await o.call('POST', `/api/contractors/work-orders/${w.id}/approve`, {}); }
+const reportsOn = async () => (await o.call('GET', `/api/site/dprs?project_id=${pid}`)).data.dprs;
+
+// ===== online: steppers for each contractor =====
+let s = await page('site'); await go(s, 'site');
+await s.click('#s-dpr'); await s.waitForSelector('#dpr-labour [data-con]');
+ok('daily report lists the project contractors', (await s.$$('#dpr-labour [data-con]')).length === 2);
+await s.fill('#dpr-summary', 'Slab shuttering, plumbing sleeves');
+const rowA = s.locator(`#dpr-labour [data-con="${A}"]`), rowB = s.locator(`#dpr-labour [data-con="${B}"]`);
+await rowB.locator('[data-step="1"]').click(); await rowB.locator('[data-step="1"]').click();
+await rowA.locator('[data-n]').fill('10');
+ok('+ button changes the count', (await rowB.locator('[data-n]').inputValue()) === '2');
+await shot(s, '20-dpr-steppers'); await s.click('#dpr-form button[type=submit]');
+ok('report saved', /Report saved/.test(await toastText(s)));
+const d1 = (await reportsOn())[0]; ok('saved total = 12 (10 + 2)', d1 && d1.labour_count === 12, JSON.stringify(d1));
+
+// ===== form is pre-filled from the last report =====
+await s.waitForTimeout(500); await s.click('#s-dpr'); await s.waitForSelector('#dpr-labour [data-con]');
+ok('next report starts from the last numbers', (await s.locator(`#dpr-labour [data-con="${A}"] [data-n]`).inputValue()) === '10' && (await s.locator(`#dpr-labour [data-con="${B}"] [data-n]`).inputValue()) === '2');
+await shot(s, '21-dpr-prefilled'); await s.click('#dpr-cancel');
+
+// ===== airplane mode =====
+const before = (await reportsOn()).length;
+await ctxOf('site').setOffline(true);
+await s.evaluate(() => newDpr()); await s.waitForSelector('#dpr-labour [data-con]', { timeout: 8000 }).catch(() => {});
+const offlineList = (await s.$$('#dpr-labour [data-con]')).length; ok('offline: contractor list still shows (remembered on the phone)', offlineList === 2, 'rows=' + offlineList);
+if (offlineList) {
+  await s.fill('#dpr-date', new Date(Date.now() + 19800000 - 86400000).toISOString().slice(0, 10)); await s.fill('#dpr-summary', 'Offline report');
+  await s.locator(`#dpr-labour [data-con="${A}"] [data-n]`).fill('9'); await shot(s, '22-dpr-offline'); await s.click('#dpr-form button[type=submit]');
+  const tt = await toastText(s); ok('offline: report saved on the phone', /Saved on this phone/.test(tt), tt);
+}
+await ctxOf('site').setOffline(false); await s.waitForTimeout(500);
+await s.evaluate(() => syncQueue()); await s.waitForTimeout(1500); await s.evaluate(() => syncQueue()); await s.waitForTimeout(1000);
+const after = await reportsOn(); const off = after.filter((d) => d.work_summary === 'Offline report');
+ok('reconnect: exactly one report arrived, no duplicate', off.length === 1 && after.length === before + 1, `n=${off.length} total=${after.length}`);
+ok('offline report carries its labour (9 + 2 copied from last time = 11)', off[0] && off[0].labour_count === 11, JSON.stringify(off[0] && off[0].labour_count));
+
+// ===== the report =====
+const pm = await page('pm'); await go(pm, 'site');
+ok('PM sees the labour report link', (await pm.textContent('#site-list')).includes('Labour this month'));
+await shot(pm, '23-pm-site-with-labour-link');
+const rep = (await o.call('GET', `/api/site/reports/labour?month=${new Date().toISOString().slice(0, 7)}&project_id=${pid}`)).data;
+ok('monthly report: man-days by contractor', rep.rows.length === 2 && rep.rows.find((r) => r.contractor.startsWith('Sharma')).man_days >= 10, JSON.stringify(rep.rows));
+await browser.close(); console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);
