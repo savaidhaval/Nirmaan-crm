@@ -1,4 +1,5 @@
-# Deploys to Cloudflare whenever main changes: applies new D1 migrations, then publishes the Worker.
+# Deploys to Cloudflare whenever main changes, only after CI passes (and, if configured, a reviewer approves the 'production' environment):
+# applies new D1 migrations, then publishes the Worker.
 # Needs two repository secrets: CLOUDFLARE_API_TOKEN (Workers Scripts:Edit, D1:Edit, Workers Routes/Zone:Edit) and CLOUDFLARE_ACCOUNT_ID.
 name: Deploy
 on:
@@ -6,8 +7,14 @@ on:
     branches: [main]
 concurrency: deploy-production
 jobs:
+  # Gate: the full CI (syntax, prod + staging bundle dry-runs, all migrations on an empty local D1, every test suite) must pass first.
+  checks:
+    uses: ./.github/workflows/ci.yml
   deploy:
+    needs: checks
     runs-on: ubuntu-latest
+    # Add required reviewers to the 'production' environment in GitHub (Settings -> Environments) to make every deploy wait for approval.
+    environment: production
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

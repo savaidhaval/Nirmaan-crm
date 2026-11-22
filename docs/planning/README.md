@@ -15,7 +15,7 @@ Files in this folder:
 - `deploy.yml` applies migrations to production on every push to `main`. Test every migration on staging first and export D1 before merging.
 
 ## Order of work (revised)
-1. **S1** create `CLAUDE.md` (adapt: wrangler.toml, monolith pattern, tests/*.mjs, CI).
+1. ~~S0~~ DONE (docs/STATE.md). ~~**S1**~~ DONE: `CLAUDE.md` created, HANDOVER banner added, CI gate added (see D10 below).
 2. **B0** backup/export completeness (new): export all data tables, chunked; restore drill; cron guard (`rate_limits` cleanup, per-run LIMITs).
 3. **S2-revised** migration 0013 from `proposed-migrations/`, plus guide wording fixes (filename, OAuth Testing mode, roster).
 4. **R1** WP-1 redevelopment registry + consent, WP-2 transit rent/corpus (no re-adding `category`), WP-3 meetings.
@@ -24,7 +24,7 @@ Files in this folder:
 7. **R4** dashboard extras, offline queues + Hindi/Marathi for new screens, drawing acknowledgement, hardening/UAT.
 8. **R5** public lead form, optional extras.
 
-## Decisions needed from Dhaval (defaults are used if unanswered)
+## Decisions (2026-11-22: Dhaval said "use default" for all; D2 stays pending)
 | # | Decision | Default |
 |---|---|---|
 | D1 | Consent counting: head-count or carpet area; warn only or block | Head-count; warn only; 51% per society, editable |
@@ -35,5 +35,16 @@ Files in this folder:
 | D6 | Tally: sample voucher file + ledger names | Mapping left empty; XML marked UNTESTED until supplied |
 | D7 | Sell free-sale units in volume? | Yes but lower priority; remaining R3 items can wait |
 | D8 | Hindi/Marathi for new site screens | Yes |
-| D9 (new) | Keep the monolith structure, or refactor to guide modules | Keep; add new features as `src/routes/*.js` |
-| D10 (new) | Add a staging gate to `deploy.yml` (deploy staging, run tests, then production) | Yes, small CI change in S1 |
+| D9 (new) | Keep the monolith structure, or refactor to guide modules | **DECIDED 2026-11-22: keep**; new features as `src/routes/*.js` |
+| D10 (new) | Add a gate before production deploys | **DECIDED: yes** (done in S1, see below) |
+
+## D10 production gate: what was done and what Dhaval must click
+Done in code (`.github/workflows/`): `ci.yml` can now be called by other workflows; `deploy.yml` first runs the whole CI (frontend syntax check, production and staging bundle dry-runs, ALL migrations applied to an empty local D1 database, every test suite) and the deploy job runs only if that passes (`needs: checks`) and uses `environment: production`. No new Cloudflare resources or secrets were created, and no real staging deploy was added (that would need a staging Worker run from CI with its own token; recommended later, not done).
+Three manual steps in GitHub (cannot be done from code):
+1. Repo Settings > Environments > New environment, name it exactly `production`.
+2. In that environment, tick "Required reviewers" and add yourself. Every deploy then waits for your Approve click.
+3. Settings > Branches > add a branch protection rule for `main`: require a pull request and require the status checks "build" and "tests" to pass.
+Until steps 2 and 3 are done, the CI gate still blocks a failing deploy, but a deploy of a passing build is not held for approval.
+
+## Next step
+**B0** (backup/export completeness), prompt in the plan under "Prompt B0". Needs from Dhaval: nothing blocking; confirm that an export containing settings (secrets masked) and customer data may be written to his private Google Drive Backups folder, as the nightly backup already does.

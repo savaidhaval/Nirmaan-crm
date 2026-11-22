@@ -1,3 +1,5 @@
+> **NOTE (2026-11-22): parts of this file are stale.** Read `CLAUDE.md` (standing rules) and `docs/STATE.md` (what is actually built) first. Stale here: "9 migrations" (there are 12), "GitHub remote NOT yet configured" (done), "Next Steps for Claude" and "Build remaining frontend pages" (built), and the local path/PDF references. Kept unchanged below for history.
+
 # NirmaanCRM — Claude Handover Document
 
 ## Project Overview
