@@ -19,7 +19,7 @@ export async function getEmailConfig(env) {
 
 // Queue + send. Pass { logId } to retry an existing log row instead of creating a new one.
 export async function sendMail(env, to, subject, html, opts = {}) {
-  const cfg = await getEmailConfig(env);
+  const cfg = opts.cfg || await getEmailConfig(env); // callers sending many mails read the settings once and pass them in
   let logId = opts.logId;
   if (!logId) {
     const r = await env.DB.prepare(`INSERT INTO email_log (to_email, subject, body_html, status, provider, template, created_at) VALUES (?, ?, ?, 'queued', ?, ?, ?)`)
@@ -27,7 +27,9 @@ export async function sendMail(env, to, subject, html, opts = {}) {
     logId = r.meta.last_row_id;
   }
   try {
-    if (cfg.provider === 'brevo_api') await sendViaBrevo(cfg, to, subject, html);
+    // Test mode (MAIL_MOCK is set only in .dev.vars / CI, never in production): nothing is sent; an address containing "fail" is refused.
+    if (env.MAIL_MOCK) { if (/fail/i.test(to)) throw new Error('Mock mail server refused this address.'); }
+    else if (cfg.provider === 'brevo_api') await sendViaBrevo(cfg, to, subject, html);
     else await sendViaSmtp(cfg, to, subject, html, opts.attachments || []);
     await env.DB.prepare(`UPDATE email_log SET status = 'sent', error = NULL, sent_at = ?, attempts = attempts + 1 WHERE id = ?`).bind(nowStr(), logId).run();
     return { sent: true, error: null, logId };

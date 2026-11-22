@@ -12,6 +12,7 @@ import { sendMail, retryFailedEmails, sendDigest, notifyMissingDprs, getEmailCon
 import * as gdrive from './core/gdrive.js';
 import { registerSalesOps, expireHolds, LEAD_TRANSITIONS, shared as salesShared } from './routes/sales_ops.js';
 import { registerSales3, ensureDemandNumber, handoverDueSweep } from './routes/sales3.js';
+import { registerBulkDemands, demandLetterHtml } from './routes/bulk_demands.js';
 import { registerReports } from './routes/reports.js';
 import { registerFinance } from './routes/finance.js';
 import { registerProcurement2 } from './routes/procurement2.js';
@@ -543,7 +544,7 @@ const EDITABLE_SETTINGS = ['po.pm_approval_limit_paise', 'access.allow_second_ow
   'demand.due_days_after_milestone', 'share.default_expiry_days', 'share.default_max_views', 'files.brochure_max_mb', 'branding.apply_colours_to_app',
   'brochure.price_list_default_audience', 'storage.warn_percent', 'sales.max_holds_per_user', 'sales.max_discount_bp', 'sales.pm_max_discount_bp',
   'interest.rate_bp', 'interest.grace_days', 'interest.enabled', 'security.require_mfa_roles', 'tax.stamp_duty_bp', 'tax.metro_cess_bp', 'tax.women_concession_bp', 'tax.registration_bp', 'tax.registration_cap_paise', 'tax.gst_bp',
-  'con.enabled', 'con.pm_approval_limit_paise', 'con.gst_bp', 'con.tds_bp', 'budget.gst_basis', 'petty.low_balance_paise', 'ai.enabled', 'ai.daily_limit', 'ai.model', 'rera.designated_pct_bp', 'fea.review_days', 'sales.visit_objections', 'sales.visit_radius_m',
+  'con.enabled', 'con.pm_approval_limit_paise', 'con.gst_bp', 'con.tds_bp', 'budget.gst_basis', 'petty.low_balance_paise', 'ai.enabled', 'ai.daily_limit', 'ai.model', 'rera.designated_pct_bp', 'fea.review_days', 'sales.bulk_daily_limit', 'sales.bulk_chunk', 'sales.demand_link_days', 'sales.visit_objections', 'sales.visit_radius_m',
   'sales.receipt_approval_limit_paise', 'sales.discount_pm_limit_paise', 'sales.handover_template'];
 
 router.post('/api/settings/:key', async (req, env) => {
@@ -1493,7 +1494,7 @@ const EXPORT_TABLES = ['projects', 'apr_items', 'apr_events', 'drw_drawings', 'd
     'sal_leads', 'sal_activities', 'sal_visits', 'sal_inventory', 'sal_partners', 'sal_bookings', 'sal_plan_stages', 'sal_demands', 'sal_receipts', 'documents', 'audit_log',
     'pro_grn_items', 'pro_payments', 'ppl_staff', 'ppl_hiring', 'ppl_candidates', 'sal_brokerage_payments', 'sal_refunds', 'sal_interest_waivers', 'mkt_spend', 'brands', 'counters',
     'pro_indents', 'pro_indent_items', 'pro_rfq_items', 'pro_quote_items',
-    'site_dpr_labour', 'bud_heads', 'stk_items', 'stk_balance', 'stk_moves', 'pro_party_docs', 'pro_professionals', 'ai_log', 'sal_receipt_requests', 'sal_adjustments', 'sal_booking_parties', 'sal_cost_sheets', 'sal_cost_sheet_lines', 'sal_handover', 'sal_handover_items', 'sal_booking_loans', 'rera_account_entries', 'eng_kudos', 'fea_versions', 'pty_funds', 'pty_entries', 'con_contractors', 'con_work_orders', 'con_wo_items', 'con_ra_bills', 'con_ra_lines', 'con_payments', 'con_ledger'];
+    'site_dpr_labour', 'bud_heads', 'stk_items', 'stk_balance', 'stk_moves', 'pro_party_docs', 'pro_professionals', 'ai_log', 'sal_receipt_requests', 'sal_adjustments', 'sal_booking_parties', 'sal_cost_sheets', 'sal_cost_sheet_lines', 'sal_handover', 'sal_handover_items', 'sal_booking_loans', 'rera_account_entries', 'eng_kudos', 'fea_versions', 'sal_bulk_runs', 'sal_bulk_items', 'pty_funds', 'pty_entries', 'con_contractors', 'con_work_orders', 'con_wo_items', 'con_ra_bills', 'con_ra_lines', 'con_payments', 'con_ledger'];
 const EXPORT_PARTS = 3;
 
 async function buildExport(env, part = 1) {
@@ -1804,16 +1805,7 @@ router.post('/api/sales/demands/:id/email', async (req, env) => {
     if (d.status === 'scheduled') return json({ ok: false, error: 'This payment stage has not been reached yet.' }, 400);
     d.demand_no = await ensureDemandNumber(env, d.id);
     const brand = await printBrand(env, d.project_id);
-    const total = d.amount_paise + (d.gst_paise || 0) - (d.settled_paise || 0);
-    const inr = (p) => '₹' + (Number(p) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2 });
-    const html = `<div style="font-family:Georgia,serif;max-width:620px;margin:auto"><h2 style="margin:0">${escHtml(brand.trade_name || brand.legal_name || '')}</h2><p style="color:#555;margin:2px 0 16px">${escHtml(brand.address || '')}</p>
-      <h3>Payment demand — ${escHtml(d.project_name)}, ${escHtml((d.wing ? d.wing + '-' : '') + d.unit_no)}</h3><p>Dear ${escHtml(d.customer_name)},</p>
-      <p>As per the agreed payment plan, the stage <b>${escHtml(d.label)}</b> has been reached.${d.due_date ? ' Please pay on or before <b>' + escHtml(d.due_date) + '</b>.' : ''}</p>
-      <table style="border-collapse:collapse;width:100%"><tr><td style="border:1px solid #999;padding:6px">${escHtml(d.label)}</td><td style="border:1px solid #999;padding:6px;text-align:right">${inr(d.amount_paise)}</td></tr>
-      <tr><td style="border:1px solid #999;padding:6px">GST</td><td style="border:1px solid #999;padding:6px;text-align:right">${inr(d.gst_paise || 0)}</td></tr>
-      <tr><td style="border:1px solid #999;padding:6px"><b>Amount due</b></td><td style="border:1px solid #999;padding:6px;text-align:right"><b>${inr(total)}</b></td></tr></table>
-      ${brand.bank_name ? `<p>Pay to: ${escHtml(brand.bank_account_name)}, ${escHtml(brand.bank_name)}, IFSC ${escHtml(brand.bank_ifsc)}. Please contact our office for the account number.</p>` : ''}
-      <p>Regards,<br>${escHtml(brand.signatory_name || brand.legal_name || '')}</p></div>`;
+    const html = demandLetterHtml(brand, d, '');
     const r = await sendMail(env, to, `Payment demand — ${d.project_name} ${d.wing ? d.wing + '-' : ''}${d.unit_no}`, html, { template: 'demand' });
     await env.DB.prepare('UPDATE sal_demands SET sent_at = ? WHERE id = ?').bind(nowStr(), d.id).run();
     await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, 'email', 'sal_demands', ?, ?, ?)`).bind(req.user.user_id, d.id, `Emailed demand "${d.label}" to ${d.customer_name}`, nowStr()).run();
@@ -2097,6 +2089,7 @@ registerContractors(router, { withAuth, json, serverError, visibleProjectIds, no
   onWoApproved: (env, wo) => checkHeadOver(env, getSetting, nowStr, wo.project_id, [wo.budget_head_id]) });
 registerBudget(router, { withAuth, json, serverError, visibleProjectIds, nowStr, getSetting, csvBom });
 registerSalesOps(router, { withAuth, json, serverError, visibleProjectIds, userCan, getSetting, nowStr, encryptSetting, clientIp, checkRateLimit });
+registerBulkDemands(router, { withAuth, json, serverError, visibleProjectIds, getSetting, nowStr, printBrand, csvBom });
 registerSales3(router, { withAuth, json, serverError, visibleProjectIds, getSetting, nowStr, encryptSetting, decryptSetting, csvBom, printBrand, shared: salesShared });
 
 // ---------- Branding routes ----------
@@ -3194,7 +3187,7 @@ export default {
         return json({ ok: true, env: env.ENVIRONMENT || 'production' });
       }
       await ensureBootstrap(env);
-      if (path.startsWith('/api/') || path.startsWith('/s/') || path.startsWith('/brand/')) {
+      if (path.startsWith('/api/') || path.startsWith('/s/') || path.startsWith('/d/') || path.startsWith('/brand/')) {
         return router.handle(request, env);
       }
       return env.ASSETS.fetch(request);

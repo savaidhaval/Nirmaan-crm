@@ -32,3 +32,6 @@ td.r, th.r { text-align: right; }
 .sigrow { display: flex; align-items: flex-end; gap: 16px; min-height: 22mm; margin: 4px 0; }
 .sig { height: 18mm; } .stamp { height: 24mm; }
 .ruler { display: flex; justify-content: space-between; border-top: 2px solid #111; margin-top: 24px; font-size: 9pt; padding-top: 2px; }
+
+.pg-break { break-after: page; page-break-after: always; }
+@media print { .pg-break { margin: 0; } }

@@ -111,3 +111,6 @@ Code complete; tests pass locally. Migrations 0024-0025 NOT applied to productio
 
 ## Profile, engagement, charts, feasibility status (0026)
 Code complete; 19 API suites and 7 browser walkthroughs pass locally. Migrations 0024-0026 NOT applied to production. Work report = 3 queries plus one batch of 13 counts plus 1 (17 statements, under the 50 cap); quote and team = 1-2 queries. Display pictures are stored as small blobs (max about 400 KB) and never public.
+
+## WP-16 status
+Code complete; 20 API suites and 8 browser walkthroughs pass locally. Migration 0027 NOT applied to production. Measured: one process request = 20-50 D1 statements (about 10 fixed + 6 per letter, +4 per letter the first time its Demand No is issued), so 3 letters per request; 4 reached 50. Real SMTP/Brevo sending in bulk has not been run against the live provider (mock only).
