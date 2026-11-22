@@ -1211,10 +1211,11 @@ router.post('/api/drawings/:id/revisions', async (req, env) => {
       await env.DB.batch(stmts);
       await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, 'create', 'drw_revisions', ?, ?, ?)`).bind(req.user.user_id, drawingId, `${drawing.code} ${revNo} issued as ${status === 'ifc' ? 'Issued For Construction' : 'Draft'}`, now).run();
       if (status === 'ifc') {
-        const rcpt = await env.DB.prepare("SELECT id FROM users WHERE active = 1 AND deleted_at IS NULL AND role IN ('site', 'pm') AND id != ?").bind(req.user.user_id).all();
-        for (const u of rcpt.results) {
-          await env.DB.prepare('INSERT INTO notifications (user_id, title, body, link, created_at) VALUES (?, ?, ?, ?, ?)').bind(u.id, `New drawing: ${drawing.code} ${revNo}`, `${drawing.title} is now Issued For Construction. Older revisions are superseded.`, 'drawings', now).run();
-        }
+        // one statement however many people there are: every PM, and the site engineers assigned to this project
+        await env.DB.prepare(`INSERT INTO notifications (user_id, title, body, link, created_at)
+          SELECT u.id, ?1, ?2, 'drawings', ?3 FROM users u WHERE u.active = 1 AND u.deleted_at IS NULL AND u.id != ?4
+            AND (u.role = 'pm' OR (u.role = 'site' AND EXISTS (SELECT 1 FROM project_members m WHERE m.user_id = u.id AND m.project_id = ?5 AND m.removed_at IS NULL)))`)
+          .bind(`New drawing: ${drawing.code} ${revNo}`, `${drawing.title} is now Issued For Construction. Older revisions are superseded.`, now, req.user.user_id, drawing.project_id).run();
       }
       return json({ ok: true, data: { rev_no: revNo } });
     } catch (e) {
@@ -1503,7 +1504,7 @@ const EXPORT_TABLES = ['projects', 'apr_items', 'apr_events', 'drw_drawings', 'd
     'sal_leads', 'sal_activities', 'sal_visits', 'sal_inventory', 'sal_partners', 'sal_bookings', 'sal_plan_stages', 'sal_demands', 'sal_receipts', 'documents', 'audit_log',
     'pro_grn_items', 'pro_payments', 'ppl_staff', 'ppl_hiring', 'ppl_candidates', 'sal_brokerage_payments', 'sal_refunds', 'sal_interest_waivers', 'mkt_spend', 'brands', 'counters',
     'pro_indents', 'pro_indent_items', 'pro_rfq_items', 'pro_quote_items',
-    'site_dpr_labour', 'bud_heads', 'stk_items', 'stk_balance', 'stk_moves', 'pro_party_docs', 'pro_professionals', 'ai_log', 'sal_receipt_requests', 'sal_adjustments', 'sal_booking_parties', 'sal_cost_sheets', 'sal_cost_sheet_lines', 'sal_handover', 'sal_handover_items', 'sal_booking_loans', 'rera_account_entries', 'eng_kudos', 'fea_versions', 'sal_bulk_runs', 'sal_bulk_items', 'drw_acks', 'tally_export_log', 'bank_profiles', 'bank_import_batches', 'bank_import_rows', 'red_societies', 'red_members', 'red_consent_events', 'red_member_docs', 'red_rehab_allotments', 'red_transit_terms', 'red_transit_schedule', 'red_transit_payments', 'red_corpus_entries', 'red_meetings', 'pty_funds', 'pty_entries', 'con_contractors', 'con_work_orders', 'con_wo_items', 'con_ra_bills', 'con_ra_lines', 'con_payments', 'con_ledger'];
+    'site_dpr_labour', 'bud_heads', 'stk_items', 'stk_balance', 'stk_moves', 'pro_party_docs', 'pro_professionals', 'ai_log', 'sal_receipt_requests', 'sal_adjustments', 'sal_booking_parties', 'sal_cost_sheets', 'sal_cost_sheet_lines', 'sal_handover', 'sal_handover_items', 'sal_booking_loans', 'rera_account_entries', 'eng_kudos', 'fea_versions', 'sal_bulk_runs', 'sal_bulk_items', 'drw_acks', 'tally_export_log', 'brand_profiles', 'project_members', 'drive_folders', 'bank_profiles', 'bank_import_batches', 'bank_import_rows', 'red_societies', 'red_members', 'red_consent_events', 'red_member_docs', 'red_rehab_allotments', 'red_transit_terms', 'red_transit_schedule', 'red_transit_payments', 'red_corpus_entries', 'red_meetings', 'pty_funds', 'pty_entries', 'con_contractors', 'con_work_orders', 'con_wo_items', 'con_ra_bills', 'con_ra_lines', 'con_payments', 'con_ledger'];
 const EXPORT_PARTS = 3;
 
 async function buildExport(env, part = 1) {
@@ -1511,6 +1512,8 @@ async function buildExport(env, part = 1) {
   const out = { exported_at: new Date().toISOString(), part, of: EXPORT_PARTS, tables: {} };
   for (const t of EXPORT_TABLES.slice((part - 1) * per, part * per)) out.tables[t] = (await env.DB.prepare(`SELECT * FROM ${t}`).all()).results;
   if (out.tables.sal_bookings) for (const r of out.tables.sal_bookings) r.pan = await maskPan(env, r.pan); // never export a customer's PAN
+  // never export anything that is, or protects, a secret: encrypted fields (PAN, bank account numbers), password / token / two-step columns
+  for (const rows of Object.values(out.tables)) for (const r of rows) for (const k of Object.keys(r)) if (/_enc$|password|secret|token_hash|totp/i.test(k)) r[k] = null;
   if (part === EXPORT_PARTS) out.tables.users = (await env.DB.prepare('SELECT id, name, email, phone, role, lang, active, created_at, position, about FROM users').all()).results;
   return out;
 }
@@ -3140,6 +3143,12 @@ async function scheduled(event, env, ctx) {
   if (env.ENVIRONMENT === 'staging') return; // staging guard
   const cron = event.cron;
 
+  if (env.QCOUNT_LOG) {   // test builds only: count the database statements one sweep run uses (the free plan allows about 50)
+    let n = 0; const db = env.DB; const t0 = Date.now();
+    const counted = Object.assign(Object.create(env), { DB: new Proxy(db, { get(t, k) { if (k === 'prepare') return (q) => { n++; return t.prepare(q); }; const v = t[k]; return typeof v === 'function' ? v.bind(t) : v; } }) });
+    ctx.waitUntil(runCron(cron, counted).then(() => console.log('QCRON', cron, n, Date.now() - t0)).catch((e) => console.error('cron failed', cron, e.message)));
+    return;
+  }
   ctx.waitUntil(runCron(cron, env).catch((e) => console.error('cron failed', cron, e.message)));
 }
 
@@ -3201,6 +3210,14 @@ export default {
       }
       await ensureBootstrap(env);
       if (path.startsWith('/api/') || path.startsWith('/s/') || path.startsWith('/d/') || path.startsWith('/brand/')) {
+        // Test builds only (QCOUNT_LOG is set in .dev.vars / CI, never in production): report how many database statements a request used.
+        if (env.QCOUNT_LOG) {
+          let n = 0; const db = env.DB;
+          const counted = Object.assign(Object.create(env), { DB: new Proxy(db, { get(t, k) { if (k === 'prepare') return (q) => { n++; return t.prepare(q); }; const v = t[k]; return typeof v === 'function' ? v.bind(t) : v; } }) });
+          const t0 = Date.now(); const resp = await router.handle(request, counted);
+          console.log('QC', request.method, path.replace(/\/\d+/g, '/:n'), n, Date.now() - t0, resp.status);
+          const r2 = new Response(resp.body, resp); r2.headers.set('X-Query-Count', String(n)); r2.headers.set('X-Time-Ms', String(Date.now() - t0)); return r2;
+        }
         return router.handle(request, env);
       }
       return env.ASSETS.fetch(request);
