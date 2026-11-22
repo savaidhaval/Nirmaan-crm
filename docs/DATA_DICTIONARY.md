@@ -1,4 +1,4 @@
-# NirmaanCRM data dictionary (real schema from migrations 0001-0022, updated 2026-11-22)
+# NirmaanCRM data dictionary (real schema from migrations 0001-0023, updated 2026-11-22)
 
 Source: replaying migrations/*.sql into an empty SQLite DB. Live D1 not verified (see docs/STATE.md). Money = paise INTEGER, percentages = basis points (_bp). NN = NOT NULL, PK = primary key.
 
@@ -7,6 +7,8 @@ Source: replaying migrations/*.sql into an empty SQLite DB. Live D1 not verified
 - tables not in guide: brands, mfa_challenges, user_totp, user_recovery_codes, sal_interest_waivers, sal_refunds, mkt_spend, webhook_seen
 - pro_bills already has gst/tds columns; sal_inventory.category and sal_receipts.receipt_no already exist
 
+### ai_log
+id INTEGER PK, user_id INTEGER, feature TEXT NN, ok INTEGER NN, created_at TEXT
 ### ai_log
 id INTEGER PK, user_id INTEGER, feature TEXT NN, ok INTEGER NN, created_at TEXT
 ### apr_events
@@ -109,12 +111,26 @@ id INTEGER PK, project_id INTEGER NN, custodian_user_id INTEGER NN, opening_pais
 key TEXT PK, window_start TEXT NN, hits INTEGER NN
 ### sal_activities
 id INTEGER PK, lead_id INTEGER NN, type TEXT, outcome TEXT, note TEXT, by_user INTEGER, created_at TEXT
+### sal_adjustments
+id INTEGER PK, booking_id INTEGER NN, demand_id INTEGER NN, kind TEXT NN, adj_no TEXT, amount_paise INTEGER NN, gst_paise INTEGER NN, reason TEXT NN, status TEXT NN, created_by INTEGER, approved_by INTEGER, approved_at TEXT, reversed_at TEXT, reversal_note TEXT, decision_note TEXT, created_at TEXT
+### sal_booking_loans
+id INTEGER PK, booking_id INTEGER NN, bank TEXT NN, sanction_paise INTEGER NN, sanction_date TEXT, disbursed_paise INTEGER NN, notes TEXT, created_by INTEGER, created_at TEXT, deleted_at TEXT
+### sal_booking_parties
+id INTEGER PK, booking_id INTEGER NN, name TEXT NN, phone TEXT, relation TEXT, share_bp INTEGER NN, pan_enc TEXT, aadhaar_masked TEXT, created_by INTEGER, created_at TEXT, deleted_at TEXT
 ### sal_bookings
 id INTEGER PK, project_id INTEGER NN, unit_id INTEGER NN, lead_id INTEGER, customer_name TEXT NN, phone TEXT, email TEXT, address TEXT, pan TEXT, aadhaar_masked TEXT, token_paise INTEGER, agreed_price_paise INTEGER NN, payment_plan TEXT, booking_date TEXT, agreement_date TEXT, registration_date TEXT, gst_bp INTEGER, status TEXT, cancelled_on TEXT, cancel_reason TEXT, channel_partner_id INTEGER, brokerage_bp INTEGER, created_by INTEGER, created_at TEXT, deleted_at TEXT, list_price_paise INTEGER, discount_reason TEXT, approved_by INTEGER, unit_snapshot TEXT, erased_at TEXT
 ### sal_brokerage_payments
 id INTEGER PK, booking_id INTEGER NN, partner_id INTEGER NN, amount_paise INTEGER NN, tds_paise INTEGER NN, paid_on TEXT NN, mode TEXT, ref_no TEXT, note TEXT, reversed_at TEXT, created_at TEXT
+### sal_cost_sheet_lines
+id INTEGER PK, sheet_id INTEGER NN, label TEXT NN, kind TEXT NN, amount_paise INTEGER NN
+### sal_cost_sheets
+id INTEGER PK, unit_id INTEGER NN, lead_id INTEGER, booking_id INTEGER, version INTEGER NN, area_basis TEXT NN, area_sqft REAL NN, base_rate_paise_per_sqft INTEGER NN, base_paise INTEGER NN, additions_paise INTEGER NN, discount_paise INTEGER NN, list_paise INTEGER NN, agreement_value_paise INTEGER NN, below_list_paise INTEGER NN, gst_bp INTEGER NN, gst_paise INTEGER NN, stamp_duty_bp INTEGER NN, stamp_duty_paise INTEGER NN, registration_paise INTEGER NN, total_paise INTEGER NN, status TEXT NN, note TEXT, created_by INTEGER, approved_by INTEGER, approved_at TEXT, decision_note TEXT, created_at TEXT
 ### sal_demands
-id INTEGER PK, booking_id INTEGER NN, milestone_id INTEGER, stage_id INTEGER, label TEXT NN, amount_paise INTEGER NN, gst_paise INTEGER, due_date TEXT, settled_paise INTEGER NN, status TEXT, letter_document_id INTEGER, sent_at TEXT, created_at TEXT
+id INTEGER PK, booking_id INTEGER NN, milestone_id INTEGER, stage_id INTEGER, label TEXT NN, amount_paise INTEGER NN, gst_paise INTEGER, due_date TEXT, settled_paise INTEGER NN, status TEXT, letter_document_id INTEGER, sent_at TEXT, created_at TEXT, demand_no TEXT
+### sal_handover
+id INTEGER PK, booking_id INTEGER NN, status TEXT NN, possession_offered_on TEXT, possession_given_on TEXT, oc_reference TEXT, notes TEXT, opened_by INTEGER, created_at TEXT
+### sal_handover_items
+id INTEGER PK, handover_id INTEGER NN, label TEXT NN, done INTEGER NN, done_on TEXT, note TEXT, document_id INTEGER, sort_order INTEGER NN
 ### sal_interest_waivers
 id INTEGER PK, demand_id INTEGER NN, amount_paise INTEGER NN, reason TEXT NN, status TEXT NN, requested_by INTEGER, approved_by INTEGER, created_at TEXT
 ### sal_inventory
@@ -125,6 +141,8 @@ id INTEGER PK, project_id INTEGER, name TEXT NN, phone TEXT NN, email TEXT, sour
 id INTEGER PK, firm TEXT NN, contact TEXT, phone TEXT, rera_no TEXT, brokerage_default_bp INTEGER, notes TEXT, active INTEGER, created_at TEXT, deleted_at TEXT
 ### sal_plan_stages
 id INTEGER PK, project_id INTEGER NN, stage_name TEXT NN, pct_bp INTEGER NN, milestone_key TEXT, sort_order INTEGER, retired INTEGER NN
+### sal_receipt_requests
+id INTEGER PK, booking_id INTEGER NN, demand_id INTEGER, amount_paise INTEGER NN, tds_paise INTEGER NN, mode TEXT, ref_no TEXT, received_on TEXT, note TEXT, account TEXT NN, kind TEXT NN, status TEXT NN, requested_by INTEGER, decided_by INTEGER, decided_at TEXT, decision_note TEXT, receipt_id INTEGER, created_at TEXT
 ### sal_receipts
 id INTEGER PK, booking_id INTEGER NN, demand_id INTEGER, amount_paise INTEGER NN, tds_paise INTEGER NN, mode TEXT, ref_no TEXT, received_on TEXT NN, received_by INTEGER, note TEXT, reversed_at TEXT, reversal_note TEXT, created_at TEXT, receipt_no TEXT, account TEXT NN, reversed_by INTEGER, kind TEXT NN
 ### sal_refunds
@@ -144,7 +162,7 @@ id INTEGER PK, project_id INTEGER NN, report_date TEXT NN, wing TEXT, work_summa
 ### site_milestones
 id INTEGER PK, project_id INTEGER NN, wing TEXT, name TEXT NN, milestone_key TEXT, planned_date TEXT, actual_date TEXT, status TEXT, sort_order INTEGER, created_at TEXT, deleted_at TEXT
 ### site_snags
-id INTEGER PK, project_id INTEGER NN, wing TEXT, location TEXT, title TEXT NN, severity TEXT, status TEXT, assigned_to INTEGER, due_date TEXT, closed_at TEXT, created_by INTEGER, client_uuid TEXT, created_at TEXT, deleted_at TEXT
+id INTEGER PK, project_id INTEGER NN, wing TEXT, location TEXT, title TEXT NN, severity TEXT, status TEXT, assigned_to INTEGER, due_date TEXT, closed_at TEXT, created_by INTEGER, client_uuid TEXT, created_at TEXT, deleted_at TEXT, unit_id INTEGER
 ### stk_balance
 id INTEGER PK, project_id INTEGER NN, item_id INTEGER NN, qty REAL NN, reorder_level REAL NN
 ### stk_items
@@ -233,11 +251,21 @@ id TEXT PK, source TEXT, seen_at TEXT
 - pty_funds:idx_pty_fund_project
 - pty_funds:idx_pty_fund_user
 - sal_activities:idx_activity_lead
+- sal_adjustments:idx_adj_booking
+- sal_adjustments:uq_adj_no
+- sal_booking_loans:idx_loan_booking
+- sal_booking_parties:idx_party_booking
 - sal_bookings:idx_booking_project
 - sal_bookings:uq_booking_one_active_per_unit
 - sal_brokerage_payments:idx_brokerage_booking
+- sal_cost_sheet_lines:idx_cs_lines
+- sal_cost_sheets:idx_cs_unit
+- sal_cost_sheets:idx_cs_status
 - sal_demands:idx_demand_due
 - sal_demands:idx_demand_booking
+- sal_demands:uq_demand_no
+- sal_handover:idx_ho_due
+- sal_handover_items:idx_ho_items
 - sal_interest_waivers:idx_waiver_demand
 - sal_inventory:idx_inventory_project
 - sal_inventory:uq_inventory_unit
@@ -247,6 +275,7 @@ id TEXT PK, source TEXT, seen_at TEXT
 - sal_leads:idx_lead_phone
 - sal_leads:idx_lead_phone_norm
 - sal_leads:idx_lead_project_status
+- sal_receipt_requests:idx_rcpt_req_status
 - sal_receipts:idx_receipt_booking
 - sal_receipts:uq_receipt_no
 - sal_refunds:idx_refund_booking
@@ -264,6 +293,7 @@ id TEXT PK, source TEXT, seen_at TEXT
 - site_milestones:idx_milestone_project
 - site_milestones:uq_milestone_key
 - site_snags:idx_snag_project
+- site_snags:idx_snag_unit
 - stk_balance:uq_stk_balance
 - stk_items:uq_stk_item_name
 - stk_moves:idx_stk_moves_project
@@ -300,3 +330,11 @@ id TEXT PK, source TEXT, seen_at TEXT
 ## 0021-0022 additions
 - pro_professionals: register of architects, engineers, advocates, CAs and other consultants (PAN encrypted). pro_party_docs.kind = contract | document, and party_type can now be 'professional' as well as 'vendor' and 'contractor'.
 - ai_log: AI usage counts only (no questions or answers stored). See docs/AI.md.
+
+## 0023 additions (WP-11 to WP-14, sales completeness)
+- Numbers: receipts `RC-<project>-<FY>-00001`, demand letters `DL-<project>-<FY>-0001` (given when first printed or sent), credit/debit/adjustment notes `CN|DN|AD-<project>-<FY>-0001`. FY = April to March in IST. Counters keys `rcpt:|dem:|cn:|dn:|ad:<project>:<FY>`; the number is taken in the same batch as the document. Older receipts keep their old `RC-<project>-00001` numbers.
+- sal_receipt_requests: large receipts waiting for a second person (setting sales.receipt_approval_limit_paise, 0 = off). Nothing in reports or balances changes until approved, then a normal receipt is posted.
+- sal_adjustments: credit notes, debit notes, adjustments. Approval changes the demand's amount and GST (never below what was paid); reversal restores it.
+- sal_booking_parties: co-applicants (PAN encrypted, Aadhaar kept only as XXXX XXXX 1234).
+- sal_cost_sheets + sal_cost_sheet_lines: immutable versions; one live version per flat and lead; approval bands use below_list_paise (how far under the rate card) against setting sales.discount_pm_limit_paise. A booking can take its price from an approved sheet.
+- sal_handover, sal_handover_items, sal_booking_loans; site_snags.unit_id; sal_inventory.status gains 'possessed'. Checklist template is the setting sales.handover_template (items separated by ;) or a starter list.

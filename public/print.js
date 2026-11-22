@@ -84,7 +84,7 @@ async function render(d) {
   } else if (d.kind === 'demand') {
     const x = d.demand; const total = x.amount_paise + (x.gst_paise || 0);
     body = `<div class="doc-title">Demand Letter</div>
-      <div class="two"><div><b>To:</b> ${e(x.customer_name)}<br>${e(x.customer_address || '')}</div><div style="text-align:right"><b>Date:</b> ${e(new Date().toLocaleDateString('en-IN'))}<br><b>Flat:</b> ${e((x.wing ? x.wing + '-' : '') + x.unit_no)}<br><b>Project:</b> ${e(x.project_name)}${x.rera_no ? '<br>MahaRERA ' + e(x.rera_no) : ''}</div></div>
+      <div class="two"><div><b>To:</b> ${e(x.customer_name)}<br>${e(x.customer_address || '')}</div><div style="text-align:right"><b>Date:</b> ${e(new Date().toLocaleDateString('en-IN'))}${x.demand_no ? `<br><b>Demand No:</b> ${e(x.demand_no)}` : ''}<br><b>Flat:</b> ${e((x.wing ? x.wing + '-' : '') + x.unit_no)}<br><b>Project:</b> ${e(x.project_name)}${x.rera_no ? '<br>MahaRERA ' + e(x.rera_no) : ''}</div></div>
       <p>Dear ${e(x.customer_name)},</p>
       <p>As per the agreed payment plan, the stage <b>“${e(x.label)}”</b> has been reached. Kindly pay the amount below${x.due_date ? ' on or before <b>' + e(x.due_date) + '</b>' : ''}.</p>
       <table><tr><th>Particulars</th><th class="r">Amount</th></tr><tr><td>${e(x.label)}</td><td class="r">${inr(x.amount_paise)}</td></tr>
@@ -95,7 +95,7 @@ async function render(d) {
   } else if (d.kind === 'receipt') {
     const r = d.receipt;
     body = `<div class="doc-title">Receipt</div>
-      <div class="two"><div><b>Received from:</b> ${e(r.customer_name)}<br><b>Flat:</b> ${e((r.wing ? r.wing + '-' : '') + r.unit_no)}, ${e(r.project_name)}</div><div style="text-align:right"><b>Receipt #</b> ${e(r.id)}<br><b>Date:</b> ${e(r.received_on)}</div></div>
+      <div class="two"><div><b>Received from:</b> ${e(r.customer_name)}<br><b>Flat:</b> ${e((r.wing ? r.wing + '-' : '') + r.unit_no)}, ${e(r.project_name)}</div><div style="text-align:right"><b>Receipt No:</b> ${e(r.receipt_no || r.id)}<br><b>Date:</b> ${e(r.received_on)}</div></div>
       <table><tr><th>Towards</th><th>Mode / reference</th><th class="r">Amount</th></tr>
       <tr><td>${e(r.demand_label || 'Booking payment')}</td><td>${e(r.mode || '')} ${e(r.ref_no || '')}</td><td class="r">${inr(r.amount_paise)}</td></tr>
       ${r.tds_paise ? `<tr><td colspan="2">TDS deducted by customer</td><td class="r">${inr(r.tds_paise)}</td></tr>` : ''}</table>
@@ -121,6 +121,28 @@ async function render(d) {
       ${r.advance_recovery_paise ? `<tr><td>Less advance recovery</td><td class="r">− ${inr(r.advance_recovery_paise)}</td></tr>` : ''}${r.other_deductions_paise ? `<tr><td>Less other deductions</td><td class="r">− ${inr(r.other_deductions_paise)}</td></tr>` : ''}
       ${r.gst_paise ? `<tr><td>Add GST (${(r.gst_bp / 100).toFixed(1)}%)</td><td class="r">${inr(r.gst_paise)}</td></tr>` : ''}${r.tds_paise ? `<tr><td>Less TDS (${(r.tds_bp / 100).toFixed(1)}%)</td><td class="r">− ${inr(r.tds_paise)}</td></tr>` : ''}
       <tr><th>Net payable</th><th class="r">${inr(r.net_paise)}</th></tr></table><div class="words">${rupeeWords(r.net_paise)}</div>`;
+  } else if (d.kind === 'costsheet') {
+    const c = d.sheet;
+    body = `<div class="doc-title">Cost Sheet${d.draft ? ' (not yet approved)' : ''}</div>
+      <div class="two"><div><b>Prepared for:</b> ${e(c.lead_name || 'Prospective buyer')}<br><b>Flat:</b> ${e((c.wing ? c.wing + '-' : '') + c.unit_no)}${c.type ? ', ' + e(c.type) : ''}</div>
+      <div style="text-align:right"><b>Project:</b> ${e(c.project_name)}${c.rera_no ? '<br>MahaRERA ' + e(c.rera_no) : ''}<br><b>Version:</b> ${e(c.version)}<br><b>Date:</b> ${e(String(c.created_at).substring(0, 10))}</div></div>
+      <table><tr><th>Particulars</th><th class="r">Amount</th></tr>
+      <tr><td>Basic price: ${e(c.area_sqft)} sq ft (${c.area_basis === 'carpet' ? 'carpet' : 'RERA carpet'}) at ${inr(c.base_rate_paise_per_sqft)} per sq ft</td><td class="r">${inr(c.base_paise)}</td></tr>
+      ${d.lines.map((l) => `<tr><td>${e(l.label)}</td><td class="r">${l.kind === 'discount' ? '− ' : ''}${inr(l.amount_paise)}</td></tr>`).join('')}
+      <tr><th>Agreement value</th><th class="r">${inr(c.agreement_value_paise)}</th></tr>
+      <tr><td>GST @ ${(c.gst_bp / 100).toFixed(2)}%</td><td class="r">${inr(c.gst_paise)}</td></tr>
+      <tr><td>Stamp duty @ ${(c.stamp_duty_bp / 100).toFixed(2)}%</td><td class="r">${inr(c.stamp_duty_paise)}</td></tr>
+      <tr><td>Registration fee</td><td class="r">${inr(c.registration_paise)}</td></tr>
+      <tr><th>Total payable by the buyer</th><th class="r">${inr(c.total_paise)}</th></tr></table>
+      <div class="words">${rupeeWords(c.total_paise)}</div>
+      <p style="font-size:10pt;color:#555">Taxes, stamp duty and registration charges are as per the rates on the date of this sheet and may change. Confirm with your CA / advocate.</p>`;
+  } else if (d.kind === 'creditnote') {
+    const n = d.note; const label = { credit_note: 'Credit Note', debit_note: 'Debit Note', adjustment: 'Adjustment Note' }[n.kind] || 'Note';
+    body = `<div class="doc-title">${label}</div>
+      <div class="two"><div><b>To:</b> ${e(n.customer_name)}<br><b>Flat:</b> ${e((n.wing ? n.wing + '-' : '') + n.unit_no)}, ${e(n.project_name)}</div><div style="text-align:right"><b>Note No:</b> ${e(n.adj_no || '(not approved)')}<br><b>Date:</b> ${e(String(n.approved_at || n.created_at).substring(0, 10))}</div></div>
+      <table><tr><th>Against</th><th class="r">Amount</th></tr><tr><td>${e(n.demand_label)}</td><td class="r">${inr(n.amount_paise)}</td></tr>${n.gst_paise ? `<tr><td>GST</td><td class="r">${inr(n.gst_paise)}</td></tr>` : ''}
+      <tr><th>Total ${n.kind === 'debit_note' ? 'added to' : 'reduced from'} the amount due</th><th class="r">${inr(n.amount_paise + n.gst_paise)}</th></tr></table>
+      <div class="words">${rupeeWords(n.amount_paise + n.gst_paise)}</div><p><b>Reason:</b> ${e(n.reason)}</p>${n.status === 'reversed' ? '<p><b>This note has been reversed.</b></p>' : ''}`;
   } else if (d.kind === 'statement') {
     const bk = d.booking; const it = d.interest || { accrued: 0, waived: 0, paid: 0, due: 0 };
     const totalDem = d.demands.reduce((t, x) => t + x.amount_paise + (x.gst_paise || 0), 0); const rec = d.receipts.filter((r) => r.kind !== 'interest').reduce((t, r) => t + r.amount_paise + (r.tds_paise || 0), 0);

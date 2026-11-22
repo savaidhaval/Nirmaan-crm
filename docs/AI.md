@@ -6,7 +6,7 @@
 
 **Three things it does**
 1. **Ask the CRM.** The question is matched to topics (vendor bills, customer dues, approvals, budget, stock, petty cash, contractors, leads, site reports, expiring contracts, purchase orders). The server runs fixed read-only queries for the topics the person's role may see, in the projects they may see, and gives the model only those lines. The answer shows "Based on" and the facts. Amounts in the answer that are not in the facts are flagged.
-2. **Write a message.** Lead follow-up, payment reminder, vendor messages. English, Hindi or Marathi; WhatsApp or email style. A draft box to edit and copy. Nothing is ever sent by the system.
+2. **Write a message.** Lead follow-up, payment reminder, vendor messages. English only (Owner's decision); WhatsApp or email style. A draft box to edit and copy. Nothing is ever sent by the system.
 3. **Summarise.** A lead's history, a project's week, or pasted text.
 
 **Safety rules built in**

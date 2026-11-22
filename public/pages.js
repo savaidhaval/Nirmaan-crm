@@ -636,6 +636,9 @@ const SETTING_LABELS = {
   'ai.enabled': ['AI assistant (ask the CRM, draft messages, summaries)', 'onoff'],
   'ai.daily_limit': ['AI: most requests per day for the whole team', 'number'],
   'ai.model': ['AI model name (leave as it is unless told otherwise)', 'text'],
+  'sales.receipt_approval_limit_paise': ['Receipts of this amount or more need a second person to approve (₹, 0 = off)', 'money'],
+  'sales.discount_pm_limit_paise': ['Largest discount below the rate card the PM may approve on a cost sheet (₹)', 'money'],
+  'sales.handover_template': ['Handover checklist items, separated by ; (blank = starter list)', 'text'],
   'petty.low_balance_paise': ['Petty cash: warn when a fund falls below (₹)', 'money'],
   'budget.gst_basis': ['Budget figures: with or without GST (confirm with your CA)', 'basis'],
   'con.enabled': ['Contractors module (work orders, RA bills)', 'onoff'],
@@ -1022,7 +1025,7 @@ async function bookingDetail(id) {
   const ov = document.createElement('div');
   ov.className = 'modal-overlay';
   ov.innerHTML = `<div class="modal"><h2>${esc(d.booking.customer_name)}</h2><p class="muted">${esc(d.booking.wing || '')}-${esc(d.booking.unit_no)} · ${moneyP(d.booking.agreed_price_paise)}</p>
-    <h3>Demands</h3>${d.demands.map((x) => `<div class="card"><div class="row"><div><b>${esc(x.label)}</b><p class="muted">${moneyP(x.amount_paise)} + GST ${moneyP(x.gst_paise)}${x.due_date ? ' · due ' + esc(x.due_date) : ''}</p></div>${statusChip(x.status)}</div><div class="row-btns">${['ready', 'partial', 'scheduled'].includes(x.status) && userCanClient('sales', 'E') ? `<button class="btn small" data-rcpt="${x.id}">Record receipt</button>` : ''}<button class="btn small" data-pdem="${x.id}">Print demand letter</button></div></div>`).join('')}
+    <h3>Demands</h3>${d.demands.map((x) => `<div class="card"><div class="row"><div><b>${esc(x.label)}</b><p class="muted">${moneyP(x.amount_paise)} + GST ${moneyP(x.gst_paise)}${x.due_date ? ' · due ' + esc(x.due_date) : ''}${x.demand_no ? ' · ' + esc(x.demand_no) : ''}</p></div>${statusChip(x.status)}</div><div class="row-btns">${['ready', 'partial', 'scheduled'].includes(x.status) && userCanClient('sales', 'E') ? `<button class="btn small" data-rcpt="${x.id}">Record receipt</button>` : ''}<button class="btn small" data-pdem="${x.id}">Print demand letter</button></div></div>`).join('')}
     <h3>Receipts</h3>${d.receipts.map((r) => `<p>${esc(r.received_on)} · ${moneyP(r.amount_paise)}${r.tds_paise ? ' + TDS ' + moneyP(r.tds_paise) : ''} · ${esc(r.mode || '')} <button class="btn small" data-prcp="${r.id}">Print</button></p>`).join('') || '<p class="muted">None yet.</p>'}
     <div class="modal-actions">${d.booking.status !== 'cancelled' && userCanClient('sales', 'A') ? '<button class="btn" id="bk-cancel" style="color:#dc2626">Cancel booking</button>' : ''}<button class="btn btn-primary" id="bk-close">Close</button></div></div>`;
   document.body.appendChild(ov);
@@ -1036,7 +1039,7 @@ async function bookingDetail(id) {
   ov.querySelectorAll('[data-rcpt]').forEach((b) => {
     b.onclick = async () => {
       const v = await openForm({ title: 'Record receipt', fields: [{ name: 'amount_paise', label: 'Amount received (₹)', type: 'money', required: true }, { name: 'tds_paise', label: 'TDS deducted (₹)', type: 'money' }, { name: 'mode', label: 'Mode', type: 'select', options: [['bank', 'Bank transfer'], ['cheque', 'Cheque'], ['upi', 'UPI'], ['cash', 'Cash']] }, { name: 'ref_no', label: 'Reference / cheque no.' }, { name: 'received_on', label: 'Date', type: 'date', value: today() }] });
-      if (v && await act(api(`/api/sales/bookings/${id}/receipts`, { method: 'POST', body: { ...v, demand_id: Number(b.dataset.rcpt) } }), 'Receipt saved')) { ov.remove(); bookingDetail(id); }
+      if (v) { const r = await act(api(`/api/sales/bookings/${id}/receipts`, { method: 'POST', body: { ...v, demand_id: Number(b.dataset.rcpt) } })); if (r) { toast(r.data && r.data.pending ? r.data.message : 'Receipt saved', r.data && r.data.pending ? 8000 : 3000); ov.remove(); bookingDetail(id); } }
     };
   });
 }

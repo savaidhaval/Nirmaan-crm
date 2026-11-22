@@ -4,7 +4,7 @@
 import { runModel, AiError } from '../core/ai.js';
 import { TOPICS, pickTopics, gatherFacts, leadFacts, demandFacts, vendorFacts, projectWeekFacts } from './ai_facts.js';
 
-const LANG = { en: 'English', hi: 'Hindi (Devanagari script)', mr: 'Marathi (Devanagari script)' };
+const LANG = { en: 'English' };   // English only, by the Owner's decision
 const TONE = { polite: 'polite and warm', firm: 'polite but firm' };
 const rupees = (p) => '₹' + Math.round(Number(p) / 100).toLocaleString('en-IN');
 

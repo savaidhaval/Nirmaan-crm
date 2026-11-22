@@ -68,7 +68,7 @@ ok('unknown draft kind refused', (await o.call('POST', '/api/ai/draft', { kind: 
 ok('unknown lead gives not found', (await o.call('POST', '/api/ai/draft', { kind: 'lead_followup', id: 99999999 })).status === 404);
 
 // ---------- other drafts ----------
-const vd = await pur.call('POST', '/api/ai/draft', { kind: 'vendor_quote_request', id: vendor, lang: 'hi', channel: 'email', note: '100 bags OPC cement' });
+const vd = await pur.call('POST', '/api/ai/draft', { kind: 'vendor_quote_request', id: vendor, channel: 'email', note: '100 bags OPC cement' });
 ok('Purchase drafts a quote request to a vendor', vd.status === 200 && vd.data.channel === 'email' && vd.data.facts.join(' ').includes('zz Vendor ' + run));
 ok('site cannot draft vendor messages', (await site.call('POST', '/api/ai/draft', { kind: 'vendor_po_followup', id: vendor })).status === 403);
 ok('sales cannot draft payment reminders', (await sales.call('POST', '/api/ai/draft', { kind: 'payment_reminder', id: 1 })).status === 403);

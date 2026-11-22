@@ -234,7 +234,14 @@ export function registerSalesOps(router, h) {
       if (!['available', 'held'].includes(unit.status)) return json({ ok: false, error: unit.status === 'booked' ? 'This unit is already booked.' : 'This flat is not available.' }, 409);
 
       const list = unit.price_paise + (unit.floor_rise_paise || 0);
-      const agreed = Math.round(Number(b.agreed_price_paise) || list);
+      // A booking can take its price from an approved cost sheet: the discount was already approved there, so the per-role limit below is skipped.
+      let sheet = null;
+      if (b.cost_sheet_id) {
+        const chk = await shared.approvedSheetForBooking(env, Number(b.cost_sheet_id), unit);
+        if (chk.error) return json({ ok: false, error: chk.error }, 400);
+        sheet = chk.sheet;
+      }
+      const agreed = sheet ? sheet.agreement_value_paise : Math.round(Number(b.agreed_price_paise) || list);
       if (!(agreed > 0) || !(list > 0)) return json({ ok: false, error: 'Agreed price is required.' }, 400);
       const token = Math.round(Number(b.token_paise) || 0);
       if (token < 0) return json({ ok: false, error: 'Invalid token amount.' }, 400);
@@ -245,10 +252,13 @@ export function registerSalesOps(router, h) {
       let discountBp = 0; let approvedBy = null;
       if (agreed < list) {
         discountBp = Math.round((list - agreed) * 10000 / list);
-        if (String(b.discount_reason || '').trim().length < 5) return json({ ok: false, error: 'Give a reason for the discount (price is below the rate card).' }, 400);
-        const limit = user.role === 'owner' ? 10000 : user.role === 'pm' ? await num(env, 'sales.pm_max_discount_bp', 300) : await num(env, 'sales.max_discount_bp', 100);
-        if (discountBp > limit) return json({ ok: false, error: `A discount of ${(discountBp / 100).toFixed(2)}% is above your limit (${(limit / 100).toFixed(2)}%). The ${user.role === 'pm' ? 'Owner' : 'PM or Owner'} must book it.` }, 403);
-        if (manager) approvedBy = user.user_id;
+        if (sheet) approvedBy = sheet.approved_by;
+        else {
+          if (String(b.discount_reason || '').trim().length < 5) return json({ ok: false, error: 'Give a reason for the discount (price is below the rate card).' }, 400);
+          const limit = user.role === 'owner' ? 10000 : user.role === 'pm' ? await num(env, 'sales.pm_max_discount_bp', 300) : await num(env, 'sales.max_discount_bp', 100);
+          if (discountBp > limit) return json({ ok: false, error: `A discount of ${(discountBp / 100).toFixed(2)}% is above your limit (${(limit / 100).toFixed(2)}%). The ${user.role === 'pm' ? 'Owner' : 'PM or Owner'} must book it.` }, 403);
+          if (manager) approvedBy = user.user_id;
+        }
       }
 
       const stages = (await env.DB.prepare('SELECT * FROM sal_plan_stages WHERE project_id = ? AND retired = 0 ORDER BY sort_order, id').bind(unit.project_id).all()).results;
@@ -268,7 +278,7 @@ export function registerSalesOps(router, h) {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'token', ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
         .bind(unit.project_id, unit.id, b.lead_id ? Number(b.lead_id) : (unit.hold_lead_id || null), name, String(b.phone || '').slice(0, 20), String(b.email || '').slice(0, 120), String(b.address || '').slice(0, 300),
           b.pan ? 'enc:' + (await encryptSetting(env, String(b.pan).trim().toUpperCase())) : '', token, agreed, gstBp, now.substring(0, 10), user.user_id, now, partnerId, partnerId ? Math.round(Number(b.brokerage_bp) || 0) || null : null,
-          list, discountBp ? String(b.discount_reason).slice(0, 300) : null, approvedBy, snapshot).run();
+          list, discountBp ? String(b.discount_reason || (sheet ? `Per approved cost sheet v${sheet.version}` : '')).slice(0, 300) : null, approvedBy, snapshot).run();
       const bookingId = ins.meta.last_row_id;
       const stmts = [];
       let allocated = 0;
@@ -278,6 +288,7 @@ export function registerSalesOps(router, h) {
         stmts.push(env.DB.prepare('INSERT INTO sal_demands (booking_id, stage_id, label, amount_paise, gst_paise, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
           .bind(bookingId, st.id, st.stage_name, amount, Math.round(amount * gstBp / 10000), st.milestone_key ? 'scheduled' : 'ready', now));
       });
+      if (sheet) stmts.push(env.DB.prepare('UPDATE sal_cost_sheets SET booking_id = ? WHERE id = ? AND booking_id IS NULL').bind(bookingId, sheet.id));
       const leadId = b.lead_id ? Number(b.lead_id) : unit.hold_lead_id;
       if (leadId) stmts.push(env.DB.prepare("UPDATE sal_leads SET status = 'booked', next_followup_at = NULL WHERE id = ?").bind(leadId));
       stmts.push(env.DB.prepare('INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, ?, ?, ?, ?, ?)')
@@ -291,6 +302,40 @@ export function registerSalesOps(router, h) {
       return serverError(e, 'booking-create');
     }
   }));
+
+  // ---------- Document numbers: April-March financial year (IST), taken from a counter inside the same batch as the document ----------
+  const istNow = () => new Date(Date.now() + 19800000);
+  const fyOf = (d = istNow()) => { const y = d.getUTCFullYear(), m = d.getUTCMonth() + 1; const a = m >= 4 ? y : y - 1; return `${a}-${String(a + 1).slice(2)}`; };
+  shared.fyOf = fyOf;
+
+  async function notifyApprovers(env, exceptUserId, title, body) {
+    const users = await env.DB.prepare("SELECT id FROM users WHERE role IN ('pm', 'owner') AND active = 1 AND deleted_at IS NULL AND id != ? LIMIT 20").bind(exceptUserId || 0).all();
+    if (!users.results.length) return;
+    const now = nowStr();
+    await env.DB.batch(users.results.map((u) => env.DB.prepare('INSERT INTO notifications (user_id, title, body, link, created_at) VALUES (?, ?, ?, ?, ?)').bind(u.id, title, body, 'sales', now)));
+  }
+
+  // Post a receipt: the number, the receipt, the demand settlement and the audit row are one atomic batch. Two receipts at the same moment get different numbers.
+  async function postReceipt(env, booking, f, user, extra = []) {
+    const proj = await env.DB.prepare('SELECT code FROM projects WHERE id = ?').bind(booking.project_id).first();
+    const fy = fyOf(); const key = `rcpt:${booking.project_id}:${fy}`; const prefix = `RC-${proj ? proj.code : booking.project_id}-${fy}-`;
+    const now = nowStr();
+    const stmts = [
+      env.DB.prepare('INSERT INTO counters (key, value) VALUES (?, 1) ON CONFLICT(key) DO UPDATE SET value = value + 1').bind(key),
+      env.DB.prepare(`INSERT INTO sal_receipts (booking_id, demand_id, amount_paise, tds_paise, mode, ref_no, received_on, received_by, note, receipt_no, account, kind, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ? || printf('%05d', (SELECT value FROM counters WHERE key = ?)), ?, ?, ?)`)
+        .bind(booking.id, f.demandId, f.amount, f.tds, f.mode, f.ref, f.received_on || now.substring(0, 10), user.user_id, String(f.note || '').slice(0, 300), prefix, key, f.account, f.kind, now),
+    ];
+    if (f.demandId) stmts.push(env.DB.prepare(`UPDATE sal_demands SET settled_paise = settled_paise + ?, status = CASE WHEN settled_paise + ? >= amount_paise + COALESCE(gst_paise, 0) THEN 'paid' ELSE 'partial' END WHERE id = ?`).bind(f.amount + f.tds, f.amount + f.tds, f.demandId));
+    stmts.push(...extra);
+    const res = await env.DB.batch(stmts);
+    const id = res[1].meta.last_row_id;
+    const rn = (await env.DB.prepare('SELECT receipt_no FROM sal_receipts WHERE id = ?').bind(id).first()).receipt_no;
+    await audit(env, user, 'create', 'sal_receipts', booking.id, `${f.kind === 'interest' ? 'Interest receipt' : 'Receipt'} ${rn} ${rupees(f.amount)} (${f.mode}${f.ref ? ' ' + f.ref : ''}, ${f.account}) from ${booking.customer_name}`);
+    return { receiptNo: rn, id };
+  }
+  shared.postReceipt = postReceipt;
+  shared.notifyApprovers = notifyApprovers;
 
   // ---------- Receipts: who may record, cash limit, numbering, no duplicates, reversal ----------
   router.post('/api/sales/bookings/:id/receipts', async (req, env) => withAuth(req, env, 'sales', 'E', async (req, env) => {
@@ -317,18 +362,18 @@ export function registerSalesOps(router, h) {
         if (!d) return json({ ok: false, error: 'That demand does not belong to this booking.' }, 400);
         demandId = d.id;
       }
-      const proj = await env.DB.prepare('SELECT code FROM projects WHERE id = ?').bind(booking.project_id).first();
-      const ctr = await env.DB.prepare('SELECT value FROM counters WHERE key = ?').bind('rc:' + booking.project_id).first();
-      const seq = (ctr ? Number(ctr.value) : 0) + 1;
-      await env.DB.prepare('INSERT INTO counters (key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value').bind('rc:' + booking.project_id, seq).run();
-      const receiptNo = `RC-${proj ? proj.code : booking.project_id}-${String(seq).padStart(5, '0')}`;
-      const now = nowStr();
-      const stmts = [env.DB.prepare('INSERT INTO sal_receipts (booking_id, demand_id, amount_paise, tds_paise, mode, ref_no, received_on, received_by, note, receipt_no, account, kind, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-        .bind(booking.id, demandId, amount, tds, mode, ref, b.received_on || now.substring(0, 10), req.user.user_id, String(b.note || '').slice(0, 300), receiptNo, account, kind, now)];
-      if (demandId) stmts.push(env.DB.prepare(`UPDATE sal_demands SET settled_paise = settled_paise + ?, status = CASE WHEN settled_paise + ? >= amount_paise + COALESCE(gst_paise, 0) THEN 'paid' ELSE 'partial' END WHERE id = ?`).bind(amount + tds, amount + tds, demandId));
-      stmts.push(env.DB.prepare('INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, ?, ?, ?, ?, ?)').bind(req.user.user_id, 'create', 'sal_receipts', booking.id, `${kind === 'interest' ? 'Interest receipt' : 'Receipt'} ${receiptNo} ${rupees(amount)} (${mode}${ref ? ' ' + ref : ''}, ${account}) from ${booking.customer_name}`, now));
-      await env.DB.batch(stmts);
-      return json({ ok: true, data: { receipt_no: receiptNo } });
+      const fields = { amount, tds, mode, ref, account, kind, demandId, received_on: b.received_on, note: b.note };
+      // Optional second-person approval for large receipts: it waits in its own list and changes nothing until approved.
+      const limit = Number(await getSetting(env, 'sales.receipt_approval_limit_paise')) || 0;
+      if (limit > 0 && amount + tds >= limit) {
+        if (ref && await env.DB.prepare("SELECT id FROM sal_receipt_requests WHERE booking_id = ? AND ref_no = ? AND mode = ? AND status IN ('pending', 'approving')").bind(booking.id, ref, mode).first()) return json({ ok: false, error: 'This receipt is already waiting for approval.' }, 409);
+        const rq = await env.DB.prepare(`INSERT INTO sal_receipt_requests (booking_id, demand_id, amount_paise, tds_paise, mode, ref_no, received_on, note, account, kind, requested_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+          .bind(booking.id, demandId, amount, tds, mode, ref, b.received_on || nowStr().substring(0, 10), String(b.note || '').slice(0, 300), account, kind, req.user.user_id, nowStr()).run();
+        await notifyApprovers(env, req.user.user_id, `Receipt to approve: ${rupees(amount)}`, `${booking.customer_name}, ${mode}${ref ? ' ' + ref : ''}. Recorded by ${req.user.name}.`);
+        return json({ ok: true, data: { pending: true, request_id: rq.meta.last_row_id, message: `A receipt of ${rupees(amount + tds)} or more needs a second person's approval. It has been sent to the PM or Owner.` } });
+      }
+      const posted = await postReceipt(env, booking, fields, req.user);
+      return json({ ok: true, data: { receipt_no: posted.receiptNo } });
     } catch (e) { return serverError(e, 'receipt'); }
   }));
 
@@ -523,14 +568,24 @@ export function registerSalesOps(router, h) {
   });
 }
 
-// Hourly: holds past 48 hours go back to the pool and the holder is told.
-export async function expireHolds(env, nowStr) {
-  const rows = await env.DB.prepare("SELECT id, wing, unit_no, hold_by FROM sal_inventory WHERE status = 'held' AND blocked_till IS NOT NULL AND blocked_till < datetime('now') LIMIT 100").all();
-  for (const u of rows.results) {
-    const r = await env.DB.prepare("UPDATE sal_inventory SET status = 'available', hold_by = NULL, hold_lead_id = NULL, hold_at = NULL, blocked_till = NULL WHERE id = ? AND status = 'held' AND blocked_till < datetime('now')").bind(u.id).run();
-    if (r.meta.changes) {
-      await env.DB.prepare('INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (NULL, ?, ?, ?, ?, ?)').bind('hold_expired', 'sal_inventory', u.id, `${u.wing || ''}-${u.unit_no} hold expired and was released`, nowStr()).run();
-      if (u.hold_by) await env.DB.prepare('INSERT INTO notifications (user_id, title, body, link, created_at) VALUES (?, ?, ?, ?, ?)').bind(u.hold_by, `Hold expired: ${u.wing || ''}-${u.unit_no}`, 'The flat is available again. Convert holds into bookings with a token within 48 hours.', 'sales', nowStr()).run();
-    }
-  }
+// Hourly: holds past their time go back to the pool and the holder is told; holders also get a heads-up one hour before.
+// Set-based: a fixed handful of statements however many holds there are (the free plan allows about 50 queries per run).
+export async function expireHolds(env) {
+  await env.DB.batch([
+    // 1) heads-up for holds ending within the hour (once per flat per day)
+    env.DB.prepare(`INSERT INTO notifications (user_id, title, body, link, created_at)
+      SELECT i.hold_by, 'Hold ending soon: ' || COALESCE(i.wing || '-', '') || i.unit_no, 'Convert it into a booking with a token, or it returns to the pool at ' || substr(i.blocked_till, 12, 5) || '.', 'sales', datetime('now')
+      FROM sal_inventory i WHERE i.status = 'held' AND i.hold_by IS NOT NULL AND i.blocked_till > datetime('now') AND i.blocked_till <= datetime('now', '+1 hour') AND i.deleted_at IS NULL
+        AND NOT EXISTS (SELECT 1 FROM notifications n WHERE n.user_id = i.hold_by AND n.title = 'Hold ending soon: ' || COALESCE(i.wing || '-', '') || i.unit_no AND date(n.created_at) = date('now'))`),
+    // 2) tell the holders of expired holds, and record it
+    env.DB.prepare(`INSERT INTO notifications (user_id, title, body, link, created_at)
+      SELECT i.hold_by, 'Hold expired: ' || COALESCE(i.wing || '-', '') || i.unit_no, 'The flat is available again. Convert holds into bookings with a token within 48 hours.', 'sales', datetime('now')
+      FROM sal_inventory i WHERE i.status = 'held' AND i.hold_by IS NOT NULL AND i.blocked_till IS NOT NULL AND i.blocked_till < datetime('now') AND i.deleted_at IS NULL`),
+    env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at)
+      SELECT NULL, 'hold_expired', 'sal_inventory', i.id, COALESCE(i.wing || '-', '') || i.unit_no || ' hold expired and was released', datetime('now')
+      FROM sal_inventory i WHERE i.status = 'held' AND i.blocked_till IS NOT NULL AND i.blocked_till < datetime('now') AND i.deleted_at IS NULL`),
+    // 3) release them, all at once
+    env.DB.prepare(`UPDATE sal_inventory SET status = 'available', hold_by = NULL, hold_lead_id = NULL, hold_at = NULL, blocked_till = NULL
+      WHERE status = 'held' AND blocked_till IS NOT NULL AND blocked_till < datetime('now') AND deleted_at IS NULL`),
+  ]);
 }

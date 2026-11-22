@@ -102,3 +102,6 @@ Code complete; 14 API suites and 4 browser walkthroughs pass locally. Migrations
 
 ## Professionals, contracts, AI status
 Code complete; 16 API suites and 5 browser walkthroughs pass locally. Migrations 0018-0022 NOT applied to production. AI never run against the real Cloudflare model (mock only).
+
+## WP-11 to 14 status
+Code complete; 17 API suites and 6 browser walkthroughs pass locally. Migrations 0018-0023 NOT applied to production. Rates for GST, stamp duty and registration are not built in: they come from Settings (tax.*) or are typed per cost sheet.

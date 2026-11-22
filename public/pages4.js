@@ -60,7 +60,7 @@ function shortMoney(p) { const r = Number(p) / 100; if (r >= 1e7) return (r / 1e
 const emptyIllus = (msg) => `<div class="empty-state">${SV.building()}<p>${esc(msg)}</p></div>`;
 
 // ---------- Stacking plan ----------
-const STACK = { available: ['Available', '#dcfce7', '#166534'], token_locked: ['Token locked', '#fef3c7', '#92400e'], booked: ['Booked', '#dbeafe', '#1e40af'], registered: ['Registered', '#e9d5ff', '#6b21a8'], rehab: ['Rehab', '#e5e7eb', '#374151'] };
+const STACK = { available: ['Available', '#dcfce7', '#166534'], token_locked: ['Token locked', '#fef3c7', '#92400e'], booked: ['Booked', '#dbeafe', '#1e40af'], registered: ['Registered', '#e9d5ff', '#6b21a8'], possessed: ['Handed over', '#ccfbf1', '#115e59'], rehab: ['Rehab', '#e5e7eb', '#374151'] };
 let stackProject = 0;
 
 async function renderStacking(main) {
@@ -101,7 +101,7 @@ async function unitDrill(u) {
   const ov = document.createElement('div'); ov.className = 'modal-overlay';
   ov.innerHTML = `<div class="modal"><div class="row"><div><h2>${esc(u.wing ? u.wing + '-' : '')}${esc(u.unit_no)}</h2><p class="muted">Floor ${esc(u.floor ?? '—')} · ${esc(u.type || '')}</p></div><span class="chip" style="background:${bg};color:${fg};text-transform:none">${l}</span></div>
     <div class="kv"><span>Rate-card price</span><b>${moneyP(u.list_paise)}</b>${u.rate_sqft_paise ? `<span>Rate on RERA carpet</span><b>${moneyP(u.rate_sqft_paise)} / sq ft</b>` : ''}${u.rera_carpet_sqft ? `<span>RERA carpet</span><b>${esc(u.rera_carpet_sqft)} sq ft</b>` : ''}${u.carpet_sqft ? `<span>Carpet</span><b>${esc(u.carpet_sqft)} sq ft</b>` : ''}
-    ${u.customer ? `<span>Buyer</span><b>${esc(u.customer)}</b>` : ''}${u.agreed_paise ? `<span>Agreed price</span><b>${moneyP(u.agreed_paise)}</b>` : ''}${u.holder ? `<span>Held by</span><b>${esc(u.holder)} until ${esc(String(u.blocked_till).substring(0, 16))}</b>` : ''}</div>
+    ${u.customer ? `<span>Buyer</span><b>${esc(u.customer)}</b>` : ''}${u.agreed_paise ? `<span>Agreed price</span><b>${moneyP(u.agreed_paise)}</b>` : ''}${u.holder ? `<span>Held by</span><b>${esc(u.holder)}${u.holder_lead ? ' for ' + esc(u.holder_lead) : ''} until ${esc(String(u.blocked_till).substring(0, 16))}</b>` : ''}</div>
     <div class="row-btns">
       ${u.state === 'available' && canSell ? '<button class="btn small btn-primary" id="ud-hold">Hold 48h for a lead</button><button class="btn small" id="ud-book">Book</button>' : ''}
       ${u.state === 'token_locked' && canSell ? '<button class="btn small btn-primary" id="ud-book">Convert to booking</button><button class="btn small" id="ud-rel">Release</button>' : ''}${u.state === 'token_locked' && mgr ? '<button class="btn small" id="ud-ext">Extend 24h</button>' : ''}

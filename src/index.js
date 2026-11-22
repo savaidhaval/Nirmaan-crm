@@ -10,7 +10,8 @@ import { getSetting, setSetting, appKeyBytes } from './core/settings.js';
 import { query } from './core/db.js';
 import { sendMail, retryFailedEmails, sendDigest, notifyMissingDprs, getEmailConfig, esc as escHtml } from './core/mail.js';
 import * as gdrive from './core/gdrive.js';
-import { registerSalesOps, expireHolds, LEAD_TRANSITIONS } from './routes/sales_ops.js';
+import { registerSalesOps, expireHolds, LEAD_TRANSITIONS, shared as salesShared } from './routes/sales_ops.js';
+import { registerSales3, ensureDemandNumber, handoverDueSweep } from './routes/sales3.js';
 import { registerReports } from './routes/reports.js';
 import { registerFinance } from './routes/finance.js';
 import { registerProcurement2 } from './routes/procurement2.js';
@@ -537,7 +538,8 @@ const EDITABLE_SETTINGS = ['po.pm_approval_limit_paise', 'access.allow_second_ow
   'demand.due_days_after_milestone', 'share.default_expiry_days', 'share.default_max_views', 'files.brochure_max_mb', 'branding.apply_colours_to_app',
   'brochure.price_list_default_audience', 'storage.warn_percent', 'sales.max_holds_per_user', 'sales.max_discount_bp', 'sales.pm_max_discount_bp',
   'interest.rate_bp', 'interest.grace_days', 'interest.enabled', 'security.require_mfa_roles', 'tax.stamp_duty_bp', 'tax.metro_cess_bp', 'tax.women_concession_bp', 'tax.registration_bp', 'tax.registration_cap_paise', 'tax.gst_bp',
-  'con.enabled', 'con.pm_approval_limit_paise', 'con.gst_bp', 'con.tds_bp', 'budget.gst_basis', 'petty.low_balance_paise', 'ai.enabled', 'ai.daily_limit', 'ai.model'];
+  'con.enabled', 'con.pm_approval_limit_paise', 'con.gst_bp', 'con.tds_bp', 'budget.gst_basis', 'petty.low_balance_paise', 'ai.enabled', 'ai.daily_limit', 'ai.model',
+  'sales.receipt_approval_limit_paise', 'sales.discount_pm_limit_paise', 'sales.handover_template'];
 
 router.post('/api/settings/:key', async (req, env) => {
   return withAuth(req, env, 'users_settings', 'E', async (req, env) => {
@@ -924,6 +926,7 @@ router.post('/api/site/snags', async (req, env) => {
       const user = req.user;
       const body = await req.json();
       const { project_id, wing, location, title, severity, assigned_to, due_date, client_uuid } = body;
+      const unitId = body.unit_id ? Number(body.unit_id) : null;
       if (!project_id || !title) {
         return json({ ok: false, error: 'Project and title are required.' }, 400);
       }
@@ -931,12 +934,13 @@ router.post('/api/site/snags', async (req, env) => {
       if (!ids.includes(Number(project_id))) {
         return json({ ok: false, error: 'Not allowed.' }, 403);
       }
+      if (unitId && !(await env.DB.prepare('SELECT 1 AS x FROM sal_inventory WHERE id = ? AND project_id = ?').bind(unitId, Number(project_id)).first())) return json({ ok: false, error: 'That flat is not in this project.' }, 400);
       const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
       if (client_uuid) {
         const dup = await env.DB.prepare('SELECT id FROM site_snags WHERE client_uuid = ?').bind(client_uuid).first();
         if (dup) return json({ ok: true, data: { id: dup.id, duplicate: true } });
       }
-      const result = await env.DB.prepare(`INSERT INTO site_snags (project_id, wing, location, title, severity, assigned_to, due_date, created_by, client_uuid, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(project_id, wing || '', location || '', title, severity || 'medium', assigned_to || null, due_date || null, user.user_id, client_uuid || makeId(22), now).run();
+      const result = await env.DB.prepare(`INSERT INTO site_snags (project_id, wing, location, title, severity, assigned_to, due_date, created_by, client_uuid, created_at, unit_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(project_id, wing || '', location || '', title, severity || 'medium', assigned_to || null, due_date || null, user.user_id, client_uuid || makeId(22), now, unitId).run();
       await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, ?, 'site_snags', ?, ?, ?)`).bind(user.user_id, 'create', result.meta.last_row_id, `Snag created: ${title}`, now).run();
       return json({ ok: true, data: { id: result.meta.last_row_id } });
     } catch (e) {
@@ -1431,6 +1435,7 @@ router.get('/api/print/demand/:id', async (req, env) => {
     const d = await env.DB.prepare(`SELECT d.*, b.customer_name, b.address AS customer_address, b.project_id, b.gst_bp, i.unit_no, i.wing, pr.name AS project_name, pr.rera_no FROM sal_demands d JOIN sal_bookings b ON b.id = d.booking_id JOIN sal_inventory i ON i.id = b.unit_id JOIN projects pr ON pr.id = b.project_id WHERE d.id = ?`).bind(Number(req.params.id)).first();
     if (!d) return json({ ok: false, error: 'Demand not found.' }, 404);
     if (!(await visibleProjectIds(env, req.user)).includes(d.project_id)) return json({ ok: false, error: 'Not allowed.' }, 403);
+    d.demand_no = await ensureDemandNumber(env, d.id);
     return json({ ok: true, data: { kind: 'demand', draft: d.status === 'scheduled', demand: d, brand: await printBrand(env, d.project_id) } });
   });
 });
@@ -1483,7 +1488,7 @@ const EXPORT_TABLES = ['projects', 'apr_items', 'apr_events', 'drw_drawings', 'd
     'sal_leads', 'sal_activities', 'sal_visits', 'sal_inventory', 'sal_partners', 'sal_bookings', 'sal_plan_stages', 'sal_demands', 'sal_receipts', 'documents', 'audit_log',
     'pro_grn_items', 'pro_payments', 'ppl_staff', 'ppl_hiring', 'ppl_candidates', 'sal_brokerage_payments', 'sal_refunds', 'sal_interest_waivers', 'mkt_spend', 'brands', 'counters',
     'pro_indents', 'pro_indent_items', 'pro_rfq_items', 'pro_quote_items',
-    'site_dpr_labour', 'bud_heads', 'stk_items', 'stk_balance', 'stk_moves', 'pro_party_docs', 'pro_professionals', 'ai_log', 'pty_funds', 'pty_entries', 'con_contractors', 'con_work_orders', 'con_wo_items', 'con_ra_bills', 'con_ra_lines', 'con_payments', 'con_ledger'];
+    'site_dpr_labour', 'bud_heads', 'stk_items', 'stk_balance', 'stk_moves', 'pro_party_docs', 'pro_professionals', 'ai_log', 'sal_receipt_requests', 'sal_adjustments', 'sal_booking_parties', 'sal_cost_sheets', 'sal_cost_sheet_lines', 'sal_handover', 'sal_handover_items', 'sal_booking_loans', 'pty_funds', 'pty_entries', 'con_contractors', 'con_work_orders', 'con_wo_items', 'con_ra_bills', 'con_ra_lines', 'con_payments', 'con_ledger'];
 const EXPORT_PARTS = 3;
 
 async function buildExport(env, part = 1) {
@@ -1792,6 +1797,7 @@ router.post('/api/sales/demands/:id/email', async (req, env) => {
     const to = String(body.to || d.customer_email || '').trim();
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(to)) return json({ ok: false, error: 'This customer has no email address. Type one in.' }, 400);
     if (d.status === 'scheduled') return json({ ok: false, error: 'This payment stage has not been reached yet.' }, 400);
+    d.demand_no = await ensureDemandNumber(env, d.id);
     const brand = await printBrand(env, d.project_id);
     const total = d.amount_paise + (d.gst_paise || 0) - (d.settled_paise || 0);
     const inr = (p) => '₹' + (Number(p) / 100).toLocaleString('en-IN', { minimumFractionDigits: 2 });
@@ -2078,6 +2084,7 @@ registerContractors(router, { withAuth, json, serverError, visibleProjectIds, no
   onWoApproved: (env, wo) => checkHeadOver(env, getSetting, nowStr, wo.project_id, [wo.budget_head_id]) });
 registerBudget(router, { withAuth, json, serverError, visibleProjectIds, nowStr, getSetting, csvBom });
 registerSalesOps(router, { withAuth, json, serverError, visibleProjectIds, userCan, getSetting, nowStr, encryptSetting, clientIp, checkRateLimit });
+registerSales3(router, { withAuth, json, serverError, visibleProjectIds, getSetting, nowStr, encryptSetting, decryptSetting, csvBom, printBrand, shared: salesShared });
 
 // ---------- Branding routes ----------
 router.get('/api/branding', async (req, env) => {
@@ -3130,11 +3137,12 @@ async function runCron(cron, env) {
     // Hourly: retry failed emails (max 3 attempts each)
     await retryFailedEmails(env);
     await leadSlaNudges(env);
-    await expireHolds(env, nowStr);
+    await expireHolds(env);
     await raDueSweep(env, getSetting);
     await continueBackup(env);
     await lowStockSweep(env);
     await partyDocsSweep(env);
+    await handoverDueSweep(env);
   } else if (cron === '30 2 * * *') {
     // 08:00 IST digest to every active Owner
     const owners = await env.DB.prepare("SELECT email FROM users WHERE role = 'owner' AND active = 1 AND deleted_at IS NULL").all();

@@ -63,3 +63,11 @@
 - AI assistant (Cloudflare Workers AI, free allowance, off until the Owner switches it on): Ask the CRM (permission-filtered facts, shows its sources), write messages in English/Hindi/Marathi, summaries. Nothing is sent or changed by AI. See docs/AI.md.
 - Deploy workflow adds the AI binding at deploy time; CI starts the dev server with AI_MOCK so tests need no real model.
 - Migrations 0021-0022; tests professionals (23), ai (38) in CI; browser walkthrough (17 checks).
+
+## WP-11 to WP-14 sales completeness (2026-11-22)
+- AI assistant: English only (Hindi and Marathi removed by decision).
+- WP-11: receipt, demand-letter and credit-note numbers by financial year, race-safe (five receipts at once get five numbers); large receipts wait for a second person (setting); credit notes, debit notes and adjustments with approval, own numbers, reversal and print; numbering-gap report (CSV).
+- WP-12: flat card shows who holds it and for which lead; hold sweep rewritten to a fixed number of statements (was up to 300 queries) with a one-hour warning; co-applicants on a booking with PAN and Aadhaar kept private.
+- WP-13: cost sheets (rate x area, extra charges, discounts, GST, stamp duty, registration) with versions, PM/Owner approval bands, letterhead print, booking priced from an approved sheet, discount report.
+- WP-14: handover checklist (editable template), possession details, home-loan records, snags per flat, "possessed" status, due reminders, pending-handover report.
+- Migration 0023; code in `src/routes/sales3.js`, `public/pages11.js`; test `tests/sales3.mjs` (92 checks, in CI); browser walkthrough 25 checks.
