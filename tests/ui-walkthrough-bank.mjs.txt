@@ -1,0 +1,77 @@
+import { createRequire } from 'node:module';
+const { chromium } = createRequire(import.meta.url)('/opt/node-tools/node_modules/playwright');
+const BASE = process.env.BASE || 'http://localhost:8787', SHOTS = '/tmp/claude-0/scratch/shots';
+const run = Date.now().toString(36);
+let pass = 0, fail = 0; const ok = (n, c, x = '') => { c ? pass++ : fail++; console.log(`${c ? 'PASS' : 'FAIL'}  ${n}${c ? '' : '  ' + x}`); };
+class C { constructor() { this.cookie = ''; } async call(m, p, b) { const h = { 'X-NirmaanCRM': '1' }; if (this.cookie) h.cookie = this.cookie; let body; if (b) { h['Content-Type'] = 'application/json'; body = JSON.stringify(b); }
+  const r = await fetch(BASE + p, { method: m, headers: h, body }); const sc = r.headers.get('set-cookie'); if (sc) this.cookie = sc.split(';')[0]; let d = null; try { d = await r.json(); } catch (e) {} return { status: r.status, data: d && d.data, err: d && d.error }; } }
+const o = new C(); await o.call('POST', '/api/auth/login', { email: 'owner@test.local', password: 'CiStrongPass-12345' });
+const pid = (await o.call('POST', '/api/projects', { name: 'UI Tower ' + run, code: 'UI' + run.toUpperCase().slice(-5), budget_paise: 5e9 })).data.id;
+await o.call('POST', '/api/settings/con.enabled', { value: 'on' });
+await o.call('POST', '/api/settings/con.pm_approval_limit_paise', { value: 50000000 });
+const users = {};
+for (const role of ['site', 'pm', 'purchase', 'accounts', 'sales', 'viewer']) {
+  const email = `ui-${role}-${run}@test.local`; const r = await o.call('POST', '/api/users', { name: 'UI ' + role + ' ' + run, email, role, projects: role === 'site' ? [pid] : [] });
+  const c = new C(); await c.call('POST', '/api/auth/login', { email, password: r.data.temporaryPassword }); const pw = 'UiStrongPass-' + run;
+  await c.call('POST', '/api/auth/change-password', { currentPassword: r.data.temporaryPassword, newPassword: pw }); users[role] = { email, pw };
+}
+const browser = await chromium.launch();
+const ctxs = {};
+async function page(role) {
+  if (!ctxs[role]) {
+    const ctx = await browser.newContext({ viewport: { width: 390, height: 800 } });
+    const email = role === 'owner' ? 'owner@test.local' : users[role].email, password = role === 'owner' ? 'CiStrongPass-12345' : users[role].pw;
+    const r = await ctx.request.post(BASE + '/api/auth/login', { headers: { 'X-NirmaanCRM': '1', 'Content-Type': 'application/json' }, data: { email, password } });
+    if (!r.ok()) throw new Error('login ' + role + ' ' + r.status());
+    ctxs[role] = ctx;
+  }
+  const p = await ctxs[role].newPage(); p.on('dialog', (d) => d.accept()); p.on('pageerror', (e) => console.log('PAGEERROR', role, e.message));
+  await p.goto(BASE + '/'); await p.waitForFunction(() => typeof navigate === 'function' && typeof currentUser !== 'undefined' && currentUser, null, { timeout: 15000 }); return p;
+}
+const go = async (p, route) => { await p.evaluate((r) => navigate(r), route); await p.waitForTimeout(800); };
+const toastText = async (p) => { await p.waitForTimeout(500); return p.evaluate(() => (document.getElementById('toast') || {}).textContent || ''); };
+const submit = (p) => p.click('#modal-form button[type=submit]');
+const pick = (p, sel, label) => p.selectOption(sel, { label });
+const shot = (p, n) => p.screenshot({ path: `${SHOTS}/${n}.png` });
+import { writeFileSync } from 'node:fs';
+const proj = 'UI Tower ' + run;
+await o.call('POST', '/api/sales/plan-stages', { project_id: pid, stages: [{ stage_name: 'On booking', pct_bp: 10000 }] });
+await o.call('POST', '/api/settings/sales.receipt_approval_limit_paise', { value: 0 });
+const people = ['Rajesh Kulkarni', 'Sunita Deshpande', 'Anil Bhosale'];
+const dues = [];
+for (let n = 0; n < 3; n++) {
+  const price = 100000000 + n * 9000000;
+  const u = (await o.call('POST', '/api/sales/inventory', { project_id: pid, wing: 'M', floor: 1 + n, unit_no: 'BN' + n + run.slice(-3), type: '2BHK', carpet_sqft: 600, rera_carpet_sqft: 500, price_paise: price })).data.id;
+  const b = await o.call('POST', '/api/sales/bookings', { unit_id: u, customer_name: people[n] + ' ' + run.replace(/[0-9]/g, 'x').slice(0, 3), phone: '97' + String(40000000 + n), agreed_price_paise: price, token_paise: 0 }); if (b.status !== 200) throw new Error(JSON.stringify(b));
+  const det = (await o.call('GET', `/api/sales/bookings/${b.data.id}`)).data; dues.push(det.demands[0].amount_paise + (det.demands[0].gst_paise || 0));
+}
+const inr = (p) => (p / 100).toFixed(2);
+const csv = ['Txn Date,Narration,Chq/Ref No,Debit,Credit,Balance'];
+people.forEach((p, i) => csv.push(`0${2 + i}/11/2026,"NEFT-HDFC${run}-${p.toUpperCase()}",N${i}${run},,"${(dues[i] / 100).toLocaleString('en-IN', { minimumFractionDigits: 2 })}",9999.00`));
+for (let i = 0; i < 17; i++) csv.push(`1${i % 10}/11/2026,MISC CREDIT ${i},M${i}${run},,${(1111 + i * 13).toFixed(2)},1.00`);
+csv.push('20/11/2026,PAID TO VENDOR,CHQ1,5000.00,,1.00');
+writeFileSync('/tmp/claude-0/scratch/stmt.csv', csv.join('\n'));
+const a = await page('accounts'); await go(a, 'bank'); await a.waitForSelector('#bk-file');
+await a.setInputFiles('#bk-file', '/tmp/claude-0/scratch/stmt.csv'); await a.waitForSelector('#bk-go');
+ok('the columns are guessed from the headers', (await a.inputValue('#bk-date')) === '0' && (await a.inputValue('#bk-credit')) === '4' && (await a.inputValue('#bk-ref')) === '2');
+await shot(a, '120-bank-mapping');
+await a.click('#bk-go'); await a.waitForSelector('[data-bc]', { timeout: 20000 }); await a.waitForTimeout(800);
+let msg = (await a.textContent('#bk-msg')).replace(/\s+/g, ' ');
+ok('20 credit lines imported, the debit line left out, 3 suggestions', msg.includes('20 new') && msg.includes('3 with a suggestion') && msg.includes('1 debit'), msg);
+ok('three suggested cards each have a Confirm button', (await a.$$('[data-bc]')).length === 3);
+await shot(a, '121-bank-suggestions');
+for (let i = 0; i < 3; i++) { await a.locator('[data-bc]').first().click(); await a.waitForTimeout(1500); }
+ok('three receipts are made and linked', /confirmed/.test(await a.textContent('#bk-review')) && (await a.textContent('#bk-review')).includes('3 confirmed'), (await a.textContent('#bk-review')).slice(0, 120));
+const rec = (await o.call('GET', '/api/sales/bookings')).data.bookings.filter((b) => people.some((p) => b.customer_name.startsWith(p)));
+let total = 0; for (const b of rec) total += (await o.call('GET', `/api/sales/bookings/${b.id}`)).data.receipts.length;
+ok('exactly three receipts exist', total === 3, String(total));
+while ((await a.$$('[data-bi]')).length) { await a.locator('[data-bi]').first().click(); await a.waitForTimeout(450); }
+ok('the rest are ignored', (await a.textContent('#bk-review')).includes('17 ignored') || (await a.textContent('#bk-review')).includes('ignored'));
+await a.reload(); await a.waitForFunction(() => typeof navigate === 'function' && currentUser, null, { timeout: 15000 }); await go(a, 'bank'); await a.waitForSelector('#bk-file');
+await a.setInputFiles('#bk-file', '/tmp/claude-0/scratch/stmt.csv'); await a.waitForSelector('#bk-go'); await a.click('#bk-go'); await a.waitForTimeout(2500);
+msg = (await a.textContent('#bk-msg')).replace(/\s+/g, ' ');
+ok('importing the same file again adds nothing', msg.includes('0 new') && msg.includes('20 already imported'), msg);
+let total2 = 0; for (const b of rec) total2 += (await o.call('GET', `/api/sales/bookings/${b.id}`)).data.receipts.length;
+ok('and no extra receipts appear', total2 === 3);
+const s = await page('sales'); ok('Sales has no Bank statement menu', !(await s.evaluate(() => sidebarItems(currentUser.role).flatMap((g) => g[1]).some((i) => i.route === 'bank'))));
+await browser.close(); console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);
