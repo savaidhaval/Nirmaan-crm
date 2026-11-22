@@ -1,5 +1,6 @@
 // routes/procurement2.js — WP-4 procurement addendum: indents, multi-line RFQ + per-line quotes,
 // GRN by PO line, bill part-payments (reversed, never deleted), and procurement reports.
+import { inIds, idBinds } from '../core/permissions.js';
 
 const rupees = (p) => '₹' + (Number(p) / 100).toLocaleString('en-IN');
 const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
@@ -68,8 +69,8 @@ export function registerProcurement2(router, h) {
       const status = q.get('status');
       const rows = await env.DB.prepare(`SELECT i.*, u.name AS requested_by_name, (SELECT COUNT(*) FROM pro_indent_items x WHERE x.indent_id = i.id) AS item_count
         FROM pro_indents i LEFT JOIN users u ON u.id = i.requested_by
-        WHERE i.deleted_at IS NULL AND i.project_id IN (${ids.map(() => '?').join(',')})${status ? ' AND i.status = ?' : ''} ORDER BY i.id DESC LIMIT 100`)
-        .bind(...ids, ...(status ? [status] : [])).all();
+        WHERE i.deleted_at IS NULL AND i.project_id IN (${inIds(ids)})${status ? ' AND i.status = ?' : ''} ORDER BY i.id DESC LIMIT 100`)
+        .bind(...idBinds(ids), ...(status ? [status] : [])).all();
       return json({ ok: true, data: { indents: rows.results } });
     } catch (e) { return serverError(e, 'indent-list'); }
   }));
@@ -197,7 +198,7 @@ export function registerProcurement2(router, h) {
       const ids = await visibleProjectIds(env, req.user);
       if (!ids.length) return json({ ok: true, data: { pos: [] } });
       const rows = await env.DB.prepare(`SELECT p.id, p.po_no, p.status, p.project_id, v.name AS vendor_name FROM pro_pos p JOIN pro_vendors v ON v.id = p.vendor_id
-        WHERE p.deleted_at IS NULL AND p.status IN ('approved', 'part_received') AND p.project_id IN (${ids.map(() => '?').join(',')}) ORDER BY p.id DESC LIMIT 50`).bind(...ids).all();
+        WHERE p.deleted_at IS NULL AND p.status IN ('approved', 'part_received') AND p.project_id IN (${inIds(ids)}) ORDER BY p.id DESC LIMIT 50`).bind(...idBinds(ids)).all();
       return json({ ok: true, data: { pos: rows.results } });
     } catch (e) { return serverError(e, 'pos-to-receive'); }
   }));
@@ -339,10 +340,10 @@ export function registerProcurement2(router, h) {
       if (!MONEY_ROLES.includes(req.user.role)) return json({ ok: false, error: 'Not allowed.' }, 403);
       const ids = await visibleProjectIds(env, req.user);
       if (!ids.length) return json({ ok: true, data: { bills: [], payable_paise: 0 } });
-      const ph = ids.map(() => '?').join(',');
+      const ph = inIds(ids);
       const bills = await env.DB.prepare(`SELECT b.id, b.bill_no, b.amount_paise, b.tds_paise, b.status, b.due_date,
           COALESCE((SELECT SUM(x.amount_paise) FROM pro_payments x WHERE x.bill_id = b.id AND x.reversed_at IS NULL), 0) AS paid_paise
-        FROM pro_bills b WHERE b.vendor_id = ? AND (b.project_id IS NULL OR b.project_id IN (${ph})) ORDER BY b.id DESC LIMIT 200`).bind(Number(req.params.id), ...ids).all();
+        FROM pro_bills b WHERE b.vendor_id = ? AND (b.project_id IS NULL OR b.project_id IN (${ph})) ORDER BY b.id DESC LIMIT 200`).bind(Number(req.params.id), ...idBinds(ids)).all();
       let payableTotal = 0;
       const out = bills.results.map((r) => {
         const net = r.amount_paise - r.tds_paise;
@@ -363,7 +364,7 @@ export function registerProcurement2(router, h) {
       const rows = ids.length ? (await env.DB.prepare(`SELECT i.indent_no, p.name AS project, i.status, i.needed_by, i.created_at, u.name AS requested_by,
           (SELECT COUNT(*) FROM pro_indent_items x WHERE x.indent_id = i.id) AS items
         FROM pro_indents i JOIN projects p ON p.id = i.project_id LEFT JOIN users u ON u.id = i.requested_by
-        WHERE i.deleted_at IS NULL AND i.status IN ('submitted', 'approved') AND i.project_id IN (${ids.map(() => '?').join(',')}) ORDER BY i.needed_by IS NULL, i.needed_by LIMIT 300`).bind(...ids).all()).results : [];
+        WHERE i.deleted_at IS NULL AND i.status IN ('submitted', 'approved') AND i.project_id IN (${inIds(ids)}) ORDER BY i.needed_by IS NULL, i.needed_by LIMIT 300`).bind(...idBinds(ids)).all()).results : [];
       if (new URL(req.url).searchParams.get('csv')) return csvResponse('pending-indents.csv', [['Indent', 'Project', 'Status', 'Needed by', 'Raised', 'By', 'Items'], ...rows.map((r) => [r.indent_no, r.project, r.status, r.needed_by || '', r.created_at, r.requested_by || '', r.items])]);
       return json({ ok: true, data: { rows } });
     } catch (e) { return serverError(e, 'rep-indents'); }
@@ -375,7 +376,7 @@ export function registerProcurement2(router, h) {
       const rows = ids.length ? (await env.DB.prepare(`SELECT p.po_no, v.name AS vendor, i.description, i.unit, i.qty AS ordered,
           COALESCE((SELECT SUM(gi.qty_received) FROM pro_grn_items gi JOIN pro_grns g ON g.id = gi.grn_id WHERE gi.po_item_id = i.id AND g.deleted_at IS NULL), 0) AS received
         FROM pro_po_items i JOIN pro_pos p ON p.id = i.po_id JOIN pro_vendors v ON v.id = p.vendor_id
-        WHERE p.deleted_at IS NULL AND p.status IN ('approved', 'part_received', 'received') AND p.project_id IN (${ids.map(() => '?').join(',')}) ORDER BY p.id DESC, i.id LIMIT 400`).bind(...ids).all()).results : [];
+        WHERE p.deleted_at IS NULL AND p.status IN ('approved', 'part_received', 'received') AND p.project_id IN (${inIds(ids)}) ORDER BY p.id DESC, i.id LIMIT 400`).bind(...idBinds(ids)).all()).results : [];
       if (new URL(req.url).searchParams.get('csv')) return csvResponse('po-vs-received.csv', [['PO', 'Vendor', 'Item', 'Unit', 'Ordered', 'Received', 'Pending'], ...rows.map((r) => [r.po_no, r.vendor, r.description, r.unit || '', r.ordered, r.received, Math.max(0, r.ordered - r.received)])]);
       return json({ ok: true, data: { rows } });
     } catch (e) { return serverError(e, 'rep-po-received'); }

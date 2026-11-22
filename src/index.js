@@ -5,7 +5,7 @@ import {
   getCurrentUser, loginPassword, logout, ensureBootstrapOwner,
   setSessionCookie, clearSessionCookie, createOtpCode, verifyOtpCode, createSession, checkRateLimit,
 } from './core/auth.js';
-import { userCan, visibleProjectIds } from './core/permissions.js';
+import { userCan, visibleProjectIds, inIds, idBinds } from './core/permissions.js';
 import { getSetting, setSetting, appKeyBytes } from './core/settings.js';
 import { query } from './core/db.js';
 import { sendMail, retryFailedEmails, sendDigest, notifyMissingDprs, getEmailConfig, esc as escHtml } from './core/mail.js';
@@ -169,9 +169,9 @@ router.get('/api/projects', async (req, env) => {
       if (ids.length === 0) {
         return json({ ok: true, data: { projects: [] } });
       }
-      const placeholders = ids.map(() => '?').join(',');
+      const placeholders = inIds(ids);
       const sql = `SELECT * FROM projects WHERE deleted_at IS NULL AND id IN (${placeholders}) ORDER BY name`;
-      const { results } = await query(env.DB, sql, ids);
+      const { results } = await query(env.DB, sql, idBinds(ids));
       return json({ ok: true, data: { projects: results } });
     } catch (e) {
       return serverError(e, 'list');
@@ -445,8 +445,8 @@ router.get('/api/documents', async (req, env) => {
       } else {
         const orphans = ['owner', 'pm'].includes(user.role) ? ' OR project_id IS NULL' : '';
         if (ids.length === 0 && !orphans) return json({ ok: true, data: { documents: [] } });
-        sql += ` AND (${ids.length ? 'project_id IN (' + ids.map(() => '?').join(',') + ')' : '0'}${orphans})`;
-        params.push(...ids);
+        sql += ` AND (${ids.length ? 'project_id IN (' + inIds(ids) + ')' : '0'}${orphans})`;
+        params.push(...idBinds(ids));
       }
       if (!canSeeRestricted(user)) sql += " AND COALESCE(category, '') NOT IN ('kyc', 'legal', 'agreement')";
       sql += ' ORDER BY created_at DESC';
@@ -601,8 +601,8 @@ router.get('/api/approvals', async (req, env) => {
       const user = req.user;
       const ids = await visibleProjectIds(env, user);
       if (ids.length === 0) return json({ ok: true, data: { items: [] } });
-      const sql = `SELECT * FROM apr_items WHERE deleted_at IS NULL AND project_id IN (${ids.map(() => '?').join(',')}) ORDER BY stage_order, name`;
-      const rows = await query(env.DB, sql, ids);
+      const sql = `SELECT * FROM apr_items WHERE deleted_at IS NULL AND project_id IN (${inIds(ids)}) ORDER BY stage_order, name`;
+      const rows = await query(env.DB, sql, idBinds(ids));
       return json({ ok: true, data: { items: rows.results } });
     } catch (e) {
       return serverError(e, 'apr-list');
@@ -701,8 +701,8 @@ router.get('/api/drawings', async (req, env) => {
       const user = req.user;
       const ids = await visibleProjectIds(env, user);
       if (ids.length === 0) return json({ ok: true, data: { drawings: [] } });
-      const sql = `SELECT d.*, (SELECT rev_no FROM drw_revisions WHERE drawing_id = d.id AND status = 'ifc' LIMIT 1) AS current_ifc_rev FROM drw_drawings d WHERE d.deleted_at IS NULL AND d.project_id IN (${ids.map(() => '?').join(',')})${user.role === 'site' ? " AND EXISTS (SELECT 1 FROM drw_revisions r WHERE r.drawing_id = d.id AND r.status = 'ifc')" : ''} ORDER BY d.discipline, d.code`;
-      const rows = await query(env.DB, sql, ids);
+      const sql = `SELECT d.*, (SELECT rev_no FROM drw_revisions WHERE drawing_id = d.id AND status = 'ifc' LIMIT 1) AS current_ifc_rev FROM drw_drawings d WHERE d.deleted_at IS NULL AND d.project_id IN (${inIds(ids)})${user.role === 'site' ? " AND EXISTS (SELECT 1 FROM drw_revisions r WHERE r.drawing_id = d.id AND r.status = 'ifc')" : ''} ORDER BY d.discipline, d.code`;
+      const rows = await query(env.DB, sql, idBinds(ids));
       return json({ ok: true, data: { drawings: rows.results } });
     } catch (e) {
       return serverError(e, 'drw-list');
@@ -761,8 +761,8 @@ router.get('/api/site/milestones', async (req, env) => {
       const user = req.user;
       const ids = await visibleProjectIds(env, user);
       if (ids.length === 0) return json({ ok: true, data: { milestones: [] } });
-      const sql = `SELECT * FROM site_milestones WHERE deleted_at IS NULL AND project_id IN (${ids.map(() => '?').join(',')}) ORDER BY sort_order, name`;
-      const rows = await query(env.DB, sql, ids);
+      const sql = `SELECT * FROM site_milestones WHERE deleted_at IS NULL AND project_id IN (${inIds(ids)}) ORDER BY sort_order, name`;
+      const rows = await query(env.DB, sql, idBinds(ids));
       return json({ ok: true, data: { milestones: rows.results } });
     } catch (e) {
       return serverError(e, 'ms-list');
@@ -810,8 +810,8 @@ router.get('/api/site/dprs', async (req, env) => {
       const user = req.user;
       const ids = await visibleProjectIds(env, user);
       if (ids.length === 0) return json({ ok: true, data: { dprs: [] } });
-      const sql = `SELECT * FROM site_dprs WHERE deleted_at IS NULL AND project_id IN (${ids.map(() => '?').join(',')}) ORDER BY report_date DESC`;
-      const rows = await query(env.DB, sql, ids);
+      const sql = `SELECT * FROM site_dprs WHERE deleted_at IS NULL AND project_id IN (${inIds(ids)}) ORDER BY report_date DESC`;
+      const rows = await query(env.DB, sql, idBinds(ids));
       return json({ ok: true, data: { dprs: rows.results } });
     } catch (e) {
       return serverError(e, 'dpr-list');
@@ -888,8 +888,8 @@ router.get('/api/site/reports/labour', async (req, env) => withAuth(req, env, 's
     if (!ids.length) return json({ ok: true, data: { month, rows: [] } });
     const rows = (await env.DB.prepare(`SELECT p.name AS project, l.contractor_id, l.trade, SUM(l.headcount) AS man_days, COUNT(DISTINCT d.report_date) AS days_reported
       FROM site_dpr_labour l JOIN site_dprs d ON d.id = l.dpr_id JOIN projects p ON p.id = d.project_id
-      WHERE d.deleted_at IS NULL AND d.report_date >= ? AND d.report_date < date(?, '+1 month') AND d.project_id IN (${ids.map(() => '?').join(',')})
-      GROUP BY d.project_id, l.contractor_id, l.trade ORDER BY p.name, man_days DESC LIMIT 300`).bind(month + '-01', month + '-01', ...ids).all()).results;
+      WHERE d.deleted_at IS NULL AND d.report_date >= ? AND d.report_date < date(?, '+1 month') AND d.project_id IN (${inIds(ids)})
+      GROUP BY d.project_id, l.contractor_id, l.trade ORDER BY p.name, man_days DESC LIMIT 300`).bind(month + '-01', month + '-01', ...idBinds(ids)).all()).results;
     const names = await contractorNames(env, rows.map((r) => r.contractor_id));
     for (const r of rows) r.contractor = (names[r.contractor_id] || {}).name || 'Unknown';
     if (q.get('csv')) return csvResponse(`labour-${month}.csv`, ['Project', 'Contractor', 'Trade', 'Man-days', 'Days reported'], rows.map((r) => [r.project, r.contractor, r.trade || '', r.man_days, r.days_reported]));
@@ -903,8 +903,8 @@ router.get('/api/site/snags', async (req, env) => {
       const user = req.user;
       const ids = await visibleProjectIds(env, user);
       if (ids.length === 0) return json({ ok: true, data: { snags: [] } });
-      const sql = `SELECT * FROM site_snags WHERE deleted_at IS NULL AND project_id IN (${ids.map(() => '?').join(',')}) ORDER BY created_at DESC`;
-      const rows = await query(env.DB, sql, ids);
+      const sql = `SELECT * FROM site_snags WHERE deleted_at IS NULL AND project_id IN (${inIds(ids)}) ORDER BY created_at DESC`;
+      const rows = await query(env.DB, sql, idBinds(ids));
       return json({ ok: true, data: { snags: rows.results } });
     } catch (e) {
       return serverError(e, 'snag-list');
@@ -984,8 +984,8 @@ router.get('/api/procurement/rfqs', async (req, env) => {
       let sql = 'SELECT * FROM pro_rfqs WHERE deleted_at IS NULL';
       const params = [];
       if (ids.length > 0) {
-        sql += ' AND project_id IN (' + ids.map(() => '?').join(',') + ')';
-        params.push(...ids);
+        sql += ' AND project_id IN (' + inIds(ids) + ')';
+        params.push(...idBinds(ids));
       } else {
         return json({ ok: true, data: { rfqs: [] } });
       }
@@ -1020,8 +1020,8 @@ router.get('/api/procurement/pos', async (req, env) => {
       const user = req.user;
       const ids = await visibleProjectIds(env, user);
       if (ids.length === 0) return json({ ok: true, data: { pos: [] } });
-      const sql = `SELECT * FROM pro_pos WHERE deleted_at IS NULL AND project_id IN (${ids.map(() => '?').join(',')}) ORDER BY created_at DESC`;
-      const rows = await query(env.DB, sql, ids);
+      const sql = `SELECT * FROM pro_pos WHERE deleted_at IS NULL AND project_id IN (${inIds(ids)}) ORDER BY created_at DESC`;
+      const rows = await query(env.DB, sql, idBinds(ids));
       return json({ ok: true, data: { pos: rows.results } });
     } catch (e) {
       return serverError(e, 'po-list');
@@ -1262,7 +1262,7 @@ router.get('/api/sales/bookings', async (req, env) => {
     const ids = await visibleProjectIds(env, req.user);
     if (!ids.length) return json({ ok: true, data: { bookings: [] } });
     const rows = await env.DB.prepare(`SELECT b.*, i.unit_no, i.wing, (SELECT COALESCE(SUM(amount_paise + tds_paise), 0) FROM sal_receipts r WHERE r.booking_id = b.id AND r.reversed_at IS NULL AND r.kind = 'principal') AS collected_paise
-      FROM sal_bookings b JOIN sal_inventory i ON i.id = b.unit_id WHERE b.deleted_at IS NULL AND b.project_id IN (${ids.map(() => '?').join(',')}) ORDER BY b.id DESC LIMIT 200`).bind(...ids).all();
+      FROM sal_bookings b JOIN sal_inventory i ON i.id = b.unit_id WHERE b.deleted_at IS NULL AND b.project_id IN (${inIds(ids)}) ORDER BY b.id DESC LIMIT 200`).bind(...idBinds(ids)).all();
     for (const r of rows.results) r.pan = await maskPan(env, r.pan);
     return json({ ok: true, data: { bookings: rows.results } });
   });
@@ -1342,7 +1342,7 @@ router.get('/api/procurement/grns', async (req, env) => {
   return withAuth(req, env, 'procurement', 'V', async (req, env) => {
     const ids = await visibleProjectIds(env, req.user);
     if (!ids.length) return json({ ok: true, data: { grns: [] } });
-    const rows = await env.DB.prepare(`SELECT g.*, p.po_no FROM pro_grns g JOIN pro_pos p ON p.id = g.po_id WHERE g.deleted_at IS NULL AND p.project_id IN (${ids.map(() => '?').join(',')}) ORDER BY g.id DESC LIMIT 100`).bind(...ids).all();
+    const rows = await env.DB.prepare(`SELECT g.*, p.po_no FROM pro_grns g JOIN pro_pos p ON p.id = g.po_id WHERE g.deleted_at IS NULL AND p.project_id IN (${inIds(ids)}) ORDER BY g.id DESC LIMIT 100`).bind(...idBinds(ids)).all();
     return json({ ok: true, data: { grns: rows.results } });
   });
 });
@@ -1353,7 +1353,7 @@ router.get('/api/procurement/bills', async (req, env) => {
     const ids = await visibleProjectIds(env, req.user);
     if (!ids.length) return json({ ok: true, data: { bills: [] } });
     const rows = await env.DB.prepare(`SELECT b.*, v.name AS vendor, p.po_no, COALESCE((SELECT SUM(x.amount_paise) FROM pro_payments x WHERE x.bill_id = b.id AND x.reversed_at IS NULL), 0) AS paid_paise FROM pro_bills b JOIN pro_vendors v ON v.id = b.vendor_id LEFT JOIN pro_pos p ON p.id = b.po_id
-      WHERE (p.id IS NULL OR p.project_id IN (${ids.map(() => '?').join(',')})) ORDER BY b.status = 'paid', b.due_date LIMIT 200`).bind(...ids).all();
+      WHERE (p.id IS NULL OR p.project_id IN (${inIds(ids)})) ORDER BY b.status = 'paid', b.due_date LIMIT 200`).bind(...idBinds(ids)).all();
     for (const r of rows.results) { const net = r.amount_paise - (r.tds_paise || 0); if (r.status === 'paid' && !r.paid_paise) r.paid_paise = net; r.balance_paise = Math.max(0, net - r.paid_paise); }
     return json({ ok: true, data: { bills: rows.results } });
   });
@@ -1365,9 +1365,9 @@ router.get('/api/procurement/vendors/:id/ledger', async (req, env) => {
     const id = Number(req.params.id);
     const ids = await visibleProjectIds(env, req.user);
     if (!ids.length) return json({ ok: true, data: { pos: [], bills: [] } });
-    const ph = ids.map(() => '?').join(',');
-    const pos = await env.DB.prepare(`SELECT po_no, total_paise, status, created_at FROM pro_pos WHERE vendor_id = ? AND deleted_at IS NULL AND project_id IN (${ph}) ORDER BY id DESC`).bind(id, ...ids).all();
-    const bills = await env.DB.prepare(`SELECT b.bill_no, b.amount_paise, b.status, b.due_date, b.paid_on FROM pro_bills b LEFT JOIN pro_pos p ON p.id = b.po_id WHERE b.vendor_id = ? AND (p.id IS NULL OR p.project_id IN (${ph})) ORDER BY b.id DESC`).bind(id, ...ids).all();
+    const ph = inIds(ids);
+    const pos = await env.DB.prepare(`SELECT po_no, total_paise, status, created_at FROM pro_pos WHERE vendor_id = ? AND deleted_at IS NULL AND project_id IN (${ph}) ORDER BY id DESC`).bind(id, ...idBinds(ids)).all();
+    const bills = await env.DB.prepare(`SELECT b.bill_no, b.amount_paise, b.status, b.due_date, b.paid_on FROM pro_bills b LEFT JOIN pro_pos p ON p.id = b.po_id WHERE b.vendor_id = ? AND (p.id IS NULL OR p.project_id IN (${ph})) ORDER BY b.id DESC`).bind(id, ...idBinds(ids)).all();
     return json({ ok: true, data: { pos: pos.results, bills: bills.results } });
   });
 });
@@ -1445,18 +1445,18 @@ router.get('/api/export/:what', async (req, env) => {
   return withAuth(req, env, 'reports', 'X', async (req, env) => {
     const ids = await visibleProjectIds(env, req.user);
     if (!ids.length) return json({ ok: false, error: 'Nothing to export.' }, 404);
-    const ph = ids.map(() => '?').join(',');
+    const ph = inIds(ids);
     const what = req.params.what;
     if (what === 'receipts') {
-      const rows = await env.DB.prepare(`SELECT r.received_on, b.customer_name, pr.name AS project, i.wing, i.unit_no, r.amount_paise, r.tds_paise, r.mode, r.ref_no, r.reversed_at FROM sal_receipts r JOIN sal_bookings b ON b.id = r.booking_id JOIN sal_inventory i ON i.id = b.unit_id JOIN projects pr ON pr.id = b.project_id WHERE b.project_id IN (${ph}) ORDER BY r.received_on`).bind(...ids).all();
+      const rows = await env.DB.prepare(`SELECT r.received_on, b.customer_name, pr.name AS project, i.wing, i.unit_no, r.amount_paise, r.tds_paise, r.mode, r.ref_no, r.reversed_at FROM sal_receipts r JOIN sal_bookings b ON b.id = r.booking_id JOIN sal_inventory i ON i.id = b.unit_id JOIN projects pr ON pr.id = b.project_id WHERE b.project_id IN (${ph}) ORDER BY r.received_on`).bind(...idBinds(ids)).all();
       return csvResponse('receipts.csv', ['Date', 'Customer', 'Project', 'Wing', 'Flat', 'Amount (INR)', 'TDS (INR)', 'Mode', 'Reference', 'Reversed'], rows.results.map((r) => [r.received_on, r.customer_name, r.project, r.wing, r.unit_no, rupees(r.amount_paise), rupees(r.tds_paise), r.mode, r.ref_no, r.reversed_at ? 'Yes' : '']));
     }
     if (what === 'receivables') {
-      const rows = await env.DB.prepare(`SELECT b.customer_name, pr.name AS project, i.wing, i.unit_no, b.agreed_price_paise, b.status, (SELECT COALESCE(SUM(amount_paise + tds_paise), 0) FROM sal_receipts r WHERE r.booking_id = b.id AND r.reversed_at IS NULL AND r.kind = 'principal') AS collected FROM sal_bookings b JOIN sal_inventory i ON i.id = b.unit_id JOIN projects pr ON pr.id = b.project_id WHERE b.deleted_at IS NULL AND b.project_id IN (${ph}) ORDER BY b.id`).bind(...ids).all();
+      const rows = await env.DB.prepare(`SELECT b.customer_name, pr.name AS project, i.wing, i.unit_no, b.agreed_price_paise, b.status, (SELECT COALESCE(SUM(amount_paise + tds_paise), 0) FROM sal_receipts r WHERE r.booking_id = b.id AND r.reversed_at IS NULL AND r.kind = 'principal') AS collected FROM sal_bookings b JOIN sal_inventory i ON i.id = b.unit_id JOIN projects pr ON pr.id = b.project_id WHERE b.deleted_at IS NULL AND b.project_id IN (${ph}) ORDER BY b.id`).bind(...idBinds(ids)).all();
       return csvResponse('receivables.csv', ['Customer', 'Project', 'Wing', 'Flat', 'Agreed price (INR)', 'Collected (INR)', 'Balance (INR)', 'Status'], rows.results.map((r) => [r.customer_name, r.project, r.wing, r.unit_no, rupees(r.agreed_price_paise), rupees(r.collected), rupees(r.agreed_price_paise - r.collected), r.status]));
     }
     if (what === 'purchases') {
-      const rows = await env.DB.prepare(`SELECT p.po_no, v.name AS vendor, pr.name AS project, p.amount_paise, p.gst_paise, p.total_paise, p.status, p.created_at FROM pro_pos p JOIN pro_vendors v ON v.id = p.vendor_id JOIN projects pr ON pr.id = p.project_id WHERE p.deleted_at IS NULL AND p.project_id IN (${ph}) ORDER BY p.id`).bind(...ids).all();
+      const rows = await env.DB.prepare(`SELECT p.po_no, v.name AS vendor, pr.name AS project, p.amount_paise, p.gst_paise, p.total_paise, p.status, p.created_at FROM pro_pos p JOIN pro_vendors v ON v.id = p.vendor_id JOIN projects pr ON pr.id = p.project_id WHERE p.deleted_at IS NULL AND p.project_id IN (${ph}) ORDER BY p.id`).bind(...idBinds(ids)).all();
       return csvResponse('purchase-register.csv', ['PO', 'Vendor', 'Project', 'Amount (INR)', 'GST (INR)', 'Total (INR)', 'Status', 'Created'], rows.results.map((r) => [r.po_no, r.vendor, r.project, rupees(r.amount_paise), rupees(r.gst_paise), rupees(r.total_paise), r.status, r.created_at]));
     }
     if (what === 'leads') {
@@ -1958,20 +1958,20 @@ router.get('/api/search', async (req, env) => {
     const user = req.user; const ids = await visibleProjectIds(env, user);
     const out = [];
     if (!ids.length) return json({ ok: true, data: { results: [] } });
-    const ph = ids.map(() => '?').join(',');
-    for (const r of (await env.DB.prepare(`SELECT id, name, code FROM projects WHERE deleted_at IS NULL AND id IN (${ph}) AND (name LIKE ? OR code LIKE ?) LIMIT 5`).bind(...ids, like, like).all()).results) out.push({ kind: 'Project', title: r.name, sub: r.code, route: 'projects' });
-    if (userCan(user, 'drawings', 'V')) for (const r of (await env.DB.prepare(`SELECT code, title FROM drw_drawings WHERE deleted_at IS NULL AND project_id IN (${ph}) AND (code LIKE ? OR title LIKE ?) LIMIT 8`).bind(...ids, like, like).all()).results) out.push({ kind: 'Drawing', title: r.code, sub: r.title, route: 'drawings' });
-    if (userCan(user, 'approvals', 'V')) for (const r of (await env.DB.prepare(`SELECT name, status FROM apr_items WHERE deleted_at IS NULL AND project_id IN (${ph}) AND name LIKE ? LIMIT 6`).bind(...ids, like).all()).results) out.push({ kind: 'Approval', title: r.name, sub: r.status, route: 'approvals' });
+    const ph = inIds(ids);
+    for (const r of (await env.DB.prepare(`SELECT id, name, code FROM projects WHERE deleted_at IS NULL AND id IN (${ph}) AND (name LIKE ? OR code LIKE ?) LIMIT 5`).bind(...idBinds(ids), like, like).all()).results) out.push({ kind: 'Project', title: r.name, sub: r.code, route: 'projects' });
+    if (userCan(user, 'drawings', 'V')) for (const r of (await env.DB.prepare(`SELECT code, title FROM drw_drawings WHERE deleted_at IS NULL AND project_id IN (${ph}) AND (code LIKE ? OR title LIKE ?) LIMIT 8`).bind(...idBinds(ids), like, like).all()).results) out.push({ kind: 'Drawing', title: r.code, sub: r.title, route: 'drawings' });
+    if (userCan(user, 'approvals', 'V')) for (const r of (await env.DB.prepare(`SELECT name, status FROM apr_items WHERE deleted_at IS NULL AND project_id IN (${ph}) AND name LIKE ? LIMIT 6`).bind(...idBinds(ids), like).all()).results) out.push({ kind: 'Approval', title: r.name, sub: r.status, route: 'approvals' });
     if (userCan(user, 'sales', 'V')) {
       const seeAll = ['owner', 'pm'].includes(user.role) || (await getSetting(env, 'sales.share_all_leads')) === 'on';
       for (const r of (await (seeAll ? env.DB.prepare('SELECT id, name, phone FROM sal_leads WHERE deleted_at IS NULL AND (name LIKE ? OR phone LIKE ?) LIMIT 8').bind(like, like) : env.DB.prepare('SELECT id, name, phone FROM sal_leads WHERE deleted_at IS NULL AND assigned_to = ? AND (name LIKE ? OR phone LIKE ?) LIMIT 8').bind(user.user_id, like, like)).all()).results) out.push({ kind: 'Lead', title: r.name, sub: r.phone, route: 'sales' });
-      for (const r of (await env.DB.prepare(`SELECT b.customer_name, i.unit_no FROM sal_bookings b JOIN sal_inventory i ON i.id = b.unit_id WHERE b.deleted_at IS NULL AND b.project_id IN (${ph}) AND (b.customer_name LIKE ? OR i.unit_no LIKE ?) LIMIT 6`).bind(...ids, like, like).all()).results) out.push({ kind: 'Booking', title: r.customer_name, sub: 'Flat ' + r.unit_no, route: 'sales' });
+      for (const r of (await env.DB.prepare(`SELECT b.customer_name, i.unit_no FROM sal_bookings b JOIN sal_inventory i ON i.id = b.unit_id WHERE b.deleted_at IS NULL AND b.project_id IN (${ph}) AND (b.customer_name LIKE ? OR i.unit_no LIKE ?) LIMIT 6`).bind(...idBinds(ids), like, like).all()).results) out.push({ kind: 'Booking', title: r.customer_name, sub: 'Flat ' + r.unit_no, route: 'sales' });
     }
     if (userCan(user, 'procurement', 'V') && user.role !== 'site') {
       for (const r of (await env.DB.prepare('SELECT name, phone FROM pro_vendors WHERE deleted_at IS NULL AND (name LIKE ? OR phone LIKE ?) LIMIT 6').bind(like, like).all()).results) out.push({ kind: 'Vendor', title: r.name, sub: r.phone || '', route: 'procurement' });
-      for (const r of (await env.DB.prepare(`SELECT po_no, status FROM pro_pos WHERE deleted_at IS NULL AND project_id IN (${ph}) AND po_no LIKE ? LIMIT 6`).bind(...ids, like).all()).results) out.push({ kind: 'PO', title: r.po_no, sub: r.status, route: 'procurement' });
+      for (const r of (await env.DB.prepare(`SELECT po_no, status FROM pro_pos WHERE deleted_at IS NULL AND project_id IN (${ph}) AND po_no LIKE ? LIMIT 6`).bind(...idBinds(ids), like).all()).results) out.push({ kind: 'PO', title: r.po_no, sub: r.status, route: 'procurement' });
     }
-    for (const r of (await env.DB.prepare(`SELECT title, category, module, audience FROM documents WHERE deleted_at IS NULL AND (series_key IS NULL OR series_key NOT LIKE 'brand:%') AND (project_id IS NULL OR project_id IN (${ph})) AND title LIKE ? LIMIT 8`).bind(...ids, like).all()).results) {
+    for (const r of (await env.DB.prepare(`SELECT title, category, module, audience FROM documents WHERE deleted_at IS NULL AND (series_key IS NULL OR series_key NOT LIKE 'brand:%') AND (project_id IS NULL OR project_id IN (${ph})) AND title LIKE ? LIMIT 8`).bind(...idBinds(ids), like).all()).results) {
       if (r.module === 'brochure' && r.audience !== 'customer' && !['owner', 'pm'].includes(user.role)) continue;
       if (!docVisible(user, r)) continue;
       out.push({ kind: r.module === 'brochure' ? 'Brochure' : 'Document', title: r.title, sub: r.category || '', route: r.module === 'brochure' ? 'brochures' : 'documents' });
@@ -2533,8 +2533,8 @@ router.get('/api/dashboard', async (req, env) => {
       if (ids.length === 0) {
         return json({ ok: true, data: { moneyIn: 0, overdueReceivables: { total: 0, cnt: 0 }, billsDue: { total: 0, cnt: 0 }, posPending: 0, dprsYesterday: 0, highSnags: 0, newLeads: 0 } });
       }
-      const inList = '(' + ids.map(() => '?').join(',') + ')';
-      const params = ids;
+      const inList = '(' + inIds(ids) + ')';
+      const params = idBinds(ids);
 
       // Money in - collected this month (non-reversed receipts)
       const collected = await env.DB.prepare(
@@ -2611,9 +2611,9 @@ router.get('/api/reports/receivables', async (req, env) => {
          b.status
          FROM sal_bookings b
          LEFT JOIN sal_receipts r ON r.booking_id = b.id AND r.reversed_at IS NULL AND r.kind = 'principal'
-         WHERE b.deleted_at IS NULL AND b.project_id IN (${ids.map(() => '?').join(',')})
+         WHERE b.deleted_at IS NULL AND b.project_id IN (${inIds(ids)})
          GROUP BY b.id ORDER BY b.created_at DESC LIMIT 200`
-      ).bind(...ids).all();
+      ).bind(...idBinds(ids)).all();
       return json({ ok: true, data: { rows: rows.results } });
     } catch (e) {
       return serverError(e, 'receivables');
@@ -2630,8 +2630,8 @@ router.get('/api/reports/purchase-register', async (req, env) => {
         `SELECT p.po_no, v.name as vendor, p.amount_paise, p.total_paise, p.status, p.created_at
          FROM pro_pos p
          JOIN pro_vendors v ON v.id = p.vendor_id
-         WHERE p.deleted_at IS NULL AND p.project_id IN (${ids.map(() => '?').join(',')}) ORDER BY p.created_at DESC LIMIT 200`
-      ).bind(...ids).all();
+         WHERE p.deleted_at IS NULL AND p.project_id IN (${inIds(ids)}) ORDER BY p.created_at DESC LIMIT 200`
+      ).bind(...idBinds(ids)).all();
       return json({ ok: true, data: { rows: rows.results } });
     } catch (e) {
       return serverError(e, 'purchase');

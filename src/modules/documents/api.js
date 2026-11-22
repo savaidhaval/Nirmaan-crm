@@ -8,7 +8,7 @@ export const routes = [
 ];
 
 import { query, queryOne, run, softDelete } from '../../core/db.js';
-import { visibleProjectIds } from '../../core/permissions.js';
+import { visibleProjectIds, inIds, idBinds } from '../../core/permissions.js';
 import { audit } from '../../core/audit.js';
 
 async function listDocuments(req, env) {
@@ -24,8 +24,8 @@ async function listDocuments(req, env) {
     sql += ' AND project_id = ?';
     params.push(projectId);
   } else if (ids.length > 0) {
-    sql += ' AND project_id IN (' + ids.map(() => '?').join(',') + ')';
-    params.push(...ids);
+    sql += ' AND project_id IN (' + inIds(ids) + ')';
+    params.push(...idBinds(ids));
   } else {
     return Response.json({ ok: true, data: { documents: [] } });
   }

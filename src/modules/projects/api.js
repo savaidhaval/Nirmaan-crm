@@ -9,7 +9,7 @@ export const routes = [
 ];
 
 import { query, queryOne, run, softDelete, paginate, exists } from '../../core/db.js';
-import { userCan, visibleProjectIds } from '../../core/permissions.js';
+import { userCan, visibleProjectIds, inIds, idBinds } from '../../core/permissions.js';
 import { audit } from '../../core/audit.js';
 
 async function listProjects(req, env) {
@@ -18,9 +18,9 @@ async function listProjects(req, env) {
   if (ids.length === 0) {
     return Response.json({ ok: true, data: { projects: [], page: 1, pageSize: 25, total: 0, totalPages: 0 } });
   }
-  const placeholders = ids.map(() => '?').join(',');
+  const placeholders = inIds(ids);
   const sql = `SELECT * FROM projects WHERE deleted_at IS NULL AND id IN (${placeholders}) ORDER BY name`;
-  const rows = await query(env.DB, sql, ids);
+  const rows = await query(env.DB, sql, idBinds(ids));
   return Response.json({ ok: true, data: { projects: rows.results, page: 1, pageSize: 25, total: rows.results.length, totalPages: 1 } });
 }
 

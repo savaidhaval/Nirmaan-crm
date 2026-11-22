@@ -2,6 +2,7 @@
 // Free-plan Workers allow ~50 database calls per request, so each call carries a limited number of rows
 // and the browser loops. dry_run=true validates only.
 import { shared } from './sales_ops.js';
+import { inIds, idBinds } from '../core/permissions.js';
 
 const LIMITS = { inventory: 100, vendors: 100, leads: 8 };
 
@@ -25,7 +26,7 @@ export function registerImporter(router, h) {
         if (rows.length > LIMITS[kind]) return json({ ok: false, error: `Send at most ${LIMITS[kind]} rows per request.` }, 400);
         const dry = !!body.dry_run;
         const ids = await visibleProjectIds(env, user);
-        const projects = (await env.DB.prepare(`SELECT id, code FROM projects WHERE deleted_at IS NULL AND id IN (${ids.map(() => '?').join(',') || 'NULL'})`).bind(...ids).all()).results;
+        const projects = (await env.DB.prepare(`SELECT id, code FROM projects WHERE deleted_at IS NULL AND id IN (${inIds(ids) || 'NULL'})`).bind(...idBinds(ids)).all()).results;
         const byCode = Object.fromEntries(projects.map((p) => [String(p.code).toLowerCase(), p.id]));
         const results = []; let created = 0;
 

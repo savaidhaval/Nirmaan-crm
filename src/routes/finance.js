@@ -1,4 +1,5 @@
 // routes/finance.js — late-payment interest, project financials, vendor TDS/GST, Tally exports, customer statement.
+import { inIds, idBinds } from '../core/permissions.js';
 
 const MONEY = ['owner', 'pm', 'accounts'];
 const day = (s) => Date.parse(String(s).substring(0, 10) + 'T00:00:00Z');
@@ -19,12 +20,12 @@ export async function computeInterest(env, getSetting, bookingIds, asOf = todayI
   const out = new Map();
   const cfg = await interestSettings(env, getSetting);
   if (!bookingIds.length) return { map: out, cfg };
-  const ph = bookingIds.map(() => '?').join(',');
-  const dem = (await env.DB.prepare(`SELECT id, booking_id, label, amount_paise, COALESCE(gst_paise, 0) AS gst_paise, due_date, status FROM sal_demands WHERE booking_id IN (${ph}) AND due_date IS NOT NULL AND status NOT IN ('cancelled', 'scheduled')`).bind(...bookingIds).all()).results;
+  const ph = inIds(bookingIds);
+  const dem = (await env.DB.prepare(`SELECT id, booking_id, label, amount_paise, COALESCE(gst_paise, 0) AS gst_paise, due_date, status FROM sal_demands WHERE booking_id IN (${ph}) AND due_date IS NOT NULL AND status NOT IN ('cancelled', 'scheduled')`).bind(...idBinds(bookingIds)).all()).results;
   const ids = dem.map((d) => d.id);
-  const rec = ids.length ? (await env.DB.prepare(`SELECT demand_id, amount_paise + tds_paise AS amt, received_on FROM sal_receipts WHERE demand_id IN (${ids.map(() => '?').join(',')}) AND reversed_at IS NULL AND kind = 'principal' ORDER BY received_on, id`).bind(...ids).all()).results : [];
-  const waived = ids.length ? (await env.DB.prepare(`SELECT demand_id, SUM(amount_paise) AS w FROM sal_interest_waivers WHERE demand_id IN (${ids.map(() => '?').join(',')}) AND status = 'approved' GROUP BY demand_id`).bind(...ids).all()).results : [];
-  const paidInt = (await env.DB.prepare(`SELECT booking_id, SUM(amount_paise) AS p FROM sal_receipts WHERE booking_id IN (${ph}) AND reversed_at IS NULL AND kind = 'interest' GROUP BY booking_id`).bind(...bookingIds).all()).results;
+  const rec = ids.length ? (await env.DB.prepare(`SELECT demand_id, amount_paise + tds_paise AS amt, received_on FROM sal_receipts WHERE demand_id IN (${inIds(ids)}) AND reversed_at IS NULL AND kind = 'principal' ORDER BY received_on, id`).bind(...idBinds(ids)).all()).results : [];
+  const waived = ids.length ? (await env.DB.prepare(`SELECT demand_id, SUM(amount_paise) AS w FROM sal_interest_waivers WHERE demand_id IN (${inIds(ids)}) AND status = 'approved' GROUP BY demand_id`).bind(...idBinds(ids)).all()).results : [];
+  const paidInt = (await env.DB.prepare(`SELECT booking_id, SUM(amount_paise) AS p FROM sal_receipts WHERE booking_id IN (${ph}) AND reversed_at IS NULL AND kind = 'interest' GROUP BY booking_id`).bind(...idBinds(bookingIds)).all()).results;
   const wMap = Object.fromEntries(waived.map((w) => [w.demand_id, w.w]));
   for (const id of bookingIds) out.set(id, { demands: [], accrued: 0, waived: 0, paid: 0, due: 0 });
   for (const d of dem) {
@@ -53,7 +54,6 @@ export function registerFinance(router, h) {
   const { withAuth, json, serverError, visibleProjectIds, userCan, getSetting, nowStr, encryptSetting, decryptSetting } = h;
   const audit = (env, user, action, entity, id, summary) =>
     env.DB.prepare('INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, ?, ?, ?, ?, ?)').bind(user ? user.user_id : null, action, entity, id || 0, String(summary).slice(0, 600), nowStr()).run();
-  const ph = (a) => a.map(() => '?').join(',');
 
   async function bookingAccess(env, user, id) {
     const b = await env.DB.prepare('SELECT * FROM sal_bookings WHERE id = ? AND deleted_at IS NULL').bind(id).first();
@@ -114,7 +114,7 @@ export function registerFinance(router, h) {
       if (!MONEY.includes(req.user.role)) return json({ ok: false, error: 'Not allowed.' }, 403);
       const ids = await visibleProjectIds(env, req.user);
       if (!ids.length) return json({ ok: true, data: { rows: [], totals: { accrued: 0, waived: 0, paid: 0, due: 0 } } });
-      const bks = (await env.DB.prepare(`SELECT b.id, b.customer_name, i.wing, i.unit_no FROM sal_bookings b JOIN sal_inventory i ON i.id = b.unit_id WHERE b.project_id IN (${ph(ids)}) AND b.status <> 'cancelled' AND b.deleted_at IS NULL LIMIT 500`).bind(...ids).all()).results;
+      const bks = (await env.DB.prepare(`SELECT b.id, b.customer_name, i.wing, i.unit_no FROM sal_bookings b JOIN sal_inventory i ON i.id = b.unit_id WHERE b.project_id IN (${inIds(ids)}) AND b.status <> 'cancelled' AND b.deleted_at IS NULL LIMIT 500`).bind(...idBinds(ids)).all()).results;
       const { map, cfg } = await computeInterest(env, getSetting, bks.map((b) => b.id));
       const rows = bks.map((b) => ({ booking_id: b.id, customer: b.customer_name, flat: `${b.wing || ''}-${b.unit_no}`, ...map.get(b.id), demands: undefined })).filter((r) => r.accrued > 0).sort((a, b) => b.due - a.due);
       const totals = rows.reduce((t, r) => ({ accrued: t.accrued + r.accrued, waived: t.waived + r.waived, paid: t.paid + r.paid, due: t.due + r.due }), { accrued: 0, waived: 0, paid: 0, due: 0 });
@@ -220,7 +220,7 @@ export function registerFinance(router, h) {
       const ids = await visibleProjectIds(env, req.user);
       if (!ids.length) return json({ ok: true, data: { rows: [] } });
       const rows = (await env.DB.prepare(`SELECT b.id, b.bill_no, b.tds_section, b.tds_bp, b.tds_paise, b.tds_deposited_on, b.tds_challan, substr(b.created_at, 1, 10) AS deducted_on, v.name AS vendor, v.pan IS NOT NULL AND v.pan <> '' AS has_pan
-        FROM pro_bills b JOIN pro_vendors v ON v.id = b.vendor_id WHERE b.project_id IN (${ph(ids)}) AND b.tds_paise > 0 ORDER BY b.created_at DESC LIMIT 300`).bind(...ids).all()).results;
+        FROM pro_bills b JOIN pro_vendors v ON v.id = b.vendor_id WHERE b.project_id IN (${inIds(ids)}) AND b.tds_paise > 0 ORDER BY b.created_at DESC LIMIT 300`).bind(...idBinds(ids)).all()).results;
       const today = todayIST();
       const withDue = rows.map((r) => {
         const d = new Date(r.deducted_on + 'T00:00:00Z'); const m = d.getUTCMonth(); const y = d.getUTCFullYear();
@@ -248,12 +248,12 @@ export function registerFinance(router, h) {
       if (!ids.length) return json({ ok: false, error: 'Nothing to export.' }, 404);
       if (req.params.what === 'receipts') {
         const rows = (await env.DB.prepare(`SELECT r.received_on, r.receipt_no, r.amount_paise, r.tds_paise, r.mode, r.ref_no, r.account, r.kind, b.customer_name, p.name AS project, i.wing, i.unit_no
-          FROM sal_receipts r JOIN sal_bookings b ON b.id = r.booking_id JOIN projects p ON p.id = b.project_id JOIN sal_inventory i ON i.id = b.unit_id WHERE b.project_id IN (${ph(ids)}) AND r.reversed_at IS NULL ORDER BY r.received_on, r.id`).bind(...ids).all()).results;
+          FROM sal_receipts r JOIN sal_bookings b ON b.id = r.booking_id JOIN projects p ON p.id = b.project_id JOIN sal_inventory i ON i.id = b.unit_id WHERE b.project_id IN (${inIds(ids)}) AND r.reversed_at IS NULL ORDER BY r.received_on, r.id`).bind(...idBinds(ids)).all()).results;
         return csv('tally-receipts.csv', ['Voucher Date', 'Voucher Type Name', 'Voucher Number', 'Party Ledger Name', 'Bank / Cash Ledger', 'Amount', 'TDS Receivable', 'Narration'],
           rows.map((r) => [ddmmyyyy(r.received_on), 'Receipt', r.receipt_no, r.customer_name, r.mode === 'cash' ? 'Cash' : (r.account === 'rera_designated' ? 'RERA Designated Account - ' : 'Project Account - ') + r.project, r2(r.amount_paise), r2(r.tds_paise), `${r.kind === 'interest' ? 'Interest on delayed payment' : 'Instalment'} ${r.wing || ''}-${r.unit_no} ${r.mode} ${r.ref_no || ''}`.trim()]));
       }
       if (req.params.what === 'purchases') {
-        const rows = (await env.DB.prepare(`SELECT b.created_at, b.bill_no, b.amount_paise, b.taxable_paise, b.gst_paise, b.tds_section, b.tds_paise, v.name AS vendor, v.gstin, p.name AS project FROM pro_bills b JOIN pro_vendors v ON v.id = b.vendor_id JOIN projects p ON p.id = b.project_id WHERE b.project_id IN (${ph(ids)}) ORDER BY b.created_at`).bind(...ids).all()).results;
+        const rows = (await env.DB.prepare(`SELECT b.created_at, b.bill_no, b.amount_paise, b.taxable_paise, b.gst_paise, b.tds_section, b.tds_paise, v.name AS vendor, v.gstin, p.name AS project FROM pro_bills b JOIN pro_vendors v ON v.id = b.vendor_id JOIN projects p ON p.id = b.project_id WHERE b.project_id IN (${inIds(ids)}) ORDER BY b.created_at`).bind(...idBinds(ids)).all()).results;
         return csv('tally-purchases.csv', ['Voucher Date', 'Voucher Type Name', 'Supplier Invoice No', 'Party Ledger Name', 'Party GSTIN', 'Purchase Ledger', 'Taxable Value', 'GST', 'TDS Section', 'TDS Amount', 'Invoice Total'],
           rows.map((r) => [ddmmyyyy(r.created_at), 'Purchase', r.bill_no, r.vendor, r.gstin || '', 'Purchases - ' + r.project, r2(r.taxable_paise ?? r.amount_paise - r.gst_paise), r2(r.gst_paise), r.tds_section || '', r2(r.tds_paise), r2(r.amount_paise)]));
       }

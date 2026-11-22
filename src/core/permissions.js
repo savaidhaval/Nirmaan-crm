@@ -107,6 +107,22 @@ export async function visibleProjectIds(env, user) {
   return user && user.scopeProject ? ids.filter((i) => i === user.scopeProject) : ids;
 }
 
+// D1 allows at most 100 bound variables per statement. A project list longer than INLINE_AFTER is written
+// into the SQL as plain whole numbers instead of one "?" each (same rows, same permissions, nothing to bind).
+// Ids come from our own database; each is checked to be a whole number before it is written into SQL.
+const INLINE_AFTER = 20;
+export function inIds(ids) {
+  if (ids.length <= INLINE_AFTER) return ids.map(() => '?').join(',');
+  return ids.map((n) => {
+    if (!Number.isSafeInteger(Number(n))) throw new Error('Bad project id');
+    return String(Number(n));
+  }).join(',');
+}
+// Values to bind for the placeholders inIds() wrote: the ids themselves for a short list, nothing for a long one.
+export function idBinds(ids) {
+  return ids.length <= INLINE_AFTER ? ids : [];
+}
+
 export async function getLimitRoles(env) {
   const val = await getSetting(env, 'access.limit_roles_to_assigned_projects');
   if (val === null) return ['site'];

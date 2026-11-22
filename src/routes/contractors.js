@@ -1,6 +1,7 @@
 // routes/contractors.js — WP-5: contractors, work orders, running-account (RA) bills, advance and retention ledger.
 // Labour is paid through contractors, so there is no payroll. All money is integer paise; rates for GST/TDS are settings.
 import { emit } from '../core/events.js';
+import { inIds, idBinds } from '../core/permissions.js';
 
 const rupees = (p) => '₹' + (Number(p) / 100).toLocaleString('en-IN');
 const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
@@ -167,7 +168,7 @@ export function registerContractors(router, h) {
       const ids = await visibleProjectIds(env, req.user);
       if (!ids.length) return json({ ok: true, data: { work_orders: [] } });
       const rows = await env.DB.prepare(`SELECT w.*, c.name AS contractor, c.trade, p.name AS project FROM con_work_orders w JOIN con_contractors c ON c.id = w.contractor_id JOIN projects p ON p.id = w.project_id
-        WHERE w.project_id IN (${ids.map(() => '?').join(',')}) ORDER BY w.id DESC LIMIT 150`).bind(...ids).all();
+        WHERE w.project_id IN (${inIds(ids)}) ORDER BY w.id DESC LIMIT 150`).bind(...idBinds(ids)).all();
       return json({ ok: true, data: { work_orders: req.user.role === 'site' ? rows.results.map(stripMoney) : rows.results } });
     } catch (e) { return serverError(e, 'wo-list'); }
   }));
@@ -426,12 +427,12 @@ export function registerContractors(router, h) {
       if (req.user.role === 'site') return json({ ok: false, error: 'Not allowed.' }, 403);
       const ids = await visibleProjectIds(env, req.user);
       if (!ids.length) return json({ ok: true, data: { entries: [], totals: {} } });
-      const ph = ids.map(() => '?').join(',');
+      const ph = inIds(ids);
       const cid = Number(req.params.id);
       const [entries, tot, due] = await Promise.all([
-        env.DB.prepare(`SELECT l.*, w.wo_no FROM con_ledger l JOIN con_work_orders w ON w.id = l.wo_id WHERE l.contractor_id = ? AND l.project_id IN (${ph}) ORDER BY l.id DESC LIMIT 200`).bind(cid, ...ids).all(),
-        env.DB.prepare(`SELECT kind, COALESCE(SUM(amount_paise), 0) AS s FROM con_ledger WHERE contractor_id = ? AND project_id IN (${ph}) GROUP BY kind`).bind(cid, ...ids).all(),
-        env.DB.prepare(`SELECT COALESCE(SUM(r.net_paise), 0) AS billed FROM con_ra_bills r JOIN con_work_orders w ON w.id = r.wo_id WHERE w.contractor_id = ? AND w.project_id IN (${ph}) AND r.status IN ('approved', 'part_paid', 'paid')`).bind(cid, ...ids).first(),
+        env.DB.prepare(`SELECT l.*, w.wo_no FROM con_ledger l JOIN con_work_orders w ON w.id = l.wo_id WHERE l.contractor_id = ? AND l.project_id IN (${ph}) ORDER BY l.id DESC LIMIT 200`).bind(cid, ...idBinds(ids)).all(),
+        env.DB.prepare(`SELECT kind, COALESCE(SUM(amount_paise), 0) AS s FROM con_ledger WHERE contractor_id = ? AND project_id IN (${ph}) GROUP BY kind`).bind(cid, ...idBinds(ids)).all(),
+        env.DB.prepare(`SELECT COALESCE(SUM(r.net_paise), 0) AS billed FROM con_ra_bills r JOIN con_work_orders w ON w.id = r.wo_id WHERE w.contractor_id = ? AND w.project_id IN (${ph}) AND r.status IN ('approved', 'part_paid', 'paid')`).bind(cid, ...idBinds(ids)).first(),
       ]);
       const m = Object.fromEntries(tot.results.map((r) => [r.kind, r.s]));
       const totals = { advance_given: m.advance || 0, advance_recovered: m.advance_recovery || 0, advance_outstanding: (m.advance || 0) - (m.advance_recovery || 0),
@@ -450,7 +451,7 @@ export function registerContractors(router, h) {
           COALESCE((SELECT SUM(CASE kind WHEN 'retention_held' THEN amount_paise WHEN 'retention_released' THEN -amount_paise END) FROM con_ledger WHERE wo_id = w.id), 0) AS retention_held_paise,
           COALESCE((SELECT SUM(CASE kind WHEN 'advance' THEN amount_paise WHEN 'advance_recovery' THEN -amount_paise END) FROM con_ledger WHERE wo_id = w.id), 0) AS advance_outstanding_paise
         FROM con_work_orders w JOIN con_contractors c ON c.id = w.contractor_id JOIN projects p ON p.id = w.project_id
-        WHERE w.status IN ('approved', 'closed') AND w.project_id IN (${ids.map(() => '?').join(',')}) ORDER BY w.id DESC LIMIT 300`).bind(...ids).all()).results : [];
+        WHERE w.status IN ('approved', 'closed') AND w.project_id IN (${inIds(ids)}) ORDER BY w.id DESC LIMIT 300`).bind(...idBinds(ids)).all()).results : [];
       if (new URL(req.url).searchParams.get('csv')) {
         const f = (p) => (Number(p) / 100).toFixed(2);
         return csvResponse('contractor-work-orders.csv', [['Work order', 'Contractor', 'Project', 'Status', 'Value', 'Billed (gross)', 'Paid', 'Retention held', 'Advance outstanding'],

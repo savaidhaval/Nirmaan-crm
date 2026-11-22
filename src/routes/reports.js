@@ -1,4 +1,5 @@
 // routes/reports.js — executive reporting: stacking plan, cash flow + escrow, receivable aging, marketing/CP ROI, velocity + discount leakage.
+import { inIds, idBinds } from '../core/permissions.js';
 export function registerReports(router, h) {
   const { withAuth, json, serverError, visibleProjectIds, getSetting, nowStr } = h;
   const MONEY_ROLES = ['owner', 'pm', 'accounts'];
@@ -8,7 +9,6 @@ export function registerReports(router, h) {
     if (projectId) return ids.includes(Number(projectId)) ? [Number(projectId)] : [];
     return ids;
   }
-  const ph = (a) => a.map(() => '?').join(',');
   const month = (d) => String(d).substring(0, 7);
 
   // ---- Stacking plan: wing x floor matrix with live status ----
@@ -46,16 +46,16 @@ export function registerReports(router, h) {
       const ids = await scopeIds(env, req.user, Number(new URL(req.url).searchParams.get('project_id')) || null);
       if (!ids.length) return json({ ok: true, data: { months: [], totals: {}, escrow: {} } });
       const dem = await env.DB.prepare(`SELECT substr(d.due_date, 1, 7) AS m, SUM(d.amount_paise + COALESCE(d.gst_paise, 0)) AS due FROM sal_demands d JOIN sal_bookings b ON b.id = d.booking_id
-        WHERE b.project_id IN (${ph(ids)}) AND d.status != 'cancelled' AND d.due_date IS NOT NULL GROUP BY m`).bind(...ids).all();
+        WHERE b.project_id IN (${inIds(ids)}) AND d.status != 'cancelled' AND d.due_date IS NOT NULL GROUP BY m`).bind(...idBinds(ids)).all();
       const rec = await env.DB.prepare(`SELECT substr(r.received_on, 1, 7) AS m, SUM(r.amount_paise + r.tds_paise) AS got FROM sal_receipts r JOIN sal_bookings b ON b.id = r.booking_id
-        WHERE b.project_id IN (${ph(ids)}) AND r.reversed_at IS NULL AND r.kind = 'principal' GROUP BY m`).bind(...ids).all();
-      const future = await env.DB.prepare(`SELECT COALESCE(SUM(d.amount_paise + COALESCE(d.gst_paise, 0) - d.settled_paise), 0) AS t FROM sal_demands d JOIN sal_bookings b ON b.id = d.booking_id WHERE b.project_id IN (${ph(ids)}) AND d.status = 'scheduled'`).bind(...ids).first();
+        WHERE b.project_id IN (${inIds(ids)}) AND r.reversed_at IS NULL AND r.kind = 'principal' GROUP BY m`).bind(...idBinds(ids)).all();
+      const future = await env.DB.prepare(`SELECT COALESCE(SUM(d.amount_paise + COALESCE(d.gst_paise, 0) - d.settled_paise), 0) AS t FROM sal_demands d JOIN sal_bookings b ON b.id = d.booking_id WHERE b.project_id IN (${inIds(ids)}) AND d.status = 'scheduled'`).bind(...idBinds(ids)).first();
       const map = {};
       for (const r of dem.results) (map[r.m] = map[r.m] || { month: r.m, due: 0, collected: 0 }).due = r.due;
       for (const r of rec.results) (map[r.m] = map[r.m] || { month: r.m, due: 0, collected: 0 }).collected = r.got;
       const months = Object.values(map).filter((x) => x.month).sort((a, b) => a.month.localeCompare(b.month)).slice(-12);
       const tot = await env.DB.prepare(`SELECT COALESCE(SUM(CASE WHEN r.account = 'rera_designated' THEN r.amount_paise ELSE 0 END), 0) AS designated, COALESCE(SUM(CASE WHEN r.account <> 'rera_designated' THEN r.amount_paise ELSE 0 END), 0) AS other, COALESCE(SUM(r.amount_paise), 0) AS all_paise
-        FROM sal_receipts r JOIN sal_bookings b ON b.id = r.booking_id WHERE b.project_id IN (${ph(ids)}) AND r.reversed_at IS NULL`).bind(...ids).first();
+        FROM sal_receipts r JOIN sal_bookings b ON b.id = r.booking_id WHERE b.project_id IN (${inIds(ids)}) AND r.reversed_at IS NULL`).bind(...idBinds(ids)).first();
       const designatedPct = tot.all_paise ? Math.round(tot.designated * 1000 / tot.all_paise) / 10 : null;
       return json({ ok: true, data: { months, unscheduled_future_paise: Number(future.t),
         escrow: { collected_paise: tot.all_paise, designated_paise: tot.designated, other_paise: tot.other, designated_pct: designatedPct, required_pct: 70,
@@ -73,11 +73,11 @@ export function registerReports(router, h) {
       const rows = await env.DB.prepare(`SELECT d.id, d.label, b.customer_name, i.wing, i.unit_no, d.due_date, d.status,
         (d.amount_paise + COALESCE(d.gst_paise, 0) - d.settled_paise) AS open_paise, CAST(julianday('now') - julianday(d.due_date) AS INTEGER) AS days
         FROM sal_demands d JOIN sal_bookings b ON b.id = d.booking_id JOIN sal_inventory i ON i.id = b.unit_id
-        WHERE b.project_id IN (${ph(ids)}) AND d.status IN ('ready', 'partial') AND b.status <> 'cancelled'`).bind(...ids).all();
+        WHERE b.project_id IN (${inIds(ids)}) AND d.status IN ('ready', 'partial') AND b.status <> 'cancelled'`).bind(...idBinds(ids)).all();
       const defs = [['Not yet due', (d) => d <= 0], ['1–30 days', (d) => d >= 1 && d <= 30], ['31–60 days', (d) => d >= 31 && d <= 60], ['61–90 days', (d) => d >= 61 && d <= 90], ['Over 90 days', (d) => d > 90]];
       const buckets = defs.map(([label, fn]) => { const r = rows.results.filter((x) => fn(x.days == null ? 0 : x.days)); return { label, count: r.length, amount_paise: r.reduce((t, x) => t + x.open_paise, 0) }; });
       const top = rows.results.filter((x) => (x.days || 0) > 0).sort((a, b) => b.open_paise - a.open_paise).slice(0, 10).map((x) => ({ customer: x.customer_name, flat: `${x.wing || ''}-${x.unit_no}`, label: x.label, days: x.days, open_paise: x.open_paise }));
-      const sched = await env.DB.prepare(`SELECT COALESCE(SUM(d.amount_paise + COALESCE(d.gst_paise, 0)), 0) AS t, COUNT(*) AS n FROM sal_demands d JOIN sal_bookings b ON b.id = d.booking_id WHERE b.project_id IN (${ph(ids)}) AND d.status = 'scheduled' AND b.status <> 'cancelled'`).bind(...ids).first();
+      const sched = await env.DB.prepare(`SELECT COALESCE(SUM(d.amount_paise + COALESCE(d.gst_paise, 0)), 0) AS t, COUNT(*) AS n FROM sal_demands d JOIN sal_bookings b ON b.id = d.booking_id WHERE b.project_id IN (${inIds(ids)}) AND d.status = 'scheduled' AND b.status <> 'cancelled'`).bind(...idBinds(ids)).first();
       return json({ ok: true, data: { buckets, top, scheduled_paise: Number(sched.t), scheduled_count: Number(sched.n) } });
     } catch (e) { return serverError(e, 'aging'); }
   }));
@@ -112,8 +112,8 @@ export function registerReports(router, h) {
         SUM(EXISTS (SELECT 1 FROM sal_visits v WHERE v.lead_id = l.id AND v.status = 'done')) AS visits,
         SUM(l.status = 'booked') AS bookings,
         COALESCE(SUM((SELECT b.agreed_price_paise FROM sal_bookings b WHERE b.lead_id = l.id AND b.status <> 'cancelled' AND b.deleted_at IS NULL LIMIT 1)), 0) AS booked_value_paise
-        FROM sal_leads l WHERE l.deleted_at IS NULL AND (l.project_id IS NULL OR l.project_id IN (${ph(ids)})) GROUP BY l.source ORDER BY leads DESC`).bind(...ids).all();
-      const spend = await env.DB.prepare(`SELECT source, SUM(amount_paise) AS spent FROM mkt_spend WHERE (project_id IS NULL OR project_id IN (${ph(ids)})) GROUP BY source`).bind(...ids).all();
+        FROM sal_leads l WHERE l.deleted_at IS NULL AND (l.project_id IS NULL OR l.project_id IN (${inIds(ids)})) GROUP BY l.source ORDER BY leads DESC`).bind(...idBinds(ids)).all();
+      const spend = await env.DB.prepare(`SELECT source, SUM(amount_paise) AS spent FROM mkt_spend WHERE (project_id IS NULL OR project_id IN (${inIds(ids)})) GROUP BY source`).bind(...idBinds(ids)).all();
       const spent = Object.fromEntries(spend.results.map((r) => [r.source, r.spent]));
       const out = sources.results.map((s) => {
         const sp = spent[String(s.source || 'other').toLowerCase()] || 0;
@@ -124,8 +124,8 @@ export function registerReports(router, h) {
         (SELECT COUNT(*) FROM sal_leads l WHERE l.channel_partner_id = p.id AND l.deleted_at IS NULL) AS leads,
         COUNT(b.id) AS bookings, COALESCE(SUM(b.agreed_price_paise), 0) AS value_paise,
         COALESCE(SUM(CAST(b.agreed_price_paise * COALESCE(b.brokerage_bp, p.brokerage_default_bp, 0) / 10000 AS INTEGER)), 0) AS brokerage_paise
-        FROM sal_partners p LEFT JOIN sal_bookings b ON b.channel_partner_id = p.id AND b.status <> 'cancelled' AND b.deleted_at IS NULL AND b.project_id IN (${ph(ids)})
-        WHERE p.deleted_at IS NULL GROUP BY p.id ORDER BY value_paise DESC`).bind(...ids).all();
+        FROM sal_partners p LEFT JOIN sal_bookings b ON b.channel_partner_id = p.id AND b.status <> 'cancelled' AND b.deleted_at IS NULL AND b.project_id IN (${inIds(ids)})
+        WHERE p.deleted_at IS NULL GROUP BY p.id ORDER BY value_paise DESC`).bind(...idBinds(ids)).all();
       return json({ ok: true, data: { sources: out, partners: partners.results.map((p) => ({ ...p, net_realisation_paise: p.value_paise - p.brokerage_paise })) } });
     } catch (e) { return serverError(e, 'marketing'); }
   }));
@@ -138,7 +138,7 @@ export function registerReports(router, h) {
       if (!ids.length) return json({ ok: true, data: { by_type: [], by_floor: [], monthly: [], leakage: [] } });
       const units = (await env.DB.prepare(`SELECT i.id, i.type, i.floor, i.price_paise + COALESCE(i.floor_rise_paise, 0) AS list_paise, b.id AS booking_id, b.agreed_price_paise, b.list_price_paise, b.created_at AS booked_at
         FROM sal_inventory i LEFT JOIN sal_bookings b ON b.unit_id = i.id AND b.status <> 'cancelled' AND b.deleted_at IS NULL
-        WHERE i.project_id IN (${ph(ids)}) AND i.deleted_at IS NULL AND i.category = 'sale'`).bind(...ids).all()).results;
+        WHERE i.project_id IN (${inIds(ids)}) AND i.deleted_at IS NULL AND i.category = 'sale'`).bind(...idBinds(ids)).all()).results;
       const group = (keyFn) => {
         const g = {};
         for (const u of units) {
@@ -151,13 +151,13 @@ export function registerReports(router, h) {
       const band = (f) => (f == null ? 'Unknown' : f <= 5 ? 'Floors 1–5' : f <= 10 ? 'Floors 6–10' : f <= 15 ? 'Floors 11–15' : 'Floors 16+');
       const by_type = group((u) => u.type || 'Unspecified').sort((a, b) => a.key.localeCompare(b.key));
       const by_floor = group((u) => band(u.floor));
-      const monthlyRows = await env.DB.prepare(`SELECT substr(b.created_at, 1, 7) AS m, COUNT(*) AS n, SUM(b.agreed_price_paise) AS v FROM sal_bookings b WHERE b.project_id IN (${ph(ids)}) AND b.status <> 'cancelled' AND b.deleted_at IS NULL GROUP BY m ORDER BY m DESC LIMIT 12`).bind(...ids).all();
+      const monthlyRows = await env.DB.prepare(`SELECT substr(b.created_at, 1, 7) AS m, COUNT(*) AS n, SUM(b.agreed_price_paise) AS v FROM sal_bookings b WHERE b.project_id IN (${inIds(ids)}) AND b.status <> 'cancelled' AND b.deleted_at IS NULL GROUP BY m ORDER BY m DESC LIMIT 12`).bind(...idBinds(ids)).all();
       const limit = Number(await getSetting(env, 'sales.max_discount_bp')) || 100;
       const leak = await env.DB.prepare(`SELECT b.id, b.customer_name, i.wing, i.unit_no, b.list_price_paise, b.agreed_price_paise, b.discount_reason, b.approved_by, u.name AS approver,
         (b.list_price_paise - b.agreed_price_paise) * 10000 / b.list_price_paise AS discount_bp
         FROM sal_bookings b JOIN sal_inventory i ON i.id = b.unit_id LEFT JOIN users u ON u.id = b.approved_by
-        WHERE b.project_id IN (${ph(ids)}) AND b.status <> 'cancelled' AND b.deleted_at IS NULL AND b.list_price_paise IS NOT NULL AND b.agreed_price_paise < b.list_price_paise
-        ORDER BY discount_bp DESC LIMIT 30`).bind(...ids).all();
+        WHERE b.project_id IN (${inIds(ids)}) AND b.status <> 'cancelled' AND b.deleted_at IS NULL AND b.list_price_paise IS NOT NULL AND b.agreed_price_paise < b.list_price_paise
+        ORDER BY discount_bp DESC LIMIT 30`).bind(...idBinds(ids)).all();
       return json({ ok: true, data: { by_type, by_floor, monthly: monthlyRows.results.reverse(), approved_limit_bp: limit,
         leakage: leak.results.map((r) => ({ ...r, discount_bp: Math.round(r.discount_bp), over_limit: r.discount_bp > limit, unapproved: !r.approved_by })),
         total_discount_paise: leak.results.reduce((t, r) => t + (r.list_price_paise - r.agreed_price_paise), 0) } });
