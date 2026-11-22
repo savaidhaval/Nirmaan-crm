@@ -43,7 +43,7 @@ const order = ['users', 'projects', 'documents', 'apr_items', 'apr_events', 'drw
   'pro_vendors', 'pro_rfqs', 'pro_quotes', 'pro_pos', 'pro_po_items', 'pro_grns', 'pro_bills', 'sal_leads', 'sal_activities', 'sal_visits', 'sal_inventory',
   'sal_partners', 'sal_bookings', 'sal_plan_stages', 'sal_demands', 'sal_receipts', 'audit_log',
   'pro_grn_items', 'pro_payments', 'ppl_staff', 'ppl_hiring', 'ppl_candidates', 'sal_brokerage_payments', 'sal_refunds', 'sal_interest_waivers', 'mkt_spend', 'brands', 'counters',
-  'site_dpr_labour', 'bud_heads', 'pro_indents', 'pro_indent_items', 'pro_rfq_items', 'pro_quote_items', 'con_contractors', 'con_work_orders', 'con_wo_items', 'con_ra_bills', 'con_ra_lines', 'con_payments', 'con_ledger'];
+  'site_dpr_labour', 'bud_heads', 'stk_items', 'stk_balance', 'stk_moves', 'pro_party_docs', 'pty_funds', 'pty_entries', 'pro_indents', 'pro_indent_items', 'pro_rfq_items', 'pro_quote_items', 'con_contractors', 'con_work_orders', 'con_wo_items', 'con_ra_bills', 'con_ra_lines', 'con_payments', 'con_ledger'];
 const out = ['PRAGMA defer_foreign_keys = true;'];
 for (const t of order) {
   for (const row of tables[t] || []) {

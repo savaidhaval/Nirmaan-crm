@@ -35,6 +35,11 @@ export async function procurementByHead(env, projectId, inclGst) {
   return out;
 }
 
+export async function vendorName(env, id) {
+  const r = await env.DB.prepare('SELECT name FROM pro_vendors WHERE id = ? AND deleted_at IS NULL').bind(id).first();
+  return r ? r.name : null;
+}
+
 // The POs behind one head (for the head detail screen).
 export async function posForHead(env, headId) {
   return (await env.DB.prepare(`SELECT p.id, p.po_no, p.status, v.name AS vendor, SUM(i.amount_paise) AS amount_paise
@@ -49,7 +54,7 @@ export async function headsOnPo(env, poId) {
 }
 
 export function registerProcurement2(router, h) {
-  const { withAuth, json, serverError, visibleProjectIds, nowStr, csvBom, getCurrentUser, userCan } = h;
+  const { withAuth, json, serverError, visibleProjectIds, nowStr, csvBom, getCurrentUser, userCan, grnStockStatements } = h;
 
   // Site engineers hold Create (not View) on procurement. Screens they need to fill in must still be readable by them.
   const viewOrCreate = async (req, env, fn) => {
@@ -269,7 +274,8 @@ export function registerProcurement2(router, h) {
       const uuid = String(b.client_uuid || crypto.randomUUID());
       const dup = await env.DB.prepare('SELECT id FROM pro_grns WHERE client_uuid = ?').bind(uuid).first();
       if (dup) return json({ ok: true, data: { id: dup.id, duplicate: true } });
-      const valid = new Set((await env.DB.prepare('SELECT id FROM pro_po_items WHERE po_id = ?').bind(po.id).all()).results.map((r) => r.id));
+      const stockOf = Object.fromEntries((await env.DB.prepare('SELECT id, stock_item_id FROM pro_po_items WHERE po_id = ?').bind(po.id).all()).results.map((r) => [r.id, r.stock_item_id]));
+      const valid = new Set(Object.keys(stockOf).map(Number));
       const lines = (Array.isArray(b.lines) ? b.lines : []).map((l) => ({ id: Number(l.po_item_id), qty: num(l.qty_received) })).filter((l) => l.qty > 0);
       if (!lines.length) return json({ ok: false, error: 'Enter a quantity for at least one item.' }, 400);
       if (lines.some((l) => !valid.has(l.id))) return json({ ok: false, error: 'An item does not belong to this PO.' }, 400);
@@ -280,6 +286,8 @@ export function registerProcurement2(router, h) {
         env.DB.prepare('INSERT INTO pro_grns (po_id, received_on, qty_note, challan_no, received_by, client_uuid, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
           .bind(po.id, b.received_on || now.substring(0, 10), summary, String(b.challan_no || '').slice(0, 40), req.user.user_id, uuid, now),
         ...lines.map((l) => env.DB.prepare('INSERT INTO pro_grn_items (grn_id, po_item_id, qty_received, created_at) VALUES ((SELECT id FROM pro_grns WHERE client_uuid = ?), ?, ?, ?)').bind(uuid, l.id, l.qty, now)),
+        // Items tied to a stock item also go into the store, in this same batch.
+        ...grnStockStatements(env, now, po.project_id, req.user.user_id, uuid, lines.map((l) => ({ po_item_id: l.id, stock_item_id: stockOf[l.id], qty: l.qty }))),
         env.DB.prepare(`UPDATE pro_pos SET status = CASE WHEN NOT EXISTS (
             SELECT 1 FROM pro_po_items i WHERE i.po_id = ? AND COALESCE(i.qty, 0) > COALESCE((SELECT SUM(gi.qty_received) FROM pro_grn_items gi JOIN pro_grns g ON g.id = gi.grn_id WHERE gi.po_item_id = i.id AND g.deleted_at IS NULL), 0)
           ) THEN 'received' ELSE 'part_received' END WHERE id = ? AND status IN ('approved', 'part_received')`).bind(po.id, po.id),

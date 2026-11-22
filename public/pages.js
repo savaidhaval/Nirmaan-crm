@@ -166,6 +166,8 @@ const ICONS = {
   home: 'M3 12l9-9 9 9M5 10v10h14V10', dashboard: 'M3 3h7v9H3zM14 3h7v5h-7zM14 12h7v9h-7zM3 16h7v5H3z',
   projects: 'M3 21h18M5 21V7l7-4 7 4v14M9 9h2M9 13h2M13 9h2M13 13h2M10 21v-4h4v4',
   approvals: 'M9 12l2 2 4-4M12 21a9 9 0 100-18 9 9 0 000 18z', drawings: 'M12 20h9M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z',
+  stores: 'M3 7l9-4 9 4v10l-9 4-9-4zM3 7l9 4 9-4M12 11v10',
+  petty: 'M3 7h18v12H3zM3 11h18M7 15h3',
   budget: 'M3 3v18h18M7 14l4-4 3 3 5-6',
   contractors: 'M17 21v-2a4 4 0 00-4-4H7a4 4 0 00-4 4v2M10 11a4 4 0 100-8 4 4 0 000 8zM20 8v6M23 11h-6',
   site: 'M2 18h20M4 18a8 8 0 0116 0M12 6V3', procurement: 'M6 6h15l-1.5 9h-12zM6 6L5 3H2M9 20.5a.5.5 0 100-1 .5.5 0 000 1zM18 20.5a.5.5 0 100-1 .5.5 0 000 1z',
@@ -192,13 +194,13 @@ function sidebarItems(role) {
   const H = { label: 'Home', route: role === 'owner' ? 'dashboard' : 'home', icon: role === 'owner' ? 'dashboard' : 'home' };
   const I = (label, route) => ({ label, route, icon: route });
   const by = {
-    owner: [[null, [H]], ['Work', [I('Projects', 'projects'), I('Approvals', 'approvals'), I('Drawings', 'drawings'), I('Site', 'site')]], ['Money', [I('Procurement', 'procurement'), I('Contractors', 'contractors'), I('Budget', 'budget'), I('Sales', 'sales')]],
+    owner: [[null, [H]], ['Work', [I('Projects', 'projects'), I('Approvals', 'approvals'), I('Drawings', 'drawings'), I('Site', 'site'), I('Store', 'stores')]], ['Money', [I('Procurement', 'procurement'), I('Contractors', 'contractors'), I('Budget', 'budget'), I('Petty cash', 'petty'), I('Sales', 'sales')]],
       ['Admin', [I('Documents', 'documents'), I('Brochures', 'brochures'), I('People', 'people'), I('Users & access', 'users'), I('Branding', 'branding'), I('Shared links', 'sharelinks'), I('Audit log', 'audit')]], ['Setup', [I('Storage', 'storage'), I('Email', 'email'), I('Settings', 'settings')]]],
-    pm: [[null, [H]], ['Work', [I('Projects', 'projects'), I('Approvals', 'approvals'), I('Drawings', 'drawings'), I('Site', 'site')]], ['Money', [I('Procurement', 'procurement'), I('Contractors', 'contractors'), I('Budget', 'budget'), I('Sales', 'sales')]], ['Admin', [I('Documents', 'documents'), I('Brochures', 'brochures'), I('People', 'people'), I('Branding', 'branding'), I('Shared links', 'sharelinks'), I('Audit log', 'audit')]]],
-    site: [[null, [H]], ['Work', [I('Drawings', 'drawings'), I('Site', 'site'), I('Procurement', 'procurement'), I('Contractors', 'contractors')]], ['Admin', [I('Documents', 'documents')]]],
+    pm: [[null, [H]], ['Work', [I('Projects', 'projects'), I('Approvals', 'approvals'), I('Drawings', 'drawings'), I('Site', 'site'), I('Store', 'stores')]], ['Money', [I('Procurement', 'procurement'), I('Contractors', 'contractors'), I('Budget', 'budget'), I('Petty cash', 'petty'), I('Sales', 'sales')]], ['Admin', [I('Documents', 'documents'), I('Brochures', 'brochures'), I('People', 'people'), I('Branding', 'branding'), I('Shared links', 'sharelinks'), I('Audit log', 'audit')]]],
+    site: [[null, [H]], ['Work', [I('Drawings', 'drawings'), I('Site', 'site'), I('Store', 'stores'), I('Petty cash', 'petty'), I('Procurement', 'procurement'), I('Contractors', 'contractors')]], ['Admin', [I('Documents', 'documents')]]],
     sales: [[null, [H]], ['Work', [I('Sales', 'sales'), I('Brochures', 'brochures')]], ['Admin', [I('Documents', 'documents')]]],
-    accounts: [[null, [H]], ['Money', [I('Sales', 'sales'), I('Procurement', 'procurement'), I('Contractors', 'contractors'), I('Budget', 'budget')]], ['Admin', [I('Documents', 'documents'), I('Brochures', 'brochures'), I('Branding', 'branding')]]],
-    purchase: [[null, [H]], ['Work', [I('Procurement', 'procurement'), I('Contractors', 'contractors'), I('Budget', 'budget'), I('Drawings', 'drawings')]], ['Admin', [I('Documents', 'documents')]]],
+    accounts: [[null, [H]], ['Money', [I('Sales', 'sales'), I('Procurement', 'procurement'), I('Contractors', 'contractors'), I('Budget', 'budget'), I('Petty cash', 'petty'), I('Store', 'stores')]], ['Admin', [I('Documents', 'documents'), I('Brochures', 'brochures'), I('Branding', 'branding')]]],
+    purchase: [[null, [H]], ['Work', [I('Procurement', 'procurement'), I('Contractors', 'contractors'), I('Budget', 'budget'), I('Store', 'stores'), I('Drawings', 'drawings')]], ['Admin', [I('Documents', 'documents')]]],
     hr: [[null, [H]], ['Work', [I('People', 'people')]]],
     viewer: [[null, [H]], ['Work', [I('Projects', 'projects'), I('Approvals', 'approvals'), I('Drawings', 'drawings'), I('Site', 'site')]], ['Admin', [I('Documents', 'documents')]]],
   };
@@ -226,7 +228,7 @@ function getBottomNavItems(role) {
 
 const PAGES = {
   home: renderHome, dashboard: renderDashboard, projects: renderProjects, users: renderUsers, documents: renderDocuments,
-  settings: renderSettings, approvals: renderApprovals, drawings: renderDrawings, site: renderSite, procurement: renderProcurement, contractors: (m) => renderContractors(m), budget: (m) => renderBudget(m),
+  settings: renderSettings, approvals: renderApprovals, drawings: renderDrawings, site: renderSite, procurement: renderProcurement, contractors: (m) => renderContractors(m), budget: (m) => renderBudget(m), stores: (m) => renderStores(m), petty: (m) => renderPetty(m),
   sales: renderSales, storage: renderStorage, branding: (m) => renderBranding(m), sharelinks: renderShareLinks, more: renderMore,
   audit: renderAudit, notifications: renderNotifications, help: renderHelp, password: renderChangePassword, email: renderEmailSettings,
 };
@@ -629,6 +631,7 @@ function renderShareLinks(main) {
 
 const SETTING_LABELS = {
   'po.pm_approval_limit_paise': ['PM approval limit for purchase orders (₹)', 'money'],
+  'petty.low_balance_paise': ['Petty cash: warn when a fund falls below (₹)', 'money'],
   'budget.gst_basis': ['Budget figures: with or without GST (confirm with your CA)', 'basis'],
   'con.enabled': ['Contractors module (work orders, RA bills)', 'onoff'],
   'con.pm_approval_limit_paise': ['PM approval limit for work orders and RA bills (₹)', 'money'],
@@ -910,15 +913,17 @@ async function newPo() {
   const vendors = (await api('/api/procurement/vendors')).data.vendors;
   if (!vendors.length) { toast('Add a vendor first'); return; }
   const heads = await budgetHeadOptions();
+  const stockItems = await stockItemOptions();
   const v = await openForm({ title: 'New purchase order', intro: 'One line item for now. Add more lines later from the PO.', fields: [
     { name: 'project_id', label: 'Project', type: 'select', options: await projectOptions() },
     { name: 'vendor_id', label: 'Vendor', type: 'select', options: vendors.map((x) => [x.id, x.name]) },
     { name: 'description', label: 'Item', required: true }, { name: 'qty', label: 'Quantity', type: 'number', required: true }, { name: 'unit', label: 'Unit' },
     { name: 'rate', label: 'Rate per unit (₹)', type: 'money', required: true },
     { name: 'gst_bp', label: 'GST', type: 'select', options: [['1800', '18%'], ['1200', '12%'], ['500', '5%'], ['0', 'None']] }, { name: 'terms', label: 'Terms', type: 'textarea' },
-    ...(heads.length ? [{ name: 'budget_head_id', label: 'Budget head', type: 'select', options: heads, help: 'Which cost this belongs to. Used to watch the budget.' }] : [])] });
+    ...(heads.length ? [{ name: 'budget_head_id', label: 'Budget head', type: 'select', options: heads, help: 'Which cost this belongs to. Used to watch the budget.' }] : []),
+    ...(stockItems.length ? [{ name: 'stock_item_id', label: 'Goes into the store as', type: 'select', options: stockItems, help: 'Pick the store item so what you receive is added to stock.' }] : [])] });
   if (!v) return;
-  const body = { project_id: Number(v.project_id), vendor_id: Number(v.vendor_id), gst_bp: Number(v.gst_bp), terms: v.terms, budget_head_id: v.budget_head_id ? Number(v.budget_head_id) : null, items: [{ description: v.description, qty: v.qty, unit: v.unit, rate_paise: v.rate }] };
+  const body = { project_id: Number(v.project_id), vendor_id: Number(v.vendor_id), gst_bp: Number(v.gst_bp), terms: v.terms, budget_head_id: v.budget_head_id ? Number(v.budget_head_id) : null, stock_item_id: v.stock_item_id ? Number(v.stock_item_id) : null, items: [{ description: v.description, qty: v.qty, unit: v.unit, rate_paise: v.rate }] };
   if (await act(api('/api/procurement/pos', { method: 'POST', body }), 'PO created as draft')) loadProcurement();
 }
 

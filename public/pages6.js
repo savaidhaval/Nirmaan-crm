@@ -102,8 +102,8 @@ async function vendorLedger(id) {
   ov.innerHTML = `<div class="modal"><h2>Vendor ledger</h2><p><b>Balance payable: ${moneyP(d.payable_paise)}</b></p>
     ${d.bills.map((b) => `<div class="card"><div class="row"><div><b>${esc(b.bill_no || '—')}</b><p class="muted">Bill ${moneyP(b.amount_paise)}${b.tds_paise ? ' − TDS ' + moneyP(b.tds_paise) : ''} · paid ${moneyP(b.paid_paise)} · <b>due ${moneyP(b.balance_paise)}</b></p></div>${statusChip(b.status)}</div>
       ${d.payments.filter((p) => p.bill_id === b.id).map((p) => `<p class="muted">${esc(p.paid_on)} · ${moneyP(p.amount_paise)} ${esc(p.mode || '')} ${esc(p.ref_no || '')}${canRev ? ` <button class="btn small" data-rev="${p.id}">Reverse</button>` : ''}</p>`).join('')}</div>`).join('') || '<p class="muted">No bills yet.</p>'}
-    <div class="modal-actions"><button class="btn btn-primary" id="vl-close">Close</button></div></div>`;
-  document.body.appendChild(ov); $('vl-close').onclick = () => ov.remove();
+    <div class="modal-actions"><button class="btn" id="vl-docs">Documents</button><button class="btn btn-primary" id="vl-close">Close</button></div></div>`;
+  document.body.appendChild(ov); $('vl-close').onclick = () => ov.remove(); $('vl-docs').onclick = () => partyDocsModal('vendor', id);
   ov.querySelectorAll('[data-rev]').forEach((b) => { b.onclick = async () => {
     const v = await openForm({ title: 'Reverse payment', fields: [{ name: 'reason', label: 'Why is it being reversed?', type: 'textarea', required: true }] });
     if (v && await act(api(`/api/procurement/payments/${b.dataset.rev}/reverse`, { method: 'POST', body: v }), 'Payment reversed')) { ov.remove(); vendorLedger(id); loadProcurement(); }
