@@ -13,6 +13,9 @@ import * as gdrive from './core/gdrive.js';
 import { registerSalesOps, expireHolds, LEAD_TRANSITIONS } from './routes/sales_ops.js';
 import { registerReports } from './routes/reports.js';
 import { registerFinance } from './routes/finance.js';
+import { registerProcurement2 } from './routes/procurement2.js';
+import { csvBom } from './core/util.js';
+import { registerContractors, raDueSweep } from './routes/contractors.js';
 import { registerMfa, mfaChallenge } from './routes/mfa.js';
 import { registerImporter } from './routes/importer.js';
 import { registerPrivacy } from './routes/privacy.js';
@@ -527,7 +530,8 @@ router.get('/api/settings', async (req, env) => {
 const EDITABLE_SETTINGS = ['po.pm_approval_limit_paise', 'access.allow_second_owner', 'access.limit_roles_to_assigned_projects', 'sales.share_all_leads',
   'demand.due_days_after_milestone', 'share.default_expiry_days', 'share.default_max_views', 'files.brochure_max_mb', 'branding.apply_colours_to_app',
   'brochure.price_list_default_audience', 'storage.warn_percent', 'sales.max_holds_per_user', 'sales.max_discount_bp', 'sales.pm_max_discount_bp',
-  'interest.rate_bp', 'interest.grace_days', 'interest.enabled', 'security.require_mfa_roles', 'tax.stamp_duty_bp', 'tax.metro_cess_bp', 'tax.women_concession_bp', 'tax.registration_bp', 'tax.registration_cap_paise', 'tax.gst_bp'];
+  'interest.rate_bp', 'interest.grace_days', 'interest.enabled', 'security.require_mfa_roles', 'tax.stamp_duty_bp', 'tax.metro_cess_bp', 'tax.women_concession_bp', 'tax.registration_bp', 'tax.registration_cap_paise', 'tax.gst_bp',
+  'con.enabled', 'con.pm_approval_limit_paise', 'con.gst_bp', 'con.tds_bp'];
 
 router.post('/api/settings/:key', async (req, env) => {
   return withAuth(req, env, 'users_settings', 'E', async (req, env) => {
@@ -1297,20 +1301,10 @@ router.get('/api/procurement/bills', async (req, env) => {
     if (req.user.role === 'site') return json({ ok: false, error: 'Not allowed.' }, 403);
     const ids = await visibleProjectIds(env, req.user);
     if (!ids.length) return json({ ok: true, data: { bills: [] } });
-    const rows = await env.DB.prepare(`SELECT b.*, v.name AS vendor, p.po_no FROM pro_bills b JOIN pro_vendors v ON v.id = b.vendor_id LEFT JOIN pro_pos p ON p.id = b.po_id
+    const rows = await env.DB.prepare(`SELECT b.*, v.name AS vendor, p.po_no, COALESCE((SELECT SUM(x.amount_paise) FROM pro_payments x WHERE x.bill_id = b.id AND x.reversed_at IS NULL), 0) AS paid_paise FROM pro_bills b JOIN pro_vendors v ON v.id = b.vendor_id LEFT JOIN pro_pos p ON p.id = b.po_id
       WHERE (p.id IS NULL OR p.project_id IN (${ids.map(() => '?').join(',')})) ORDER BY b.status = 'paid', b.due_date LIMIT 200`).bind(...ids).all();
+    for (const r of rows.results) { const net = r.amount_paise - (r.tds_paise || 0); if (r.status === 'paid' && !r.paid_paise) r.paid_paise = net; r.balance_paise = Math.max(0, net - r.paid_paise); }
     return json({ ok: true, data: { bills: rows.results } });
-  });
-});
-
-router.post('/api/procurement/bills/:id/pay', async (req, env) => {
-  return withAuth(req, env, 'procurement', 'E', async (req, env) => {
-    const b = await req.json();
-    const bill = await env.DB.prepare('SELECT * FROM pro_bills WHERE id = ?').bind(Number(req.params.id)).first();
-    if (!bill) return json({ ok: false, error: 'Bill not found.' }, 404);
-    await env.DB.prepare("UPDATE pro_bills SET status = 'paid', paid_on = ?, payment_ref = ? WHERE id = ?").bind(b.paid_on || nowStr().substring(0, 10), b.payment_ref || '', bill.id).run();
-    await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, 'pay', 'pro_bills', ?, ?, ?)`).bind(req.user.user_id, bill.id, `Marked bill ${bill.bill_no || bill.id} paid`, nowStr()).run();
-    return json({ ok: true });
   });
 });
 
@@ -1422,45 +1416,76 @@ router.get('/api/export/:what', async (req, env) => {
   });
 });
 
-async function buildExport(env) {
-  const tables = ['projects', 'apr_items', 'apr_events', 'drw_drawings', 'drw_revisions', 'site_milestones', 'site_dprs', 'site_snags', 'pro_vendors', 'pro_rfqs', 'pro_quotes', 'pro_pos', 'pro_po_items', 'pro_grns', 'pro_bills',
-    'sal_leads', 'sal_activities', 'sal_visits', 'sal_inventory', 'sal_partners', 'sal_bookings', 'sal_plan_stages', 'sal_demands', 'sal_receipts', 'documents', 'audit_log'];
-  const out = { exported_at: new Date().toISOString(), tables: {} };
-  for (const t of tables) out.tables[t] = (await env.DB.prepare(`SELECT * FROM ${t}`).all()).results;
-  for (const r of out.tables.sal_bookings) r.pan = await maskPan(env, r.pan); // never export a customer's PAN
-  out.tables.users = (await env.DB.prepare('SELECT id, name, email, phone, role, lang, active, created_at FROM users').all()).results;
+// Tables are read in parts so one request or cron run never goes near the free plan's 50-queries-per-run cap.
+const EXPORT_TABLES = ['projects', 'apr_items', 'apr_events', 'drw_drawings', 'drw_revisions', 'site_milestones', 'site_dprs', 'site_snags', 'pro_vendors', 'pro_rfqs', 'pro_quotes', 'pro_pos', 'pro_po_items', 'pro_grns', 'pro_bills',
+    'sal_leads', 'sal_activities', 'sal_visits', 'sal_inventory', 'sal_partners', 'sal_bookings', 'sal_plan_stages', 'sal_demands', 'sal_receipts', 'documents', 'audit_log',
+    'pro_grn_items', 'pro_payments', 'ppl_staff', 'ppl_hiring', 'ppl_candidates', 'sal_brokerage_payments', 'sal_refunds', 'sal_interest_waivers', 'mkt_spend', 'brands', 'counters',
+    'pro_indents', 'pro_indent_items', 'pro_rfq_items', 'pro_quote_items',
+    'con_contractors', 'con_work_orders', 'con_wo_items', 'con_ra_bills', 'con_ra_lines', 'con_payments', 'con_ledger'];
+const EXPORT_PARTS = 3;
+
+async function buildExport(env, part = 1) {
+  const per = Math.ceil(EXPORT_TABLES.length / EXPORT_PARTS);
+  const out = { exported_at: new Date().toISOString(), part, of: EXPORT_PARTS, tables: {} };
+  for (const t of EXPORT_TABLES.slice((part - 1) * per, part * per)) out.tables[t] = (await env.DB.prepare(`SELECT * FROM ${t}`).all()).results;
+  if (out.tables.sal_bookings) for (const r of out.tables.sal_bookings) r.pan = await maskPan(env, r.pan); // never export a customer's PAN
+  if (part === EXPORT_PARTS) out.tables.users = (await env.DB.prepare('SELECT id, name, email, phone, role, lang, active, created_at FROM users').all()).results;
   return out;
 }
 
-// Nightly backup (02:00 IST): JSON export saved to the connected Google Drive under /Backups. Only the Owner's Drive holds it.
+async function uploadBackupFile(env, name, body) {
+  await withDrive(env, async (token) => {
+    const root = await getSettingRaw(env, 'storage.gdrive.root_folder_id');
+    const found = await gdrive.findDriveFolder(env, token, 'Backups', root);
+    const folder = (found.files && found.files[0]) ? found.files[0].id : (await gdrive.createDriveFolder(env, token, 'Backups', root)).id;
+    const session = await gdrive.resumableUploadInit(env, token, name, 'application/json', folder, body.byteLength);
+    await gdrive.resumableUploadPut(env, token, session, body, body.byteLength, 'application/json');
+  });
+}
+
+async function failBackup(env, id, e) {
+  await env.DB.prepare("UPDATE backup_log SET status = 'failed', note = ?, finished_at = ? WHERE id = ?").bind(String(e.message).slice(0, 300), nowStr(), id).run();
+  const owners = await env.DB.prepare("SELECT id FROM users WHERE role = 'owner' AND active = 1").all();
+  for (const o of owners.results) await env.DB.prepare('INSERT INTO notifications (user_id, title, body, link, created_at) VALUES (?, ?, ?, ?, ?)').bind(o.id, 'Nightly backup did not run', String(e.message).slice(0, 200), 'storage', nowStr()).run();
+}
+
+// Nightly backup (02:00 IST) saves part 1 to Google Drive /Backups; the next hourly runs save parts 2 and 3 (continueBackup).
 async function nightlyBackup(env) {
-  const log = await env.DB.prepare("INSERT INTO backup_log (kind, status, started_at) VALUES ('nightly', 'running', ?)").bind(nowStr()).run();
+  const day = new Date(Date.now() + 19800000).toISOString().substring(0, 10);
+  const log = await env.DB.prepare("INSERT INTO backup_log (kind, status, cursor_json, started_at) VALUES ('nightly', 'running', ?, ?)").bind(JSON.stringify({ day, next: 1 }), nowStr()).run();
   const id = log.meta.last_row_id;
   try {
     if (!(await driveReady(env))) throw new Error('Google Drive is not connected, so no backup was saved.');
-    const body = new TextEncoder().encode(JSON.stringify(await buildExport(env)));
-    const day = new Date(Date.now() + 19800000).toISOString().substring(0, 10);
-    await withDrive(env, async (token) => {
-      const root = await getSettingRaw(env, 'storage.gdrive.root_folder_id');
-      const found = await gdrive.findDriveFolder(env, token, 'Backups', root);
-      const folder = (found.files && found.files[0]) ? found.files[0].id : (await gdrive.createDriveFolder(env, token, 'Backups', root)).id;
-      const session = await gdrive.resumableUploadInit(env, token, `nirmaan-backup-${day}.json`, 'application/json', folder, body.byteLength);
-      await gdrive.resumableUploadPut(env, token, session, body, body.byteLength, 'application/json');
-    });
-    await env.DB.prepare("UPDATE backup_log SET status = 'ok', bytes = ?, files_written = 1, finished_at = ? WHERE id = ?").bind(body.byteLength, nowStr(), id).run();
-  } catch (e) {
-    await env.DB.prepare("UPDATE backup_log SET status = 'failed', note = ?, finished_at = ? WHERE id = ?").bind(String(e.message).slice(0, 300), nowStr(), id).run();
-    const owners = await env.DB.prepare("SELECT id FROM users WHERE role = 'owner' AND active = 1").all();
-    for (const o of owners.results) await env.DB.prepare('INSERT INTO notifications (user_id, title, body, link, created_at) VALUES (?, ?, ?, ?, ?)').bind(o.id, 'Nightly backup did not run', String(e.message).slice(0, 200), 'storage', nowStr()).run();
-  }
+    await backupPart(env, id, day, 1);
+  } catch (e) { await failBackup(env, id, e); }
+}
+
+async function backupPart(env, id, day, part) {
+  const body = new TextEncoder().encode(JSON.stringify(await buildExport(env, part)));
+  await uploadBackupFile(env, `nirmaan-backup-${day}-part${part}of${EXPORT_PARTS}.json`, body);
+  const last = part >= EXPORT_PARTS;
+  await env.DB.prepare(`UPDATE backup_log SET status = ?, cursor_json = ?, bytes = COALESCE(bytes, 0) + ?, files_written = ?, finished_at = ? WHERE id = ?`)
+    .bind(last ? 'ok' : 'running', JSON.stringify({ day, next: part + 1 }), body.byteLength, part, last ? nowStr() : null, id).run();
+}
+
+// Hourly: carry on a backup that has saved some parts but not all.
+async function continueBackup(env) {
+  const row = await env.DB.prepare("SELECT id, cursor_json, started_at FROM backup_log WHERE kind = 'nightly' AND status = 'running' ORDER BY id DESC LIMIT 1").first();
+  if (!row) return;
+  try {
+    const c = JSON.parse(row.cursor_json || '{}');
+    if (Date.now() - Date.parse(row.started_at.replace(' ', 'T') + 'Z') > 20 * 3600000) throw new Error('Backup did not finish (not all parts were saved).');
+    if (c.next >= 2 && c.next <= EXPORT_PARTS) await backupPart(env, row.id, c.day, c.next);
+  } catch (e) { await failBackup(env, row.id, e); }
 }
 
 // Owner-only full data export (JSON). Secrets, sessions, OTP codes and file contents are left out.
 router.get('/api/export-all', async (req, env) => {
   return withAuth(req, env, 'users_settings', 'E', async (req, env) => {
     if (req.user.role !== 'owner') return json({ ok: false, error: 'Owner only.' }, 403);
-    const out = await buildExport(env);
-    return new Response(JSON.stringify(out), { headers: { 'Content-Type': 'application/json', 'Content-Disposition': 'attachment; filename="nirmaan-export.json"', 'Cache-Control': 'no-store' } });
+    const part = Math.min(EXPORT_PARTS, Math.max(1, Number(new URL(req.url).searchParams.get('part')) || 1));
+    const out = await buildExport(env, part);
+    return new Response(JSON.stringify(out), { headers: { 'Content-Type': 'application/json', 'Content-Disposition': `attachment; filename="nirmaan-export-part${part}of${EXPORT_PARTS}.json"`, 'Cache-Control': 'no-store' } });
   });
 });
 
@@ -1981,6 +2006,8 @@ registerMfa(router, { json, serverError, getCurrentUser, getSetting, nowStr, enc
 registerImporter(router, { withAuth, json, serverError, visibleProjectIds, nowStr, encryptSetting });
 registerPrivacy(router, { withAuth, json, serverError, nowStr, decryptSetting });
 registerReports(router, { withAuth, json, serverError, visibleProjectIds, getSetting, nowStr });
+registerProcurement2(router, { withAuth, json, serverError, visibleProjectIds, nowStr, csvBom, getCurrentUser, userCan });
+registerContractors(router, { withAuth, json, serverError, visibleProjectIds, nowStr, getSetting, encryptSetting, decryptSetting, printBrand, csvBom });
 registerSalesOps(router, { withAuth, json, serverError, visibleProjectIds, userCan, getSetting, nowStr, encryptSetting, clientIp, checkRateLimit });
 
 // ---------- Branding routes ----------
@@ -3035,6 +3062,8 @@ async function runCron(cron, env) {
     await retryFailedEmails(env);
     await leadSlaNudges(env);
     await expireHolds(env, nowStr);
+    await raDueSweep(env, getSetting);
+    await continueBackup(env);
   } else if (cron === '30 2 * * *') {
     // 08:00 IST digest to every active Owner
     const owners = await env.DB.prepare("SELECT email FROM users WHERE role = 'owner' AND active = 1 AND deleted_at IS NULL").all();

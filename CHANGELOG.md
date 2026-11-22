@@ -20,3 +20,19 @@
 - Email: SMTP client rewritten (multi-line replies, AUTH PLAIN/LOGIN, STARTTLS, MIME with UTF-8, dot-stuffing, header-injection guard);
   encrypted SMTP password; Email settings screen; working OTP login; digest escapes content.
 - New: users admin, approvals template, drawing revisions, PO approval, sales bookings/receipts, share links with revoke, document upload/links.
+
+## S0/S1 (2026-11-22)
+- Docs only: added `docs/STATE.md` (reconciliation, remote checks pending), `docs/DATA_DICTIONARY.md` (real schema), `docs/proposed/0010_reconcile.sql` (NOT applied), `CLAUDE.md` (standing rules).
+- S2: migration 0013 (ppl_staff trade/project_id, pro_grn_items, pro_payments); export now includes those plus 9 previously omitted tables. Option B adopted.
+
+## WP-4 procurement addendum (2026-11-22)
+- New: indents (site raises, PM approves, Purchase converts to RFQ), items on RFQs, per-line quotes with server-calculated totals, material received by PO line (PO becomes part_received/received from the totals in one batch), bill part-payments with atomic over-payment guard, payment reversal, exact vendor ledger, reports (pending indents, PO vs received; CSV).
+- Changed: old "mark paid" now records a normal payment for the balance; project financials count payments; site engineers can open the Procurement screen (lists they may not view are skipped).
+- Migration 0014; code in `src/routes/procurement2.js`, `public/pages6.js`; test `tests/procurement2.mjs` (39 checks, added to CI).
+
+## WP-5 contractors (2026-11-22)
+- New module "Contractors" (switched off until the Owner turns it on in Settings): contractors with private PAN, work orders (lump sum / item rate / measured, retention per work order, advance), maker-checker approval with a PM limit, running-account (RA) bills with retention, advance recovery, GST/TDS from settings, over-quantity warning, check then approve, part payments with reversal, retention release, closing rules, append-only ledger, reports (CSV), letterhead print for work orders and RA bills (DRAFT until approved), hourly RA-due reminder.
+- Changed: Export-everything and the nightly backup now come in 3 parts (the free plan allows 50 database reads per run). `scripts/restore.mjs` takes all parts and now restores every table, including ones it used to skip.
+- Changed: `api()` errors carry `.data` so screens can offer "save anyway". Staging workers.dev address switched off; crm.mysociety.tech is the only public address.
+- Migration 0015; code in `src/routes/contractors.js`, `public/pages7.js`; test `tests/contractors.mjs` (61 checks, in CI).
+- Fix (found by the browser walkthrough): the Contractors menu entry broke the whole app because it was wired before its script loaded; site engineers could not see any PO to receive material against (new money-free `/api/procurement/pos-to-receive`); the Contractors screen hid its buttons from Purchase/Accounts. Browser walkthrough: 26 checks as 5 roles on a phone-sized screen (`tests/ui-walkthrough.mjs.txt`, screenshots in `docs/ui-walkthrough/`).

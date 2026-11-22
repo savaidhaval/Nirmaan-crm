@@ -10,7 +10,7 @@ function setScopeProject(id) {
   scopeProject = Number(id) || 0;
   try { scopeProject ? localStorage.setItem('nirmaan.project', String(scopeProject)) : localStorage.removeItem('nirmaan.project'); } catch (e) { /* ignore */ }
 }
-const SCOPED_PATHS = /^\/api\/(approvals|drawings|site\/|procurement\/(pos|rfqs|bills|grns|vendors\/\d+\/ledger)|sales\/(leads|bookings)|documents|brochures|dashboard)/;
+const SCOPED_PATHS = /^\/api\/(approvals|drawings|site\/|procurement\/(pos|pos-to-receive|rfqs|bills|grns|indents|vendors\/\d+\/ledger)|contractors\/work-orders|sales\/(leads|bookings)|documents|brochures|dashboard)/;
 
 async function api(path, options = {}) {
   if (scopeProject && (options.method || 'GET') === 'GET' && SCOPED_PATHS.test(path) && !/[?&]project_id=/.test(path)) {
@@ -43,7 +43,9 @@ async function api(path, options = {}) {
 
   if (!res.ok) {
     const msg = data && data.error ? data.error : `Request failed (${res.status})`;
-    throw new Error(msg);
+    const err = new Error(msg);
+    err.data = data; err.status = res.status;
+    throw err;
   }
 
   return data;

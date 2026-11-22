@@ -166,6 +166,7 @@ const ICONS = {
   home: 'M3 12l9-9 9 9M5 10v10h14V10', dashboard: 'M3 3h7v9H3zM14 3h7v5h-7zM14 12h7v9h-7zM3 16h7v5H3z',
   projects: 'M3 21h18M5 21V7l7-4 7 4v14M9 9h2M9 13h2M13 9h2M13 13h2M10 21v-4h4v4',
   approvals: 'M9 12l2 2 4-4M12 21a9 9 0 100-18 9 9 0 000 18z', drawings: 'M12 20h9M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z',
+  contractors: 'M17 21v-2a4 4 0 00-4-4H7a4 4 0 00-4 4v2M10 11a4 4 0 100-8 4 4 0 000 8zM20 8v6M23 11h-6',
   site: 'M2 18h20M4 18a8 8 0 0116 0M12 6V3', procurement: 'M6 6h15l-1.5 9h-12zM6 6L5 3H2M9 20.5a.5.5 0 100-1 .5.5 0 000 1zM18 20.5a.5.5 0 100-1 .5.5 0 000 1z',
   sales: 'M3 17l6-6 4 4 8-8M15 7h6v6', documents: 'M14 3H7a2 2 0 00-2 2v14a2 2 0 002 2h10a2 2 0 002-2V8zM14 3v5h5M9 13h6M9 17h6',
   users: 'M17 21v-2a4 4 0 00-4-4H7a4 4 0 00-4 4v2M10 11a4 4 0 100-8 4 4 0 000 8zM21 21v-2a4 4 0 00-3-3.9M16 3.1a4 4 0 010 7.8',
@@ -190,13 +191,13 @@ function sidebarItems(role) {
   const H = { label: 'Home', route: role === 'owner' ? 'dashboard' : 'home', icon: role === 'owner' ? 'dashboard' : 'home' };
   const I = (label, route) => ({ label, route, icon: route });
   const by = {
-    owner: [[null, [H]], ['Work', [I('Projects', 'projects'), I('Approvals', 'approvals'), I('Drawings', 'drawings'), I('Site', 'site')]], ['Money', [I('Procurement', 'procurement'), I('Sales', 'sales')]],
+    owner: [[null, [H]], ['Work', [I('Projects', 'projects'), I('Approvals', 'approvals'), I('Drawings', 'drawings'), I('Site', 'site')]], ['Money', [I('Procurement', 'procurement'), I('Contractors', 'contractors'), I('Sales', 'sales')]],
       ['Admin', [I('Documents', 'documents'), I('Brochures', 'brochures'), I('People', 'people'), I('Users & access', 'users'), I('Branding', 'branding'), I('Shared links', 'sharelinks'), I('Audit log', 'audit')]], ['Setup', [I('Storage', 'storage'), I('Email', 'email'), I('Settings', 'settings')]]],
-    pm: [[null, [H]], ['Work', [I('Projects', 'projects'), I('Approvals', 'approvals'), I('Drawings', 'drawings'), I('Site', 'site')]], ['Money', [I('Procurement', 'procurement'), I('Sales', 'sales')]], ['Admin', [I('Documents', 'documents'), I('Brochures', 'brochures'), I('People', 'people'), I('Branding', 'branding'), I('Shared links', 'sharelinks'), I('Audit log', 'audit')]]],
-    site: [[null, [H]], ['Work', [I('Drawings', 'drawings'), I('Site', 'site'), I('Procurement', 'procurement')]], ['Admin', [I('Documents', 'documents')]]],
+    pm: [[null, [H]], ['Work', [I('Projects', 'projects'), I('Approvals', 'approvals'), I('Drawings', 'drawings'), I('Site', 'site')]], ['Money', [I('Procurement', 'procurement'), I('Contractors', 'contractors'), I('Sales', 'sales')]], ['Admin', [I('Documents', 'documents'), I('Brochures', 'brochures'), I('People', 'people'), I('Branding', 'branding'), I('Shared links', 'sharelinks'), I('Audit log', 'audit')]]],
+    site: [[null, [H]], ['Work', [I('Drawings', 'drawings'), I('Site', 'site'), I('Procurement', 'procurement'), I('Contractors', 'contractors')]], ['Admin', [I('Documents', 'documents')]]],
     sales: [[null, [H]], ['Work', [I('Sales', 'sales'), I('Brochures', 'brochures')]], ['Admin', [I('Documents', 'documents')]]],
-    accounts: [[null, [H]], ['Money', [I('Sales', 'sales'), I('Procurement', 'procurement')]], ['Admin', [I('Documents', 'documents'), I('Brochures', 'brochures'), I('Branding', 'branding')]]],
-    purchase: [[null, [H]], ['Work', [I('Procurement', 'procurement'), I('Drawings', 'drawings')]], ['Admin', [I('Documents', 'documents')]]],
+    accounts: [[null, [H]], ['Money', [I('Sales', 'sales'), I('Procurement', 'procurement'), I('Contractors', 'contractors')]], ['Admin', [I('Documents', 'documents'), I('Brochures', 'brochures'), I('Branding', 'branding')]]],
+    purchase: [[null, [H]], ['Work', [I('Procurement', 'procurement'), I('Contractors', 'contractors'), I('Drawings', 'drawings')]], ['Admin', [I('Documents', 'documents')]]],
     hr: [[null, [H]], ['Work', [I('People', 'people')]]],
     viewer: [[null, [H]], ['Work', [I('Projects', 'projects'), I('Approvals', 'approvals'), I('Drawings', 'drawings'), I('Site', 'site')]], ['Admin', [I('Documents', 'documents')]]],
   };
@@ -224,7 +225,7 @@ function getBottomNavItems(role) {
 
 const PAGES = {
   home: renderHome, dashboard: renderDashboard, projects: renderProjects, users: renderUsers, documents: renderDocuments,
-  settings: renderSettings, approvals: renderApprovals, drawings: renderDrawings, site: renderSite, procurement: renderProcurement,
+  settings: renderSettings, approvals: renderApprovals, drawings: renderDrawings, site: renderSite, procurement: renderProcurement, contractors: (m) => renderContractors(m),
   sales: renderSales, storage: renderStorage, branding: (m) => renderBranding(m), sharelinks: renderShareLinks, more: renderMore,
   audit: renderAudit, notifications: renderNotifications, help: renderHelp, password: renderChangePassword, email: renderEmailSettings,
 };
@@ -403,7 +404,7 @@ function renderMore(main) {
     { label: 'Notifications', route: 'notifications', icon: 'bell' }, { label: 'Help', route: 'help', icon: 'help' }, { label: 'Change password', route: 'password', icon: 'password' }];
   const canCsv = ['owner', 'pm', 'accounts', 'viewer'].includes(currentUser.role);
   main.innerHTML = `<h1>${esc(t('More'))}</h1><div class="grid">${items.map((i) => `<button class="btn btn-full" style="justify-content:flex-start;gap:12px" data-go="${i.route}">${icon(i.icon, 20)}${esc(t(i.label))}</button>`).join('')}</div>
-    ${canCsv ? `<div class="card"><b>Download for Excel</b><div class="row-btns"><a class="btn small" href="/api/export/receipts">Receipts</a><a class="btn small" href="/api/export/receivables">Receivables</a><a class="btn small" href="/api/export/purchases">Purchases</a><a class="btn small" href="/api/export/leads">Leads</a>${o ? '<a class="btn small" href="/api/export-all">Everything (backup)</a>' : ''}</div></div>` : ''}
+    ${canCsv ? `<div class="card"><b>Download for Excel</b><div class="row-btns"><a class="btn small" href="/api/export/receipts">Receipts</a><a class="btn small" href="/api/export/receivables">Receivables</a><a class="btn small" href="/api/export/purchases">Purchases</a><a class="btn small" href="/api/export/leads">Leads</a>${o ? '<a class="btn small" href="/api/export-all?part=1">Backup 1 of 3</a><a class="btn small" href="/api/export-all?part=2">Backup 2 of 3</a><a class="btn small" href="/api/export-all?part=3">Backup 3 of 3</a>' : ''}</div></div>` : ''}
     <div class="field"><label>${esc(t('Language'))}</label><select id="more-lang"><option value="en">English</option><option value="hi">हिन्दी</option><option value="mr">मराठी</option></select></div>
     <button class="btn btn-full" style="margin-top:12px;color:#dc2626" id="more-logout">${esc(t('Log out'))}</button>`;
   $('more-lang').value = currentUser.lang || 'en';
@@ -627,6 +628,10 @@ function renderShareLinks(main) {
 
 const SETTING_LABELS = {
   'po.pm_approval_limit_paise': ['PM approval limit for purchase orders (₹)', 'money'],
+  'con.enabled': ['Contractors module (work orders, RA bills)', 'onoff'],
+  'con.pm_approval_limit_paise': ['PM approval limit for work orders and RA bills (₹)', 'money'],
+  'con.gst_bp': ['GST on contractor bills, in basis points (1800 = 18%). Confirm with your CA', 'number'],
+  'con.tds_bp': ['TDS on contractor bills, in basis points (100 = 1%). Confirm with your CA', 'number'],
   'access.allow_second_owner': ['Allow a second Owner', 'onoff'],
   'sales.share_all_leads': ['Sales team can see everyone’s leads', 'onoff'],
   'demand.due_days_after_milestone': ['Days to pay after a milestone is done', 'number'],
@@ -749,7 +754,7 @@ async function approvalDetail(id) {
 // Client-side permission hint only (the server enforces everything).
 function userCanClient(module, action) {
   const r = currentUser.role;
-  const deny = { share: { C: ['owner', 'pm', 'sales'] }, approvals: { E: ['owner', 'pm'] }, drawings: { C: ['owner', 'pm'], A: ['owner', 'pm'] }, site: { C: ['owner', 'pm', 'site'] }, procurement: { C: ['owner', 'pm', 'accounts', 'purchase', 'site'], E: ['owner', 'pm', 'accounts', 'purchase'], A: ['owner', 'pm'] }, sales: { C: ['owner', 'pm', 'sales', 'accounts'], E: ['owner', 'pm', 'sales', 'accounts'], A: ['owner', 'pm'] } };
+  const deny = { contractors: { C: ['owner', 'pm', 'accounts', 'purchase'], E: ['owner', 'pm', 'accounts', 'purchase'], A: ['owner', 'pm'] }, share: { C: ['owner', 'pm', 'sales'] }, approvals: { E: ['owner', 'pm'] }, drawings: { C: ['owner', 'pm'], A: ['owner', 'pm'] }, site: { C: ['owner', 'pm', 'site'] }, procurement: { C: ['owner', 'pm', 'accounts', 'purchase', 'site'], E: ['owner', 'pm', 'accounts', 'purchase'], A: ['owner', 'pm'] }, sales: { C: ['owner', 'pm', 'sales', 'accounts'], E: ['owner', 'pm', 'sales', 'accounts'], A: ['owner', 'pm'] } };
   return ((deny[module] || {})[action] || []).includes(r);
 }
 
@@ -879,8 +884,9 @@ function renderProcurement(main) {
   main.innerHTML = `<h1>Procurement</h1><div class="grid">
     <button class="btn btn-primary btn-full" id="p-po">📄 New purchase order</button>
     <button class="btn btn-full" id="p-vendor">🛒 New vendor</button>
-    <button class="btn btn-full" id="p-rfq">📋 New RFQ</button></div><div id="procurement-list">Loading...</div>`;
-  $('p-po').onclick = newPo; $('p-vendor').onclick = newVendor; $('p-rfq').onclick = newRfq;
+    <button class="btn btn-full" id="p-rfq">📋 New RFQ</button>
+    <button class="btn btn-full" id="p-indent">📝 Ask for material (indent)</button></div><div id="procurement-list">Loading...</div>`;
+  $('p-po').onclick = newPo; $('p-vendor').onclick = newVendor; $('p-rfq').onclick = newRfq; $('p-indent').onclick = newIndent;
   loadProcurement();
 }
 
@@ -915,13 +921,15 @@ const openPrint = (k, id) => window.open(`/print.html?k=${k}&id=${id}`, '_blank'
 async function loadProcurement() {
   try {
     const noBills = currentUser.role === 'site';
-    const [vendors, pos, rfqs, bills] = await Promise.all([api('/api/procurement/vendors'), api('/api/procurement/pos'), api('/api/procurement/rfqs'), noBills ? { data: { bills: [] } } : api('/api/procurement/bills')]);
+    // A site engineer may raise indents and receive material but cannot view the lists below: show what is allowed, quietly skip the rest.
+    const soft = (p, d) => p.catch(() => ({ data: d }));
+    const [vendors, pos, rfqs, bills, indents] = await Promise.all([soft(api('/api/procurement/vendors'), { vendors: [] }), soft(api(noBills ? '/api/procurement/pos-to-receive' : '/api/procurement/pos'), { pos: [] }), soft(api('/api/procurement/rfqs'), { rfqs: [] }), noBills ? { data: { bills: [] } } : soft(api('/api/procurement/bills'), { bills: [] }), soft(api('/api/procurement/indents'), { indents: [] })]);
     const canA = userCanClient('procurement', 'A'), canE = userCanClient('procurement', 'E');
-    let html = '<h3>Purchase orders</h3>' + (pos.data.pos.map((p) => `<div class="card"><div class="row"><div><b>${esc(p.po_no)}</b><p class="muted">Total ${moneyP(p.total_paise)}</p></div>${statusChip(p.status)}</div>
+    let html = indentsHtml(indents.data.indents) + '<h3>Purchase orders</h3>' + (pos.data.pos.map((p) => `<div class="card"><div class="row"><div><b>${esc(p.po_no)}</b><p class="muted">${noBills ? esc(p.vendor_name || '') : 'Total ' + moneyP(p.total_paise)}</p></div>${statusChip(p.status)}</div>
       <div class="row-btns">${p.status === 'draft' && canE ? `<button class="btn small" data-po="submit" data-id="${p.id}">Send for approval</button>` : ''}${p.status === 'pending_approval' && canA ? `<button class="btn small btn-primary" data-po="approve" data-id="${p.id}">Approve</button><button class="btn small" data-po="reject" data-id="${p.id}">Reject</button>` : ''}
       ${['approved', 'part_received'].includes(p.status) ? `<button class="btn small btn-primary" data-grn="${p.id}">Material received</button>` : ''}${!noBills && canE && ['approved', 'part_received', 'received'].includes(p.status) ? `<button class="btn small" data-bill="${p.id}" data-vendor="${p.vendor_id}">Add bill</button>` : ''}
       ${!noBills ? `<button class="btn small" data-print="${p.id}">Print</button>` : ''}</div></div>`).join('') || '<p class="muted">No purchase orders yet.</p>');
-    if (!noBills) html += '<h3>Bills</h3>' + (bills.data.bills.map((b) => `<div class="card"><div class="row"><div><b>${esc(b.vendor)}</b> · ${esc(b.bill_no || '')}<p class="muted">${moneyP(b.amount_paise)}${b.due_date ? ' · due ' + esc(b.due_date) : ''}${b.po_no ? ' · ' + esc(b.po_no) : ''}</p></div>${statusChip(b.status === 'received' ? 'open' : b.status)}</div>${b.status !== 'paid' && canE ? `<button class="btn small" data-pay="${b.id}">Mark paid</button>` : ''}</div>`).join('') || '<p class="muted">No bills yet.</p>');
+    if (!noBills) html += '<h3>Bills</h3>' + (bills.data.bills.map((b) => `<div class="card"><div class="row"><div><b>${esc(b.vendor)}</b> · ${esc(b.bill_no || '')}<p class="muted">${moneyP(b.amount_paise)}${b.due_date ? ' · due ' + esc(b.due_date) : ''}${b.po_no ? ' · ' + esc(b.po_no) : ''}</p>${b.paid_paise && b.balance_paise ? `<p class="muted">Paid ${moneyP(b.paid_paise)} · <b>Still due ${moneyP(b.balance_paise)}</b></p>` : ''}</div>${statusChip(b.status === 'received' ? 'open' : b.status)}</div>${b.balance_paise > 0 && canE && ['owner', 'accounts'].includes(currentUser.role) ? `<button class="btn small" data-pay="${b.id}" data-bal="${b.balance_paise}">Record payment</button>` : ''}</div>`).join('') || '<p class="muted">No bills yet.</p>');
     html += '<h3>RFQs</h3>' + (rfqs.data.rfqs.map((r) => `<div class="card clickable" data-rfq="${r.id}"><div class="row"><b>${esc(r.title)}</b>${statusChip(r.status)}</div></div>`).join('') || '<p class="muted">No RFQs.</p>');
     html += '<h3>Vendors</h3>' + (vendors.data.vendors.map((v) => `<div class="card ${noBills ? '' : 'clickable'}" data-vendor-led="${v.id}"><b>${esc(v.name)}</b><p class="muted">${esc(v.category || '')}${v.phone ? ' · ' : ''}${v.phone ? `<a href="tel:${esc(v.phone)}">${esc(v.phone)}</a>` : ''}</p></div>`).join('') || '<p class="muted">No vendors yet.</p>');
     const el = $('procurement-list'); el.innerHTML = html;
@@ -929,52 +937,16 @@ async function loadProcurement() {
     el.querySelectorAll('[data-print]').forEach((b) => { b.onclick = () => openPrint('po', b.dataset.print); });
     el.querySelectorAll('[data-grn]').forEach((b) => { b.onclick = () => receiveMaterial(b.dataset.grn); });
     el.querySelectorAll('[data-bill]').forEach((b) => { b.onclick = () => addBill(b.dataset.bill, b.dataset.vendor); });
-    el.querySelectorAll('[data-pay]').forEach((b) => { b.onclick = async () => { const v = await openForm({ title: 'Mark bill paid', fields: [{ name: 'paid_on', label: 'Paid on', type: 'date', value: today() }, { name: 'payment_ref', label: 'Payment reference' }] }); if (v && await act(api(`/api/procurement/bills/${b.dataset.pay}/pay`, { method: 'POST', body: v }), 'Marked paid')) loadProcurement(); }; });
+    el.querySelectorAll('[data-pay]').forEach((b) => { b.onclick = () => payBill(b.dataset.pay, Number(b.dataset.bal)); });
+    wireIndents(el);
     el.querySelectorAll('[data-rfq]').forEach((b) => { b.onclick = () => rfqDetail(b.dataset.rfq); });
     if (!noBills) el.querySelectorAll('[data-vendor-led]').forEach((b) => { b.onclick = () => vendorLedger(b.dataset.vendorLed); });
   } catch (e) { $('procurement-list').innerHTML = `<div class="error">${esc(e.message)}</div>`; }
 }
 
-async function receiveMaterial(poId) {
-  const v = await openForm({ title: 'Material received', fields: [
-    { name: 'received_on', label: 'Date', type: 'date', value: today() }, { name: 'challan_no', label: 'Challan / delivery note no.' },
-    { name: 'qty_note', label: 'What came? (quantity, condition)', type: 'textarea', required: true }, { name: 'full', type: 'checkbox', label: 'Complete', checkLabel: 'This completes the order (nothing more is due)' }] });
-  if (!v) return;
-  if (await postOrQueue(`/api/procurement/pos/${poId}/grn`, v, 'Receipt recorded')) loadProcurement();
-}
-
 async function addBill(poId, vendorId) {
   const v = await openForm({ title: 'Add vendor bill', fields: [{ name: 'bill_no', label: 'Bill number' }, { name: 'amount_paise', label: 'Amount (₹, with GST)', type: 'money', required: true }, { name: 'due_date', label: 'Due date', type: 'date' }] });
   if (v && await act(api('/api/procurement/bills', { method: 'POST', body: { ...v, po_id: Number(poId), vendor_id: Number(vendorId) } }), 'Bill recorded')) loadProcurement();
-}
-
-async function vendorLedger(id) {
-  const d = (await api(`/api/procurement/vendors/${id}/ledger`)).data;
-  const owed = d.bills.filter((b) => b.status !== 'paid').reduce((t, b) => t + b.amount_paise, 0);
-  const ov = document.createElement('div'); ov.className = 'modal-overlay';
-  ov.innerHTML = `<div class="modal"><h2>Vendor ledger</h2><p><b>Unpaid bills: ${moneyP(owed)}</b></p>
-    <h3>POs</h3>${d.pos.map((p) => `<p>${esc(p.po_no)} · ${moneyP(p.total_paise)} · ${esc(p.status)}</p>`).join('') || '<p class="muted">None</p>'}
-    <h3>Bills</h3>${d.bills.map((b) => `<p>${esc(b.bill_no || '—')} · ${moneyP(b.amount_paise)} · ${esc(b.status)}</p>`).join('') || '<p class="muted">None</p>'}
-    <div class="modal-actions"><button class="btn btn-primary" id="vl-close">Close</button></div></div>`;
-  document.body.appendChild(ov); $('vl-close').onclick = () => ov.remove();
-}
-
-async function rfqDetail(id) {
-  const d = (await api(`/api/procurement/rfqs/${id}/quotes`)).data;
-  const lowest = d.quotes.length ? Math.min(...d.quotes.map((q) => q.amount_paise)) : 0;
-  const fastest = d.quotes.filter((q) => q.delivery_days != null).length ? Math.min(...d.quotes.filter((q) => q.delivery_days != null).map((q) => q.delivery_days)) : null;
-  const ov = document.createElement('div'); ov.className = 'modal-overlay';
-  ov.innerHTML = `<div class="modal"><h2>${esc(d.rfq.title)}</h2>
-    <p class="muted">${d.quotes.length} quote${d.quotes.length === 1 ? '' : 's'} received${d.quotes.length < 3 ? ' — get at least 3 if you can' : ''}.${d.last_paid ? ` Last paid: ${moneyP(d.last_paid.rate_paise)}/${esc(d.last_paid.unit || 'unit')} (${esc(d.last_paid.po_no)}).` : ''}</p>
-    ${d.quotes.map((q) => `<div class="card"><div class="row"><div><b>${esc(q.vendor)}</b> ${q.selected ? chip('Chosen', 'good') : ''}<p class="muted">${moneyP(q.amount_paise)}${q.delivery_days != null ? ' · ' + esc(q.delivery_days) + ' days' : ''}</p></div><div>${q.amount_paise === lowest ? chip('Lowest', 'good') : ''} ${q.delivery_days != null && q.delivery_days === fastest ? chip('Fastest', 'info') : ''}</div></div>${q.terms ? `<p class="muted">${esc(q.terms)}</p>` : ''}${!q.selected && userCanClient('procurement', 'E') ? `<button class="btn small" data-sel="${q.id}">Choose this quote</button>` : ''}</div>`).join('')}
-    <div class="modal-actions">${userCanClient('procurement', 'C') ? '<button class="btn" id="rq-add">Add quote</button>' : ''}<button class="btn btn-primary" id="rq-close">Close</button></div></div>`;
-  document.body.appendChild(ov); $('rq-close').onclick = () => ov.remove();
-  ov.querySelectorAll('[data-sel]').forEach((b) => { b.onclick = async () => { if (await act(api(`/api/procurement/quotes/${b.dataset.sel}/select`, { method: 'POST' }), 'Quote chosen')) { ov.remove(); rfqDetail(id); loadProcurement(); } }; });
-  if ($('rq-add')) $('rq-add').onclick = async () => {
-    const vendors = (await api('/api/procurement/vendors')).data.vendors;
-    const v = await openForm({ title: 'Add quote', fields: [{ name: 'vendor_id', label: 'Vendor', type: 'select', options: vendors.map((x) => [x.id, x.name]) }, { name: 'rate_paise', label: 'Rate per unit (₹)', type: 'money' }, { name: 'amount_paise', label: 'Total (₹)', type: 'money', required: true }, { name: 'delivery_days', label: 'Delivery in (days)', type: 'number' }, { name: 'terms', label: 'Terms', type: 'textarea' }] });
-    if (v && await act(api(`/api/procurement/rfqs/${id}/quotes`, { method: 'POST', body: { ...v, vendor_id: Number(v.vendor_id) } }), 'Quote added')) { ov.remove(); rfqDetail(id); }
-  };
 }
 
 // ---------- Sales ----------

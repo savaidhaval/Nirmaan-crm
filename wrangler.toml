@@ -28,7 +28,7 @@ EXTERNAL_URL = "https://crm.mysociety.tech"
 
 [env.staging]
 name = "nirmaan-crm-staging"
-workers_dev = true      # staging has no custom domain; its workers.dev address is its only URL
+workers_dev = false     # the *.workers.dev address is switched off; crm.mysociety.tech is the only public address
 preview_urls = false
 
 [[env.staging.d1_databases]]
