@@ -40,7 +40,7 @@ renderLogin = function () {
   $('login-password').onkeydown = (e) => { if (e.key === 'Enter') go(); };
 };
 function mfaStep(token) {
-  $('app-main').innerHTML = `<div class="login-card"><div class="brand"><div class="logo-mark">N</div></div>
+  $('app-main').innerHTML = `<div class="login-card"><img class="login-logo" src="/identity/logo-horizontal.png" alt="Nirman: Construction CRM" width="300" height="61">
     <h1>Two-step sign-in</h1><p class="sub">Open your authenticator app and type the 6-digit code. Lost your phone? Use one of your recovery codes.</p>
     <div class="field"><label for="mfa-code">Code</label><input id="mfa-code" autocomplete="one-time-code" inputmode="text" maxlength="12" placeholder="123456"></div>
     <div class="error" id="mfa-error" style="display:none"></div>

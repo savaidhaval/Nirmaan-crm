@@ -1,0 +1,59 @@
+import { createRequire } from 'node:module';
+const { chromium } = createRequire(import.meta.url)('/opt/node-tools/node_modules/playwright');
+const BASE = process.env.BASE || 'http://localhost:8787', SHOTS = '/tmp/claude-0/scratch/shots';
+const run = Date.now().toString(36);
+let pass = 0, fail = 0; const ok = (n, c, x = '') => { c ? pass++ : fail++; console.log(`${c ? 'PASS' : 'FAIL'}  ${n}${c ? '' : '  ' + x}`); };
+class C { constructor() { this.cookie = ''; } async call(m, p, b) { const h = { 'X-NirmaanCRM': '1' }; if (this.cookie) h.cookie = this.cookie; let body; if (b) { h['Content-Type'] = 'application/json'; body = JSON.stringify(b); }
+  const r = await fetch(BASE + p, { method: m, headers: h, body }); const sc = r.headers.get('set-cookie'); if (sc) this.cookie = sc.split(';')[0]; let d = null; try { d = await r.json(); } catch (e) {} return { status: r.status, data: d && d.data, err: d && d.error }; } }
+const o = new C(); await o.call('POST', '/api/auth/login', { email: 'owner@test.local', password: 'CiStrongPass-12345' });
+const pid = (await o.call('POST', '/api/projects', { name: 'UI Tower ' + run, code: 'UI' + run.toUpperCase().slice(-5), budget_paise: 5e9 })).data.id;
+await o.call('POST', '/api/settings/con.enabled', { value: 'on' });
+await o.call('POST', '/api/settings/con.pm_approval_limit_paise', { value: 50000000 });
+const users = {};
+for (const role of ['site', 'pm', 'purchase', 'accounts', 'sales', 'viewer']) {
+  const email = `ui-${role}-${run}@test.local`; const r = await o.call('POST', '/api/users', { name: 'UI ' + role + ' ' + run, email, role, projects: role === 'site' ? [pid] : [] });
+  const c = new C(); await c.call('POST', '/api/auth/login', { email, password: r.data.temporaryPassword }); const pw = 'UiStrongPass-' + run;
+  await c.call('POST', '/api/auth/change-password', { currentPassword: r.data.temporaryPassword, newPassword: pw }); users[role] = { email, pw };
+}
+const browser = await chromium.launch();
+const ctxs = {};
+async function page(role) {
+  if (!ctxs[role]) {
+    const ctx = await browser.newContext({ viewport: { width: 390, height: 800 } });
+    const email = role === 'owner' ? 'owner@test.local' : users[role].email, password = role === 'owner' ? 'CiStrongPass-12345' : users[role].pw;
+    const r = await ctx.request.post(BASE + '/api/auth/login', { headers: { 'X-NirmaanCRM': '1', 'Content-Type': 'application/json' }, data: { email, password } });
+    if (!r.ok()) throw new Error('login ' + role + ' ' + r.status());
+    ctxs[role] = ctx;
+  }
+  const p = await ctxs[role].newPage(); p.on('dialog', (d) => d.accept()); p.on('pageerror', (e) => console.log('PAGEERROR', role, e.message));
+  await p.goto(BASE + '/'); await p.waitForFunction(() => typeof navigate === 'function' && typeof currentUser !== 'undefined' && currentUser, null, { timeout: 15000 }); return p;
+}
+const go = async (p, route) => { await p.evaluate((r) => navigate(r), route); await p.waitForTimeout(800); };
+const toastText = async (p) => { await p.waitForTimeout(500); return p.evaluate(() => (document.getElementById('toast') || {}).textContent || ''); };
+const submit = (p) => p.click('#modal-form button[type=submit]');
+const pick = (p, sel, label) => p.selectOption(sel, { label });
+const shot = (p, n) => p.screenshot({ path: `${SHOTS}/${n}.png` });
+const lp = await browser.newPage({ viewport: { width: 1280, height: 800 } });
+await lp.goto(BASE + '/login.html'); await lp.waitForSelector('.login-logo'); await lp.waitForTimeout(800);
+const login = await lp.evaluate(() => ({ w: document.querySelector('.login-logo').naturalWidth, bg: getComputedStyle(document.querySelector('#btn-login')).backgroundColor, btnText: getComputedStyle(document.querySelector('#btn-login')).color, font: getComputedStyle(document.body).fontFamily, h1: getComputedStyle(document.querySelector('h1')).fontFamily, fonts: [document.fonts.check('400 16px Inter'), document.fonts.check('800 24px "Plus Jakarta Sans"')], title: document.title, og: (document.querySelector('meta[property="og:image"]') || {}).content, icon: (document.querySelector('link[rel=icon]') || {}).href }));
+ok('the login page shows the Nirman logo', login.w >= 600, JSON.stringify(login));
+ok('the main button is Safety Amber with navy text', login.bg === 'rgb(232, 111, 44)' && login.btnText === 'rgb(15, 37, 55)', login.bg + ' / ' + login.btnText);
+ok('Inter and Plus Jakarta Sans are loaded from our own server', login.fonts[0] && login.fonts[1] && /Inter/.test(login.font) && /Plus Jakarta/.test(login.h1), JSON.stringify(login.fonts) + login.h1);
+ok('title, favicon and share image follow the kit', login.title.includes('Nirman') && /favicon\.svg/.test(login.icon) && /og-image-1200x630\.png/.test(login.og));
+await shot(lp, '190-login');
+const ow = await page('owner'); await ow.setViewportSize({ width: 1280, height: 800 }); await ow.waitForTimeout(1500);
+const side = await ow.evaluate(() => { const i = document.querySelector('.side-brand .brand-logo'); const cs = (n) => getComputedStyle(document.querySelector(n)); return { vis: i && i.getBoundingClientRect().width, nat: i && i.naturalWidth, oldHidden: cs('#side-name').display, bodyBg: cs('body').backgroundColor, active: document.title }; });
+ok('the sidebar carries the Nirman logo; the old text name is hidden', side.nat >= 600 && side.oldHidden === 'none', JSON.stringify(side));
+ok('page background is Concrete Light', side.bodyBg === 'rgb(246, 248, 250)', side.bodyBg);
+const urls = ['/manifest.json', '/identity/android-chrome-192x192.png', '/identity/android-chrome-512x512.png', '/identity/maskable-512.png', '/identity/favicon.ico', '/identity/apple-touch-icon.png', '/identity/og-image-1200x630.png', '/identity/brand-tokens.css', '/identity/fonts/inter-400.woff2'];
+const codes = []; for (const u of urls) codes.push((await fetch(BASE + u)).status);
+ok('manifest, icons, favicon, share image, tokens and fonts are all served', codes.every((c) => c === 200), JSON.stringify(codes));
+const man = await (await fetch(BASE + '/manifest.json')).json(); ok('the installed app is called Nirman and uses the navy theme', man.short_name === 'Nirman' && man.theme_color === '#0F2537');
+await go(ow, 'dashboard'); await ow.waitForTimeout(1500); await shot(ow, '191-desktop-home');
+await ow.click('#btn-install'); await ow.waitForSelector('#install-modal .app-icon'); await ow.waitForTimeout(600); await shot(ow, '192-install');
+const nine = await ow.evaluate(() => (document.querySelector('#install-modal .app-icon') || {}).naturalWidth || 0); ok('the install dialog shows the Nirman icon', nine >= 100, String(nine));
+await ow.click('#inst-close').catch(() => {});
+await ow.setViewportSize({ width: 390, height: 844 }); await ow.waitForTimeout(800); await shot(ow, '193-phone-home');
+ok('on a phone the top bar shows the icon mark', await ow.evaluate(() => { const i = document.querySelector('.topbar .brand-icon'); return !!i && i.getBoundingClientRect().width > 20 && i.naturalWidth > 0; }));
+const nav = await page('site'); await nav.waitForTimeout(500);
+await browser.close(); console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);

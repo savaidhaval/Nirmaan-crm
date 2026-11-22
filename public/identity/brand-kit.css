@@ -1,0 +1,65 @@
+/* Nirman brand kit applied to the whole website: fonts (self-hosted, SIL Open Font License), colours and shapes from brand-tokens.css.
+   Loaded after app.css, so these rules win. Brand rules: navy for structure and text, amber for the main action, slate for secondary. */
+@font-face { font-family: 'Inter'; font-weight: 400; font-style: normal; font-display: swap; src: url('/identity/fonts/inter-400.woff2') format('woff2'); }
+@font-face { font-family: 'Inter'; font-weight: 500; font-style: normal; font-display: swap; src: url('/identity/fonts/inter-500.woff2') format('woff2'); }
+@font-face { font-family: 'Inter'; font-weight: 600; font-style: normal; font-display: swap; src: url('/identity/fonts/inter-600.woff2') format('woff2'); }
+@font-face { font-family: 'Inter'; font-weight: 700; font-style: normal; font-display: swap; src: url('/identity/fonts/inter-700.woff2') format('woff2'); }
+@font-face { font-family: 'Plus Jakarta Sans'; font-weight: 600; font-style: normal; font-display: swap; src: url('/identity/fonts/jakarta-600.woff2') format('woff2'); }
+@font-face { font-family: 'Plus Jakarta Sans'; font-weight: 700; font-style: normal; font-display: swap; src: url('/identity/fonts/jakarta-700.woff2') format('woff2'); }
+@font-face { font-family: 'Plus Jakarta Sans'; font-weight: 800; font-style: normal; font-display: swap; src: url('/identity/fonts/jakarta-800.woff2') format('woff2'); }
+
+:root {
+  --navy: var(--nirman-navy-900, #0F2537); --navy-2: var(--nirman-navy-800, #18364F); --slate: var(--nirman-slate-700, #2C4A63);
+  --amber: var(--nirman-amber-500, #E86F2C); --amber-dark: var(--nirman-amber-600, #CF5B1B); --amber-soft: var(--nirman-amber-100, #FDECE2);
+  --brand: #E86F2C; --brand-dark: #CF5B1B; --brand-soft: #FDECE2;
+  --bg: #F6F8FA; --surface: #FFFFFF; --text: #111827; --muted: #64748B; --border: #E2E8F0;
+  --success: #16A34A; --warning: #D97706; --danger: #DC2626;
+  --radius: 16px; --shadow: 0 0 0 1px rgba(15, 37, 55, .06);
+  --font: 'Inter', -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', system-ui, Roboto, sans-serif;
+  --font-display: 'Plus Jakarta Sans', 'Inter', -apple-system, sans-serif;
+}
+body { font-family: var(--font); color: var(--text); }
+h1, h2, .hero h1, .trade-name, .tile-value { font-family: var(--font-display); color: var(--navy); }
+h1 { font-weight: 800; letter-spacing: -.02em; }
+h2 { font-weight: 700; }
+.card h2, .card h3 { color: var(--navy); }
+a { color: var(--slate); text-decoration-color: rgba(44, 74, 99, .35); }
+a:hover { color: var(--navy); }
+
+/* the main action is amber with navy text (4.8:1), hover goes deeper */
+.btn-primary { background: var(--amber); color: var(--navy); font-weight: 700; }
+.btn-primary:hover { background: var(--amber-dark); color: #fff; }
+.btn:focus-visible, .icon-btn:focus-visible, .side-link:focus-visible, .side-head:focus-visible, .nav-item:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible { outline: 3px solid rgba(232, 111, 44, .55); outline-offset: 2px; }
+.field input:focus, .field select:focus, .field textarea:focus, .modal input:focus, .modal select:focus, .modal textarea:focus { box-shadow: inset 0 0 0 2px var(--amber); }
+.tab.on { background: var(--navy); color: #fff; }
+.check input { accent-color: var(--amber); }
+
+/* navigation: navy structure, amber only for "where am I" accents */
+.sidebar { background: #fff; }
+.side-link.active { background: rgba(15, 37, 55, .07); color: var(--navy); font-weight: 600; box-shadow: inset 3px 0 0 var(--amber); }
+.side-sub .side-link.active { background: rgba(232, 111, 44, .10); color: var(--navy); box-shadow: none; }
+.side-head.has-active { color: var(--navy); font-weight: 600; }
+.side-head .chev, .menu-group > button .chev { color: var(--slate); }
+.nav-item.active { color: var(--navy); }
+.nav-item.active svg { color: var(--amber); }
+.menu-group > button svg.i { color: var(--amber); }
+.avatar { background: var(--navy); color: #fff; }
+.logo-mark { background: var(--navy); }
+.notify-badge { background: var(--amber); color: var(--navy); }
+.dashboard-tile .ico { color: var(--slate); }
+.meter-fill, .ch-mfill { background: var(--amber); }
+.quote-banner .qtext { color: var(--navy); }
+.offline-bar { background: var(--amber-soft); color: #8a3a0e; }
+
+/* logos */
+.side-brand { padding: 22px 20px 14px; }
+.side-brand .logo-mark, .side-brand .trade-name, .topbar .brand .logo-mark, .topbar .brand .trade-name { display: none; }
+.brand-logo { display: block; height: 40px; width: auto; max-width: 100%; }
+.side-brand .brand-logo { height: 42px; }
+.topbar .brand .brand-icon { width: 34px; height: 34px; display: block; }
+.login-card .brand img.logo { display: none; }
+.login-logo { display: block; width: min(300px, 80%); height: auto; margin: 4px auto 14px; }
+.auth-bg { background: var(--bg) url('/identity/hero-blueprint-pattern.svg') center / 600px repeat; }
+@media (min-width: 900px) { .topbar .brand { visibility: hidden; } }
+.login-card .btn-primary { width: 100%; }
+.auth-bg { background: linear-gradient(rgba(246, 248, 250, .88), rgba(246, 248, 250, .88)), url('/identity/hero-blueprint-pattern.svg') center / 600px repeat; }

@@ -27,7 +27,7 @@
     let os = detect();
     const ov = document.createElement('div'); ov.className = 'modal-overlay'; ov.id = 'install-modal';
     const draw = () => {
-      ov.innerHTML = `<div class="modal" role="dialog" aria-label="Install NirmaanCRM"><div class="install-card" style="box-shadow:none;padding:0"><img class="app-icon" src="/icons/icon-192.png" alt=""><div><h2 style="margin:0">Install NirmaanCRM</h2><p class="muted">Opens like an app, full screen, from your home screen, dock or Start menu. It also keeps working on a weak signal. Nothing to download from a store.</p></div></div>
+      ov.innerHTML = `<div class="modal" role="dialog" aria-label="Install Nirman"><div class="install-card" style="box-shadow:none;padding:0"><img class="app-icon" src="/identity/android-chrome-192x192.png" alt=""><div><h2 style="margin:0">Install Nirman</h2><p class="muted">Opens like an app, full screen, from your home screen, dock or Start menu. It also keeps working on a weak signal. Nothing to download from a store.</p></div></div>
         <div class="os-tabs" role="tablist">${Object.keys(NAMES).map((k) => `<button role="tab" aria-selected="${k === os}" data-os="${k}">${NAMES[k]}</button>`).join('')}</div>
         ${(deferred && os !== 'ios') ? '<button class="btn btn-primary btn-full" data-install-now style="margin-bottom:14px">Install now</button>' : ''}
         <ol class="os-steps">${STEPS[os].map((s) => `<li>${s}</li>`).join('')}</ol>

@@ -149,3 +149,6 @@ Hindi/Marathi dropped by Dhaval; offline mode built and walked through in a brow
 
 ## WP-23 status
 Hardening checks pass (docs/HARDENING.md). NOT deployed beyond what Dhaval has already merged: the WP-23 fixes are in the next PR. Real-world trials still open: real email provider (bulk letters), real Cloudflare AI model, Tally import with the accountant, and Worker CPU time (read from the Cloudflare dashboard after deploy). WP-25 is the stop point: no work beyond it unless Dhaval says so.
+
+## Brand kit
+Nirman brand kit applied (docs/BRAND.md). No migration. Product name on screen is now "Nirman" (kit spelling); revert is one string per page if Dhaval prefers "NirmaanCRM".
