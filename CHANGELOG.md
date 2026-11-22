@@ -71,3 +71,4 @@
 - WP-13: cost sheets (rate x area, extra charges, discounts, GST, stamp duty, registration) with versions, PM/Owner approval bands, letterhead print, booking priced from an approved sheet, discount report.
 - WP-14: handover checklist (editable template), possession details, home-loan records, snags per flat, "possessed" status, due reminders, pending-handover report.
 - Migration 0023; code in `src/routes/sales3.js`, `public/pages11.js`; test `tests/sales3.mjs` (92 checks, in CI); browser walkthrough 25 checks.
+- Released: WP-8 to WP-14, professionals and contracts, AI assistant (after GitHub checks passed).
