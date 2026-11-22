@@ -293,3 +293,37 @@ select[data-cs] { min-height: 38px; padding: 4px 10px; border-radius: 10px; bord
 .card { animation: fadein .25s ease-out; } @keyframes fadein { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 
 svg.chart[width] { width: auto; max-width: 100%; height: auto; }
+
+/* ===== Profile, team, daily line, charts (package 0026) ===== */
+:root { --s1: #2a78d6; --s2: #eb6834; --s3: #1baf7a; --s4: #eda100; --s5: #e87ba4; --s6: #008300; --s7: #6250d6; --s8: #e34948; }
+.avatar { overflow: hidden; }
+.avatar img, .pf-photo img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.pf-photo { width: 96px; height: 96px; border-radius: 50%; overflow: hidden; background: var(--brand-soft); color: var(--brand); display: grid; place-items: center; font-weight: 750; font-size: 1.9rem; border: 3px solid var(--surface); box-shadow: var(--shadow); flex: none; }
+.pf-photo.sm { width: 52px; height: 52px; font-size: 1.05rem; border-width: 2px; }
+.pf-head { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+.pf-head h2 { margin: 0; }
+.quote-banner { background: linear-gradient(135deg, var(--brand), var(--brand-dark)); color: #fff; border-radius: var(--radius); padding: 18px 20px; margin-bottom: 18px; display: flex; gap: 14px; align-items: center; box-shadow: var(--shadow); }
+.quote-banner .pf-photo { border-color: rgba(255,255,255,.55); }
+.quote-banner .qhi { font-size: .85rem; opacity: .85; }
+.quote-banner .qtext { font-size: 1.12rem; font-weight: 600; line-height: 1.4; margin-top: 2px; }
+.team-grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); }
+.team-card { display: flex; gap: 12px; align-items: center; }
+.team-card .nm { font-weight: 650; } .team-card .ps { color: var(--muted); font-size: .85rem; }
+.kudo { border-left: 4px solid var(--s4); }
+.ch { margin: 10px 0 16px; }
+.ch-title { font-weight: 650; margin-bottom: 6px; }
+.ch-svg { width: 100%; height: auto; display: block; overflow: visible; }
+.ch-base { stroke: var(--border); stroke-width: 1; }
+.ch-ax { font-size: 12px; fill: var(--muted); } .ch-pk { font-size: 12px; font-weight: 650; fill: var(--text); } .ch-ctr { font-size: 15px; font-weight: 700; fill: var(--text); }
+.ch-hrow { display: grid; grid-template-columns: minmax(90px, 32%) 1fr auto; gap: 8px; align-items: center; padding: 4px 0; }
+.ch-hlabel { font-size: .9rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ch-htrack { background: var(--bg); border-radius: 6px; height: 12px; } .ch-hbar { height: 12px; border-radius: 0 6px 6px 0; min-width: 4px; }
+.ch-hval { font-weight: 650; font-size: .9rem; min-width: 2.5em; text-align: right; }
+.ch-legend { display: flex; flex-wrap: wrap; gap: 6px 14px; margin: 4px 0 6px; font-size: .88rem; }
+.ch-legend.v { flex-direction: column; } .ch-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; } .ch-legend em { color: var(--muted); font-style: normal; }
+.ch-donut { display: flex; gap: 18px; align-items: center; flex-wrap: wrap; }
+.ch-table summary { cursor: pointer; color: var(--muted); font-size: .82rem; margin-top: 4px; } .ch-table table { width: 100%; font-size: .85rem; border-collapse: collapse; } .ch-table td, .ch-table th { text-align: left; padding: 3px 8px 3px 0; border-bottom: 1px solid var(--border); }
+.ch-meter { display: flex; gap: 10px; align-items: center; } .ch-mtrack { flex: 1; height: 12px; background: var(--bg); border-radius: 6px; overflow: hidden; } .ch-mfill { height: 100%; background: var(--s3); border-radius: 6px; } .ch-mtext { font-weight: 650; font-size: .9rem; }
+.stat-row { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); margin: 10px 0; }
+.stat { background: var(--surface); border-radius: var(--radius); padding: 12px 14px; box-shadow: var(--shadow); } .stat b { display: block; font-size: 1.5rem; } .stat span { color: var(--muted); font-size: .85rem; }
+.fea-ver { border-left: 4px solid var(--border); } .fea-ver.latest { border-left-color: var(--s3); }

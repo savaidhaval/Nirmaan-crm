@@ -20,6 +20,12 @@ const MATRIX = {
   procurement: {
     owner: 'VCEAX', pm: 'VCEA', site: 'C', sales: '–', accounts: 'VCE', purchase: 'VCE', hr: '–', viewer: 'V',
   },
+  feasibility: {
+    owner: 'VCEAX', pm: 'VCE', site: '–', sales: '–', accounts: 'V', purchase: '–', hr: '–', viewer: 'V',
+  },
+  rera: {
+    owner: 'VCEAX', pm: 'V', site: '–', sales: '–', accounts: 'VCEX', purchase: '–', hr: '–', viewer: 'VX',
+  },
   ai: {
     owner: 'VCEAX', pm: 'VC', site: 'VC', sales: 'VC', accounts: 'VC', purchase: 'VC', hr: '–', viewer: 'VC',
   },

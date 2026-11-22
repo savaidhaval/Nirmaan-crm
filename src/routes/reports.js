@@ -58,10 +58,12 @@ export function registerReports(router, h) {
       const tot = await env.DB.prepare(`SELECT COALESCE(SUM(CASE WHEN r.account = 'rera_designated' THEN r.amount_paise ELSE 0 END), 0) AS designated, COALESCE(SUM(CASE WHEN r.account <> 'rera_designated' THEN r.amount_paise ELSE 0 END), 0) AS other, COALESCE(SUM(r.amount_paise), 0) AS all_paise
         FROM sal_receipts r JOIN sal_bookings b ON b.id = r.booking_id WHERE b.project_id IN (${ph(ids)}) AND r.reversed_at IS NULL`).bind(...ids).first();
       const designatedPct = tot.all_paise ? Math.round(tot.designated * 1000 / tot.all_paise) / 10 : null;
+      const rawPct = Math.round(Number(await getSetting(env, 'rera.designated_pct_bp')));
+      const reqPct = rawPct > 0 && rawPct <= 10000 ? rawPct : 7000;   // setting, default 70%
       return json({ ok: true, data: { months, unscheduled_future_paise: Number(future.t),
-        escrow: { collected_paise: tot.all_paise, designated_paise: tot.designated, other_paise: tot.other, designated_pct: designatedPct, required_pct: 70,
-          required_designated_paise: Math.round(tot.all_paise * 0.7), shortfall_paise: Math.max(Math.round(tot.all_paise * 0.7) - tot.designated, 0), compliant: designatedPct === null ? null : designatedPct >= 70,
-          note: 'MahaRERA: at least 70% of money collected from buyers must be deposited in the project\'s designated account. Confirm with your CA.' } } });
+        escrow: { collected_paise: tot.all_paise, designated_paise: tot.designated, other_paise: tot.other, designated_pct: designatedPct, required_pct: reqPct / 100,
+          required_designated_paise: Math.round(tot.all_paise * reqPct / 10000), shortfall_paise: Math.max(Math.round(tot.all_paise * reqPct / 10000) - tot.designated, 0), compliant: designatedPct === null ? null : designatedPct >= reqPct / 100,
+          note: `The required percentage (${reqPct / 100}%) is a setting (RERA percentage). Confirm the current MahaRERA rule with your CA.` } } });
     } catch (e) { return serverError(e, 'cashflow'); }
   }));
 

@@ -338,3 +338,8 @@ id TEXT PK, source TEXT, seen_at TEXT
 - sal_booking_parties: co-applicants (PAN encrypted, Aadhaar kept only as XXXX XXXX 1234).
 - sal_cost_sheets + sal_cost_sheet_lines: immutable versions; one live version per flat and lead; approval bands use below_list_paise (how far under the rate card) against setting sales.discount_pm_limit_paise. A booking can take its price from an approved sheet.
 - sal_handover, sal_handover_items, sal_booking_loans; site_snags.unit_id; sal_inventory.status gains 'possessed'. Checklist template is the setting sales.handover_template (items separated by ;) or a starter list.
+
+## 0024-0026 additions (RERA account, visit feedback, profile, kudos, feasibility)
+- 0026 users: position, about (free text), avatar_blob_id (points to file_blobs; the picture is served only to signed-in users at /api/users/:id/avatar), avatar_updated_at (cache key).
+- eng_kudos: thank-you notes (from_user, to_user, message, created_at, deleted_at). Limit 5 per sender per day.
+- fea_versions: one row per feasibility study version per project (UNIQUE project_id + version; the number is MAX+1 inside the insert so two saves at once never collide). Money in paise; document_id points to a documents row of category feasibility, which only Owner, PM, Accounts and the CA can see or download. Rows are never edited or deleted: a new version is added instead.

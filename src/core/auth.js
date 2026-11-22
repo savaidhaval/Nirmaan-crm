@@ -79,7 +79,7 @@ export async function getSession(env, tokenHash) {
   const row = await env.DB.prepare(`
     SELECT s.id AS session_id, s.user_id, s.expires_at, s.user_agent, s.created_at,
            u.name, u.email, u.phone, u.role, u.lang, u.active, u.extra_roles,
-           u.must_change_password, u.is_primary_owner, u.deactivated_at,
+           u.must_change_password, u.is_primary_owner, u.deactivated_at, u.position, u.about, u.avatar_blob_id, u.avatar_updated_at,
            (SELECT enabled_at FROM user_totp t WHERE t.user_id = u.id) AS mfa_enabled_at
     FROM sessions s
     JOIN users u ON u.id = s.user_id

@@ -105,3 +105,9 @@ Code complete; 16 API suites and 5 browser walkthroughs pass locally. Migrations
 
 ## WP-11 to 14 status
 Code complete; 17 API suites and 6 browser walkthroughs pass locally. Migrations 0018-0023 NOT applied to production. Rates for GST, stamp duty and registration are not built in: they come from Settings (tax.*) or are typed per cost sheet.
+
+## WP-15 and WP-19 status
+Code complete; tests pass locally. Migrations 0024-0025 NOT applied to production.
+
+## Profile, engagement, charts, feasibility status (0026)
+Code complete; 19 API suites and 7 browser walkthroughs pass locally. Migrations 0024-0026 NOT applied to production. Work report = 3 queries plus one batch of 13 counts plus 1 (17 statements, under the 50 cap); quote and team = 1-2 queries. Display pictures are stored as small blobs (max about 400 KB) and never public.

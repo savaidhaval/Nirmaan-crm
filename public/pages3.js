@@ -40,6 +40,7 @@ async function leadDetail(id) {
   };
   ov.querySelectorAll('[data-vs]').forEach((b) => {
     b.onclick = async () => {
+      if (b.dataset.vs === 'done') { await visitDoneFlow(b.dataset.id); reopen(); return; }
       const v = b.dataset.vs === 'cancelled' ? {} : await openForm({ title: 'Visit feedback', fields: [{ name: 'feedback', label: 'How did it go?', type: 'textarea' }] });
       if (v && await act(api(`/api/sales/visits/${b.dataset.id}/status`, { method: 'POST', body: { status: b.dataset.vs, feedback: v.feedback || '' } }), 'Saved')) reopen();
     };
@@ -63,7 +64,7 @@ async function decorateSales(el) {
     const [fun, par] = await Promise.all([api('/api/reports/funnel'), api('/api/sales/partners')]);
     const total = fun.data.status.reduce((t, s) => t + s.n, 0);
     let html = `<h3>Lead funnel</h3><div class="card"><div class="row-btns" style="margin:0">${LEAD_STATUS.map(([k, l]) => `<span class="chip">${esc(l)}: <b>${(fun.data.status.find((s) => s.status === k) || { n: 0 }).n}</b></span>`).join('')}</div>
-      <p class="muted" style="margin-top:10px">${total} leads · average first response ${fun.data.avg_first_response_hours == null ? '—' : fun.data.avg_first_response_hours + ' hours'}</p>
+      <p class="muted" style="margin-top:10px">${total} leads · average first response ${fun.data.avg_first_response_hours == null ? '—' : fun.data.avg_first_response_hours + ' hours'}${fun.data.visit_to_booking && fun.data.visit_to_booking.visited ? ` · visit to booking ${fun.data.visit_to_booking.booked} of ${fun.data.visit_to_booking.visited} (${fun.data.visit_to_booking.pct}%)` : ''}</p>
       ${fun.data.source.map((s) => `<p style="margin:2px 0">${esc(s.source || 'other')}: ${s.n} leads, ${s.booked || 0} booked</p>`).join('')}</div>`;
     html += `<h3>Channel partners</h3><div class="row-btns" style="margin:0 0 10px"><button class="btn small" id="pt-add">+ Add partner</button></div>` + (par.data.partners.map((p) => {
       const payable = p.earned_paise - p.paid_paise;

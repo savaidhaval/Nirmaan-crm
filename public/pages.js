@@ -166,6 +166,7 @@ const ICONS = {
   home: 'M3 12l9-9 9 9M5 10v10h14V10', dashboard: 'M3 3h7v9H3zM14 3h7v5h-7zM14 12h7v9h-7zM3 16h7v5H3z',
   projects: 'M3 21h18M5 21V7l7-4 7 4v14M9 9h2M9 13h2M13 9h2M13 13h2M10 21v-4h4v4',
   approvals: 'M9 12l2 2 4-4M12 21a9 9 0 100-18 9 9 0 000 18z', drawings: 'M12 20h9M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z',
+  rera: 'M3 21h18M5 21V10l7-5 7 5v11M9 21v-6h6v6',
   ai: 'M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8zM19 15l.8 2.2L22 18l-2.2.8L19 21l-.8-2.2L16 18l2.2-.8z',
   professionals: 'M16 21v-2a4 4 0 00-4-4H6a4 4 0 00-4 4v2M9 11a4 4 0 100-8 4 4 0 000 8zM17 11l2 2 4-4',
   stores: 'M3 7l9-4 9 4v10l-9 4-9-4zM3 7l9 4 9-4M12 11v10',
@@ -196,15 +197,15 @@ function sidebarItems(role) {
   const H = { label: 'Home', route: role === 'owner' ? 'dashboard' : 'home', icon: role === 'owner' ? 'dashboard' : 'home' };
   const I = (label, route) => ({ label, route, icon: route });
   const by = {
-    owner: [[null, [H, I('AI assistant', 'ai')]], ['Work', [I('Projects', 'projects'), I('Approvals', 'approvals'), I('Drawings', 'drawings'), I('Site', 'site'), I('Store', 'stores')]], ['Money', [I('Procurement', 'procurement'), I('Contractors', 'contractors'), I('Budget', 'budget'), I('Petty cash', 'petty'), I('Sales', 'sales')]],
+    owner: [[null, [H, I('AI assistant', 'ai')]], ['Work', [I('Projects', 'projects'), I('Approvals', 'approvals'), I('Drawings', 'drawings'), I('Site', 'site'), I('Store', 'stores')]], ['Money', [I('Procurement', 'procurement'), I('Contractors', 'contractors'), I('Budget', 'budget'), I('Petty cash', 'petty'), I('RERA account', 'rera'), I('Sales', 'sales')]],
       ['Admin', [I('Documents', 'documents'), I('Professionals', 'professionals'), I('Brochures', 'brochures'), I('People', 'people'), I('Users & access', 'users'), I('Branding', 'branding'), I('Shared links', 'sharelinks'), I('Audit log', 'audit')]], ['Setup', [I('Storage', 'storage'), I('Email', 'email'), I('Settings', 'settings')]]],
-    pm: [[null, [H, I('AI assistant', 'ai')]], ['Work', [I('Projects', 'projects'), I('Approvals', 'approvals'), I('Drawings', 'drawings'), I('Site', 'site'), I('Store', 'stores')]], ['Money', [I('Procurement', 'procurement'), I('Contractors', 'contractors'), I('Budget', 'budget'), I('Petty cash', 'petty'), I('Sales', 'sales')]], ['Admin', [I('Documents', 'documents'), I('Professionals', 'professionals'), I('Brochures', 'brochures'), I('People', 'people'), I('Branding', 'branding'), I('Shared links', 'sharelinks'), I('Audit log', 'audit')]]],
+    pm: [[null, [H, I('AI assistant', 'ai')]], ['Work', [I('Projects', 'projects'), I('Approvals', 'approvals'), I('Drawings', 'drawings'), I('Site', 'site'), I('Store', 'stores')]], ['Money', [I('Procurement', 'procurement'), I('Contractors', 'contractors'), I('Budget', 'budget'), I('Petty cash', 'petty'), I('RERA account', 'rera'), I('Sales', 'sales')]], ['Admin', [I('Documents', 'documents'), I('Professionals', 'professionals'), I('Brochures', 'brochures'), I('People', 'people'), I('Branding', 'branding'), I('Shared links', 'sharelinks'), I('Audit log', 'audit')]]],
     site: [[null, [H, I('AI assistant', 'ai')]], ['Work', [I('Drawings', 'drawings'), I('Site', 'site'), I('Store', 'stores'), I('Petty cash', 'petty'), I('Procurement', 'procurement'), I('Contractors', 'contractors')]], ['Admin', [I('Documents', 'documents')]]],
     sales: [[null, [H, I('AI assistant', 'ai')]], ['Work', [I('Sales', 'sales'), I('Brochures', 'brochures')]], ['Admin', [I('Documents', 'documents')]]],
-    accounts: [[null, [H, I('AI assistant', 'ai')]], ['Money', [I('Sales', 'sales'), I('Procurement', 'procurement'), I('Contractors', 'contractors'), I('Budget', 'budget'), I('Petty cash', 'petty'), I('Store', 'stores')]], ['Admin', [I('Documents', 'documents'), I('Professionals', 'professionals'), I('Brochures', 'brochures'), I('Branding', 'branding')]]],
+    accounts: [[null, [H, I('AI assistant', 'ai')]], ['Money', [I('Sales', 'sales'), I('Procurement', 'procurement'), I('Contractors', 'contractors'), I('Budget', 'budget'), I('Petty cash', 'petty'), I('RERA account', 'rera'), I('Store', 'stores')]], ['Admin', [I('Documents', 'documents'), I('Professionals', 'professionals'), I('Brochures', 'brochures'), I('Branding', 'branding')]]],
     purchase: [[null, [H, I('AI assistant', 'ai')]], ['Work', [I('Procurement', 'procurement'), I('Contractors', 'contractors'), I('Budget', 'budget'), I('Store', 'stores'), I('Drawings', 'drawings')]], ['Admin', [I('Documents', 'documents'), I('Professionals', 'professionals')]]],
     hr: [[null, [H]], ['Work', [I('People', 'people')]]],
-    viewer: [[null, [H, I('AI assistant', 'ai')]], ['Work', [I('Projects', 'projects'), I('Approvals', 'approvals'), I('Drawings', 'drawings'), I('Site', 'site')]], ['Admin', [I('Documents', 'documents')]]],
+    viewer: [[null, [H, I('AI assistant', 'ai'), I('RERA account', 'rera')]], ['Work', [I('Projects', 'projects'), I('Approvals', 'approvals'), I('Drawings', 'drawings'), I('Site', 'site')]], ['Admin', [I('Documents', 'documents')]]],
   };
   return by[role] || by.viewer;
 }
@@ -230,7 +231,7 @@ function getBottomNavItems(role) {
 
 const PAGES = {
   home: renderHome, dashboard: renderDashboard, projects: renderProjects, users: renderUsers, documents: renderDocuments,
-  settings: renderSettings, approvals: renderApprovals, drawings: renderDrawings, site: renderSite, procurement: renderProcurement, contractors: (m) => renderContractors(m), budget: (m) => renderBudget(m), professionals: (m) => renderProfessionals(m), ai: (m) => renderAi(m), stores: (m) => renderStores(m), petty: (m) => renderPetty(m),
+  settings: renderSettings, approvals: renderApprovals, drawings: renderDrawings, site: renderSite, procurement: renderProcurement, contractors: (m) => renderContractors(m), budget: (m) => renderBudget(m), professionals: (m) => renderProfessionals(m), rera: (m) => renderRera(m), ai: (m) => renderAi(m), stores: (m) => renderStores(m), petty: (m) => renderPetty(m),
   sales: renderSales, storage: renderStorage, branding: (m) => renderBranding(m), sharelinks: renderShareLinks, more: renderMore,
   audit: renderAudit, notifications: renderNotifications, help: renderHelp, password: renderChangePassword, email: renderEmailSettings,
 };
@@ -636,6 +637,10 @@ const SETTING_LABELS = {
   'ai.enabled': ['AI assistant (ask the CRM, draft messages, summaries)', 'onoff'],
   'ai.daily_limit': ['AI: most requests per day for the whole team', 'number'],
   'ai.model': ['AI model name (leave as it is unless told otherwise)', 'text'],
+  'fea.review_days': ['Remind the Owner and PM to refresh a project\'s feasibility study after this many days (default 90)', 'number'],
+  'rera.designated_pct_bp': ['RERA: share of buyers\' money to deposit in the designated account, in basis points (7000 = 70%). Confirm with your CA', 'number'],
+  'sales.visit_objections': ['Site-visit objection choices, separated by ; (blank = starter list)', 'text'],
+  'sales.visit_radius_m': ['Site-visit check-in: how far from the project is still fine (metres)', 'number'],
   'sales.receipt_approval_limit_paise': ['Receipts of this amount or more need a second person to approve (₹, 0 = off)', 'money'],
   'sales.discount_pm_limit_paise': ['Largest discount below the rate card the PM may approve on a cost sheet (₹)', 'money'],
   'sales.handover_template': ['Handover checklist items, separated by ; (blank = starter list)', 'text'],

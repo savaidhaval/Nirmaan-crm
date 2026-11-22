@@ -1,6 +1,7 @@
 # Changelog
 
 ## Unreleased
+- New (0026): profile with display picture, mobile number, position and about-me; a different motivational line every day for every person including the Owner (150 original lines, none attributed); Team page with thank-yous (5 a day) and a thank-you wall; per-person work report (daily chart, areas, highlights, print on letterhead, CSV; Owner/PM can view anyone, and that is audited); Insights page and charts (shared `charts.js`: bars, columns, line, ring, meter, each with a table view); RERA deposit meter; feasibility studies with numbered versions (v1, v2, ...), file attachment, margin trend charts, Owner/PM add, Accounts/CA read, review reminder in the hourly sweep (`fea.review_days`, default 90).
 - New (phase 2): late-interest accrual with waivers and interest receipts; bulk CSV import; two-step sign-in (TOTP + recovery codes, per-role requirement); project financials with RERA withdrawal estimate; vendor bill GST/TDS, TDS report, Tally exports; customer statement; DPDP find/export/erase. See docs/ACTION_PLAN.md.
 - Audit pass: atomic holds/bookings, 48h holds with expiry, discount approval limits, audited price/plan changes, lead protection (normalised phone, first registration wins), lead state machine, receipt integrity (numbering, cash limit, duplicates, reversal), refunds workflow, unit transfer, Maharashtra cost sheet, RERA 70% routing report, signed lead webhook, append-only audit log, KYC document isolation, magic-byte uploads, sanitized errors, IP login throttle, hashed sessions. See docs/AUDIT.md.
 - Reports and UI: interactive stacking plan, cash flow/escrow, aging, marketing & partner ROI, velocity & discount leakage, charts on the dashboard.
@@ -72,3 +73,8 @@
 - WP-14: handover checklist (editable template), possession details, home-loan records, snags per flat, "possessed" status, due reminders, pending-handover report.
 - Migration 0023; code in `src/routes/sales3.js`, `public/pages11.js`; test `tests/sales3.mjs` (92 checks, in CI); browser walkthrough 25 checks.
 - Released: WP-8 to WP-14, professionals and contracts, AI assistant (after GitHub checks passed).
+
+## WP-15 RERA account tracker, WP-19 visit feedback (2026-11-22)
+- RERA account: required deposit (setting rera.designated_pct_bp, default 70%, confirm with CA) vs deposited vs withdrawn, the gap, balance; deposits and withdrawals recorded by Accounts, reversed with a reason, never deleted; a withdrawal can never exceed the balance; warnings (not blocks) for no certificate, above the completion share, above recorded cost; statement CSV for the CA; weekly gap reminder and quarterly certificate reminder; the cash-flow escrow report now uses the same setting instead of a hard-coded 70%.
+- Visit feedback: interest (hot/warm/cold), objection (editable list), next step; optional "check in" with the phone's location compared with the project's location (soft warning only, saved anyway; never blocks); visit-to-booking by project, source and salesperson (funnel + CSV). Privacy page now describes staff location and the AI assistant.
+- Migrations 0024-0025; tests rera_visits (44 checks, in CI); browser walkthrough 14 checks.

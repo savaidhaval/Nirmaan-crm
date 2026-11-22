@@ -143,6 +143,14 @@ async function render(d) {
       <table><tr><th>Against</th><th class="r">Amount</th></tr><tr><td>${e(n.demand_label)}</td><td class="r">${inr(n.amount_paise)}</td></tr>${n.gst_paise ? `<tr><td>GST</td><td class="r">${inr(n.gst_paise)}</td></tr>` : ''}
       <tr><th>Total ${n.kind === 'debit_note' ? 'added to' : 'reduced from'} the amount due</th><th class="r">${inr(n.amount_paise + n.gst_paise)}</th></tr></table>
       <div class="words">${rupeeWords(n.amount_paise + n.gst_paise)}</div><p><b>Reason:</b> ${e(n.reason)}</p>${n.status === 'reversed' ? '<p><b>This note has been reversed.</b></p>' : ''}`;
+  } else if (d.kind === 'workreport') {
+    const r = d.report, p = r.person, max = Math.max(...r.days.map((x) => x.count), 1);
+    const bars = r.days.map((x, i) => { const h = Math.round((x.count / max) * 60); return `<rect x="${i * (560 / r.days.length) + 2}" y="${64 - h}" width="${Math.max(2, 560 / r.days.length - 4)}" height="${Math.max(h, x.count ? 2 : 0)}" fill="#2a78d6"/>`; }).join('');
+    body = `<div class="doc-title">Work Report</div>
+      <div class="two"><div><b>Name:</b> ${e(p.name)}<br><b>Position:</b> ${e(p.position || p.role)}</div><div style="text-align:right"><b>Period:</b> ${e(r.from)} to ${e(r.to)}<br><b>Active days:</b> ${r.active_days} · <b>Actions:</b> ${r.total}</div></div>
+      <svg viewBox="0 0 560 70" style="width:100%;height:24mm"><line x1="0" x2="560" y1="64" y2="64" stroke="#999"/>${bars}</svg><div class="words">Actions recorded each day</div>
+      <table><tr><th>What was done</th><th class="r">Count</th></tr>${r.highlights.map((h) => `<tr><td>${e(h.label)}</td><td class="r">${h.n}</td></tr>`).join('') || '<tr><td colspan="2">No recorded work in this period.</td></tr>'}</table>
+      <table><tr><th>Area</th><th class="r">Actions</th></tr>${r.areas.map((a) => `<tr><td>${e(a.label)}</td><td class="r">${a.n}</td></tr>`).join('')}</table>`;
   } else if (d.kind === 'statement') {
     const bk = d.booking; const it = d.interest || { accrued: 0, waived: 0, paid: 0, due: 0 };
     const totalDem = d.demands.reduce((t, x) => t + x.amount_paise + (x.gst_paise || 0), 0); const rec = d.receipts.filter((r) => r.kind !== 'interest').reduce((t, r) => t + r.amount_paise + (r.tds_paise || 0), 0);
@@ -175,5 +183,5 @@ document.getElementById('btn-print').addEventListener('click', () => window.prin
 document.getElementById('btn-back').addEventListener('click', () => window.close());
 const load = kind === 'sample'
   ? api('/api/branding?brand_id=' + (Number(q.get('brand')) || 0)).then((r) => ({ kind: 'sample', draft: true, brand: r.data.branding || {} }))
-  : api(`/api/print/${kind}/${id}`).then((r) => r.data);
+  : api(`/api/print/${kind}/${id}` + (kind === 'workreport' ? '?from=' + encodeURIComponent(q.get('from') || '') + '&to=' + encodeURIComponent(q.get('to') || '') : '')).then((r) => r.data);
 load.then(render).catch((err) => { sheet.textContent = err.message; });

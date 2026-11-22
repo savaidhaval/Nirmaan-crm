@@ -17,6 +17,12 @@
   <h2>What we collect</h2>
   <p>Only what the company enters or uploads: names, email addresses and phone numbers of staff, customers and vendors; project and sales records; and documents such as drawings, approvals and agreements. Staff passwords are stored only as salted hashes.</p>
 
+  <h2>Staff location</h2>
+  <p>When a salesperson taps &ldquo;Check in here&rdquo; during a site visit, the phone&rsquo;s location at that moment is saved with the visit, to confirm the visit took place at the project. It is saved only when the person taps the button, only after the phone asks their permission, and is never tracked in the background.</p>
+
+  <h2>AI assistant</h2>
+  <p>If the company switches on the AI assistant, the text of a question or a draft request, together with the relevant business records the person is allowed to see (never phone numbers, email addresses, PAN, Aadhaar or bank details), is processed by Cloudflare Workers AI to produce an answer. Questions and answers are not stored by the CRM, and the AI cannot change any record.</p>
+
   <h2>Google Drive access</h2>
   <p>If the company's Owner connects Google Drive, NirmaanCRM asks for one permission: <b>drive.file</b>. This lets the app see and manage <b>only the files and folders it creates itself</b>. It cannot read, list or change any other file in the connected Google account. The sign-in tokens are stored encrypted on the company's own Cloudflare account and are never shown in the app or shared with anyone.</p>
   <p>NirmaanCRM's use and transfer of information received from Google APIs adheres to the <a href="https://developers.google.com/terms/api-services-user-data-policy">Google API Services User Data Policy</a>, including its Limited Use requirements.</p>
