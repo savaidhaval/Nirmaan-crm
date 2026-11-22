@@ -637,6 +637,7 @@ const SETTING_LABELS = {
   'ai.enabled': ['AI assistant (ask the CRM, draft messages, summaries)', 'onoff'],
   'ai.daily_limit': ['AI: most requests per day for the whole team', 'number'],
   'ai.model': ['AI model name (leave as it is unless told otherwise)', 'text'],
+  'fea.review_days': ['Remind the Owner and PM to refresh a project\'s feasibility study after this many days (default 90)', 'number'],
   'rera.designated_pct_bp': ['RERA: share of buyers\' money to deposit in the designated account, in basis points (7000 = 70%). Confirm with your CA', 'number'],
   'sales.visit_objections': ['Site-visit objection choices, separated by ; (blank = starter list)', 'text'],
   'sales.visit_radius_m': ['Site-visit check-in: how far from the project is still fine (metres)', 'number'],

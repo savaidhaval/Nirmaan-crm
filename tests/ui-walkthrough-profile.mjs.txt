@@ -1,0 +1,104 @@
+import { createRequire } from 'node:module';
+const { chromium } = createRequire(import.meta.url)('/opt/node-tools/node_modules/playwright');
+const BASE = process.env.BASE || 'http://localhost:8787', SHOTS = '/tmp/claude-0/scratch/shots';
+const run = Date.now().toString(36);
+let pass = 0, fail = 0; const ok = (n, c, x = '') => { c ? pass++ : fail++; console.log(`${c ? 'PASS' : 'FAIL'}  ${n}${c ? '' : '  ' + x}`); };
+class C { constructor() { this.cookie = ''; } async call(m, p, b) { const h = { 'X-NirmaanCRM': '1' }; if (this.cookie) h.cookie = this.cookie; let body; if (b) { h['Content-Type'] = 'application/json'; body = JSON.stringify(b); }
+  const r = await fetch(BASE + p, { method: m, headers: h, body }); const sc = r.headers.get('set-cookie'); if (sc) this.cookie = sc.split(';')[0]; let d = null; try { d = await r.json(); } catch (e) {} return { status: r.status, data: d && d.data, err: d && d.error }; } }
+const o = new C(); await o.call('POST', '/api/auth/login', { email: 'owner@test.local', password: 'CiStrongPass-12345' });
+const pid = (await o.call('POST', '/api/projects', { name: 'UI Tower ' + run, code: 'UI' + run.toUpperCase().slice(-5), budget_paise: 5e9 })).data.id;
+await o.call('POST', '/api/settings/con.enabled', { value: 'on' });
+await o.call('POST', '/api/settings/con.pm_approval_limit_paise', { value: 50000000 });
+const users = {};
+for (const role of ['site', 'pm', 'purchase', 'accounts', 'sales', 'viewer']) {
+  const email = `ui-${role}-${run}@test.local`; const r = await o.call('POST', '/api/users', { name: 'UI ' + role + ' ' + run, email, role, projects: role === 'site' ? [pid] : [] });
+  const c = new C(); await c.call('POST', '/api/auth/login', { email, password: r.data.temporaryPassword }); const pw = 'UiStrongPass-' + run;
+  await c.call('POST', '/api/auth/change-password', { currentPassword: r.data.temporaryPassword, newPassword: pw }); users[role] = { email, pw };
+}
+const browser = await chromium.launch();
+const ctxs = {};
+async function page(role) {
+  if (!ctxs[role]) {
+    const ctx = await browser.newContext({ viewport: { width: 390, height: 800 } });
+    const email = role === 'owner' ? 'owner@test.local' : users[role].email, password = role === 'owner' ? 'CiStrongPass-12345' : users[role].pw;
+    const r = await ctx.request.post(BASE + '/api/auth/login', { headers: { 'X-NirmaanCRM': '1', 'Content-Type': 'application/json' }, data: { email, password } });
+    if (!r.ok()) throw new Error('login ' + role + ' ' + r.status());
+    ctxs[role] = ctx;
+  }
+  const p = await ctxs[role].newPage(); p.on('dialog', (d) => d.accept()); p.on('pageerror', (e) => console.log('PAGEERROR', role, e.message));
+  await p.goto(BASE + '/'); await p.waitForFunction(() => typeof navigate === 'function' && typeof currentUser !== 'undefined' && currentUser, null, { timeout: 15000 }); return p;
+}
+const go = async (p, route) => { await p.evaluate((r) => navigate(r), route); await p.waitForTimeout(800); };
+const toastText = async (p) => { await p.waitForTimeout(500); return p.evaluate(() => (document.getElementById('toast') || {}).textContent || ''); };
+const submit = (p) => p.click('#modal-form button[type=submit]');
+const pick = (p, sel, label) => p.selectOption(sel, { label });
+const shot = (p, n) => p.screenshot({ path: `${SHOTS}/${n}.png` });
+const proj = 'UI Tower ' + run;
+const iso = (d) => new Date(Date.now() + 19800000 + d * 86400000).toISOString().slice(0, 10);
+const sitec = new C(); await sitec.call('POST', '/api/auth/login', { email: users.site.email, password: users.site.pw });
+await sitec.call('POST', '/api/site/dprs', { project_id: pid, report_date: iso(0), work_summary: 'Slab', labour_count: 9 });
+await sitec.call('POST', '/api/site/snags', { project_id: pid, title: 'Crack', severity: 'high' });
+const pngB64 = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==';
+await import('node:fs').then((f) => f.writeFileSync('/tmp/claude-0/scratch/me.png', Buffer.from(pngB64, 'base64')));
+
+// ===== daily line on home, every role =====
+let s = await page('site'); await go(s, 'home'); await s.waitForSelector('.quote-banner');
+const q1 = await s.textContent('.quote-banner .qtext'); ok('the site engineer sees a line for today with a greeting', q1.length > 20 && /Good (morning|afternoon|evening)/.test(await s.textContent('.quote-banner')), q1);
+await shot(s, '90-home-quote');
+let ow = await page('owner'); await go(ow, 'dashboard'); await ow.waitForSelector('.quote-banner');
+ok('the Owner gets one too, a different line', (await ow.textContent('.quote-banner .qtext')) !== q1);
+await shot(ow, '91-owner-dashboard');
+
+// ===== profile =====
+await s.evaluate(() => navigate('profile')); await s.waitForSelector('#pf-save');
+await s.fill('#pf-name', 'Ravi Patil ' + run); await s.fill('#pf-phone', '9820012345'); await s.fill('#pf-position', 'Senior Site Engineer'); await s.fill('#pf-about', 'Structures and safety.');
+await s.click('#pf-save'); ok('profile saved', /Profile saved/.test(await toastText(s)));
+await s.waitForTimeout(800); ok('the page shows the new position', (await s.textContent('.pf-head')).includes('Senior Site Engineer'));
+await s.setInputFiles('#pf-file', '/tmp/claude-0/scratch/me.png'); await s.waitForTimeout(1500);
+ok('picture saved and shown in the top bar', (await s.$('#avatar img')) !== null);
+await shot(s, '92-profile');
+await s.click('#pf-nophoto'); await s.waitForTimeout(1200); ok('picture can be taken off (back to initials)', (await s.$('#avatar img')) === null);
+await s.setInputFiles('#pf-file', '/tmp/claude-0/scratch/me.png'); await s.waitForTimeout(1500);
+
+// ===== team + thank-you =====
+const pm = await page('pm'); await go(pm, 'team'); await pm.waitForSelector('[data-thx]');
+const card = pm.locator('.team-card', { hasText: 'Ravi Patil ' + run }); ok('the PM sees the colleague with position and phone', (await card.textContent()).includes('Senior Site Engineer') && (await card.textContent()).includes('9820012345'));
+await card.locator('[data-thx]').click(); await pm.waitForSelector('#f_message'); await pm.fill('#f_message', 'Great work on the slab shuttering!'); await submit(pm);
+ok('PM sends a thank-you', /Thank-you sent/.test(await toastText(pm))); await pm.waitForTimeout(900);
+ok('it appears on the wall', (await pm.textContent('#team-body')).includes('Great work on the slab shuttering'));
+await shot(pm, '93-team');
+const sn = await sitec.call('GET', '/api/notifications'); ok('the engineer was notified', JSON.stringify(sn.data).includes('Thank you from'));
+
+// ===== work report =====
+await go(s, 'workreport'); await s.waitForSelector('#wr-body .ch'); await s.waitForTimeout(500);
+let wr = (await s.textContent('#wr-body')).replace(/\s+/g, ' ');
+ok('my work report shows charts, highlights and the daily-report count', wr.includes('Daily site reports filed') && wr.includes('Work done each day') && (await s.$$('#wr-body svg rect')).length >= 5, wr.slice(0, 300));
+await shot(s, '94-work-report');
+ok('print and Excel buttons are there', (await s.$('a[href*="print.html?k=workreport"]')) !== null && (await s.$('a[href*="csv=1"]')) !== null);
+const pr = await page('pm');
+const siteId = (await sitec.call('GET', '/api/auth/me')).data.user.id;
+await pr.goto(BASE + `/print.html?k=workreport&id=${siteId}&from=${iso(-29)}&to=${iso(0)}`); await pr.waitForSelector('.doc-title', { timeout: 10000 });
+const pt = (await pr.textContent('#sheet')).replace(/\s+/g, ' '); ok('the printed report shows name, position and counts on the letterhead', pt.includes('Work Report') && pt.includes('Senior Site Engineer') && pt.includes('Daily site reports filed'), pt.slice(0, 300));
+await shot(pr, '95-work-report-print');
+await go(pm, 'workreport'); await pm.waitForSelector('#wr-user'); ok('the PM can pick any team member', (await pm.$$('#wr-user option')).length >= 6);
+await pm.selectOption('#wr-user', { label: 'Ravi Patil ' + run }); await pm.waitForTimeout(1000); ok('and see that person\'s report', (await pm.textContent('#wr-body')).includes('Ravi Patil ' + run));
+
+// ===== feasibility =====
+await go(pm, 'feasibility'); await pm.waitForSelector('#fea-project'); await pick(pm, '#fea-project', proj); await pm.waitForSelector('#fea-new');
+await pm.click('#fea-new'); await pm.waitForSelector('#f_title'); await pm.fill('#f_title', 'Initial study'); await pm.fill('#f_est_cost_paise', '800000'); await pm.fill('#f_est_revenue_paise', '1000000'); await pm.fill('#f_notes', 'Land and 2025 rates');
+await pm.setInputFiles('#f_file', { name: 'feasibility-v1.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4 study one') }); await submit(pm);
+ok('first study saved as version 1', /New version saved/.test(await toastText(pm))); await pm.waitForTimeout(1000);
+await pm.click('#fea-new'); await pm.waitForSelector('#f_title'); ok('the next form says version 2', (await pm.locator('.modal').last().textContent()).includes('version 2'));
+await pm.fill('#f_title', 'Quarterly review'); await pm.fill('#f_est_cost_paise', '850000'); await pm.fill('#f_est_revenue_paise', '1100000'); await submit(pm); await pm.waitForTimeout(1200);
+const ft = (await pm.textContent('#fea-body')).replace(/\s+/g, ' ');
+ok('both versions are kept, latest marked, margin worked out, charts appear', ft.includes('Version 2') && ft.includes('Version 1') && ft.includes('Latest') && ft.includes('20%') && (await pm.$$('#fea-body svg rect')).length >= 4 && ft.includes('Download study'), ft.slice(0, 500));
+await shot(pm, '96-feasibility');
+const ac = await page('accounts'); await go(ac, 'feasibility'); await ac.waitForSelector('#fea-project'); await pick(ac, '#fea-project', proj); await ac.waitForTimeout(900);
+ok('Accounts can read but not add', (await ac.$('#fea-new')) === null && (await ac.textContent('#fea-body')).includes('Version 2'));
+ok('Site engineer has no Feasibility menu', !(await s.evaluate(() => sidebarItems(currentUser.role).flatMap((g) => g[1]).some((i) => i.route === 'feasibility'))));
+
+// ===== insights + RERA meter =====
+await go(ow, 'insights'); await ow.waitForSelector('#ins-body .card, #ins-body .empty-state'); await ow.waitForTimeout(800); await shot(ow, '97-insights');
+ok('Owner Insights page draws charts or a friendly empty message', (await ow.textContent('#ins-body')).length > 20);
+await go(ow, 'rera'); await ow.waitForSelector('#rera-project'); await pick(ow, '#rera-project', proj); await ow.waitForTimeout(900); ok('RERA page has the deposit meter', (await ow.$('.ch-meter')) !== null);
+await browser.close(); console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);

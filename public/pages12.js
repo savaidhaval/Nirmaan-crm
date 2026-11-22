@@ -19,6 +19,7 @@ async function loadRera(pid) {
     const pct = (d.pct_bp / 100).toFixed(d.pct_bp % 100 ? 1 : 0);
     body.innerHTML = `<div class="card"><p class="muted">Buyers have paid <b>${moneyP(d.realised_paise)}</b>. At ${pct}%, about <b>${moneyP(d.required_paise)}</b> should be in the designated account.</p>
       <p style="font-size:1.3em"><b>Deposited ${moneyP(d.deposited_paise)}</b></p>
+      ${typeof CH !== 'undefined' ? CH.meter(d.deposited_paise, d.required_paise, { label: 'Deposited against required', text: moneyP(d.deposited_paise) + ' of ' + moneyP(d.required_paise) }) : ''}
       <p>${d.gap_paise > 0 ? chip('Still to deposit ' + moneyP(d.gap_paise), 'bad') : chip('Fully deposited', 'good')}</p>
       <p>Withdrawn: <b>${moneyP(d.withdrawn_paise)}</b><br>Balance in the account: <b>${moneyP(d.balance_paise)}</b></p>
       <p class="muted">For comparison: project cost recorded in the CRM ${moneyP(d.cost_incurred_paise)}; deposited amount in proportion to ${d.percent_complete}% completion ${moneyP(d.completion_estimate_paise)}.</p>
