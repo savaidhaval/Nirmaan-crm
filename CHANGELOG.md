@@ -51,3 +51,9 @@
 - New setting: budget.gst_basis (without/with GST), default without.
 - Migration 0017; code in `src/routes/budget.js` plus service functions in procurement2.js and contractors.js; test `tests/budget.mjs` (30 checks, in CI); browser walkthrough (10 checks).
 - WP-7 released after GitHub checks passed.
+
+## WP-8 store, WP-9 document expiry, WP-10 petty cash (2026-11-22)
+- Store: stock on hand per project; goods received against a PO line tied to a store item go into stock in the same batch as the receipt; issue to work (offline-capable, never below zero, two taps at once cannot both win); transfers between sites; stock-count adjustments need a PM; reorder level with a daily low-stock reminder; moves log and CSVs.
+- Documents with expiry for vendors and contractors: type freely, valid-till date, reminder days, file upload, replace with a new copy (stops the old reminder); PM and Purchase are reminded once per document per week, again when expired.
+- Petty cash: fund per custodian, expenses with bill photo (offline-capable) wait for PM approval, Accounts adds cash, cash can be returned, entries are cancelled never deleted, low-balance warning (setting petty.low_balance_paise), statement CSV with category totals.
+- Fix found by browser tests: the screens used the wrong field for the signed-in user's id. Migrations 0018-0020; tests stores (41), partydocs (26), petty (34) in CI; browser walkthrough 29 checks. CI now starts the dev server with --test-scheduled so hourly sweeps can be tested.

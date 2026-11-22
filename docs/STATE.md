@@ -96,3 +96,6 @@ Code complete, all 10 suites + browser walkthroughs pass locally. Migration 0016
 
 ## WP-7 status
 Code complete; all 11 suites and 3 browser walkthroughs pass locally. Migration 0017 applied to STAGING database only, not production. Known limit found: lists that filter by project use one SQL variable per project, so more than 100 visible projects would fail (task suggested separately).
+
+## WP-8/9/10 status
+Code complete; 14 API suites and 4 browser walkthroughs pass locally. Migrations 0018-0020 NOT applied to staging or production.

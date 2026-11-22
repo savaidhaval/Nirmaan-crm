@@ -1,4 +1,4 @@
-# NirmaanCRM data dictionary (real schema from migrations 0001-0017, updated 2026-11-22)
+# NirmaanCRM data dictionary (real schema from migrations 0001-0020, updated 2026-11-22)
 
 Source: replaying migrations/*.sql into an empty SQLite DB. Live D1 not verified (see docs/STATE.md). Money = paise INTEGER, percentages = basis points (_bp). NN = NOT NULL, PK = primary key.
 
@@ -75,10 +75,12 @@ id INTEGER PK, po_id INTEGER NN, received_on TEXT NN, qty_note TEXT, challan_no 
 id INTEGER PK, indent_id INTEGER NN, description TEXT NN, qty REAL, unit TEXT
 ### pro_indents
 id INTEGER PK, project_id INTEGER NN, indent_no TEXT NN, needed_by TEXT, note TEXT, status TEXT NN, requested_by INTEGER, decided_by INTEGER, decided_at TEXT, decision_note TEXT, rfq_id INTEGER, client_uuid TEXT, created_at TEXT, deleted_at TEXT
+### pro_party_docs
+id INTEGER PK, party_type TEXT NN, party_id INTEGER NN, party_label TEXT, doc_type TEXT NN, valid_till TEXT, reminder_days INTEGER NN, document_id INTEGER, note TEXT, superseded_by INTEGER, created_by INTEGER, created_at TEXT, deleted_at TEXT
 ### pro_payments
 id INTEGER PK, bill_id INTEGER NN, amount_paise INTEGER NN, tds_paise INTEGER NN, paid_on TEXT NN, mode TEXT, ref_no TEXT, note TEXT, reversed_at TEXT, reversal_note TEXT, created_by INTEGER, created_at TEXT
 ### pro_po_items
-id INTEGER PK, po_id INTEGER NN, description TEXT NN, qty REAL, unit TEXT, rate_paise INTEGER, amount_paise INTEGER, budget_head_id INTEGER
+id INTEGER PK, po_id INTEGER NN, description TEXT NN, qty REAL, unit TEXT, rate_paise INTEGER, amount_paise INTEGER, budget_head_id INTEGER, stock_item_id INTEGER
 ### pro_pos
 id INTEGER PK, project_id INTEGER NN, vendor_id INTEGER NN, rfq_id INTEGER, po_no TEXT, po_seq INTEGER NN, amount_paise INTEGER NN, gst_bp INTEGER, gst_paise INTEGER NN, total_paise INTEGER NN, terms TEXT, status TEXT, approved_by INTEGER, approved_at TEXT, created_by INTEGER, created_at TEXT, deleted_at TEXT
 ### pro_quote_items
@@ -95,6 +97,10 @@ id INTEGER PK, name TEXT NN, category TEXT, contact_person TEXT, phone TEXT, ema
 id INTEGER PK, project_id INTEGER NN, user_id INTEGER NN, added_by INTEGER, removed_at TEXT, created_at TEXT
 ### projects
 id INTEGER PK, name TEXT NN, code TEXT NN, address TEXT, ward TEXT, city TEXT, type TEXT, status TEXT, rera_no TEXT, rera_expiry TEXT, start_date TEXT, target_date TEXT, budget_paise INTEGER, notes TEXT, created_at TEXT, deleted_at TEXT, brand_id INTEGER, percent_complete INTEGER NN
+### pty_entries
+id INTEGER PK, fund_id INTEGER NN, entry_date TEXT NN, kind TEXT NN, category TEXT, amount_paise INTEGER NN, narration TEXT, document_id INTEGER, status TEXT NN, created_by INTEGER, approved_by INTEGER, decided_at TEXT, decision_note TEXT, client_uuid TEXT, created_at TEXT
+### pty_funds
+id INTEGER PK, project_id INTEGER NN, custodian_user_id INTEGER NN, opening_paise INTEGER NN, active INTEGER NN, created_by INTEGER, created_at TEXT
 ### rate_limits
 key TEXT PK, window_start TEXT NN, hits INTEGER NN
 ### sal_activities
@@ -135,6 +141,12 @@ id INTEGER PK, project_id INTEGER NN, report_date TEXT NN, wing TEXT, work_summa
 id INTEGER PK, project_id INTEGER NN, wing TEXT, name TEXT NN, milestone_key TEXT, planned_date TEXT, actual_date TEXT, status TEXT, sort_order INTEGER, created_at TEXT, deleted_at TEXT
 ### site_snags
 id INTEGER PK, project_id INTEGER NN, wing TEXT, location TEXT, title TEXT NN, severity TEXT, status TEXT, assigned_to INTEGER, due_date TEXT, closed_at TEXT, created_by INTEGER, client_uuid TEXT, created_at TEXT, deleted_at TEXT
+### stk_balance
+id INTEGER PK, project_id INTEGER NN, item_id INTEGER NN, qty REAL NN, reorder_level REAL NN
+### stk_items
+id INTEGER PK, name TEXT NN, unit TEXT, category TEXT, active INTEGER NN, created_at TEXT
+### stk_moves
+id INTEGER PK, project_id INTEGER NN, item_id INTEGER NN, kind TEXT NN, qty REAL NN, status TEXT NN, ref_table TEXT, ref_id INTEGER, to_project_id INTEGER, note TEXT, where_used TEXT, by_user INTEGER, approved_by INTEGER, decided_at TEXT, client_uuid TEXT, created_at TEXT
 ### user_recovery_codes
 id INTEGER PK, user_id INTEGER NN, code_hash TEXT NN, used_at TEXT
 ### user_totp
@@ -195,9 +207,12 @@ id TEXT PK, source TEXT, seen_at TEXT
 - pro_indent_items:idx_indent_items
 - pro_indents:uq_indent_no
 - pro_indents:idx_indent_project_status
+- pro_party_docs:idx_partydoc_party
+- pro_party_docs:idx_partydoc_expiry
 - pro_payments:idx_pay_bill
 - pro_po_items:idx_poitem_po
 - pro_po_items:idx_poitem_head
+- pro_po_items:idx_poitem_stock
 - pro_pos:idx_po_project
 - pro_pos:uq_po_seq
 - pro_quote_items:idx_quote_items
@@ -207,6 +222,10 @@ id TEXT PK, source TEXT, seen_at TEXT
 - project_members:uq_project_member
 - project_members:idx_project_member_user
 - projects:idx_projects_brand
+- pty_entries:idx_pty_entry_fund
+- pty_entries:idx_pty_entry_status
+- pty_funds:idx_pty_fund_project
+- pty_funds:idx_pty_fund_user
 - sal_activities:idx_activity_lead
 - sal_bookings:idx_booking_project
 - sal_bookings:uq_booking_one_active_per_unit
@@ -239,6 +258,11 @@ id TEXT PK, source TEXT, seen_at TEXT
 - site_milestones:idx_milestone_project
 - site_milestones:uq_milestone_key
 - site_snags:idx_snag_project
+- stk_balance:uq_stk_balance
+- stk_items:uq_stk_item_name
+- stk_moves:idx_stk_moves_project
+- stk_moves:idx_stk_moves_item
+- stk_moves:idx_stk_moves_status
 - user_recovery_codes:idx_recovery_user
 - users:uq_primary_owner
 
@@ -261,3 +285,8 @@ id TEXT PK, source TEXT, seen_at TEXT
 - bud_heads (project_id, code unique per project, name, budget_paise, sort_order, soft delete). pro_po_items.budget_head_id and con_work_orders.budget_head_id tag spend to a head (optional).
 - Committed = approved/part-received/received POs + approved/closed work orders. Billed = bills (ex-GST by default) shared across heads by item value + approved RA bills. Paid = payments on those bills. Setting budget.gst_basis exclusive|inclusive (confirm with CA).
 - Budget reads other modules only through procurementByHead / contractsByHead / posForHead / wosForHead (one aggregate query each).
+
+## 0018-0020 additions (WP-8, WP-9, WP-10)
+- Stores: stk_items, stk_balance (one row per project and item, changed only in the same batch as its move), stk_moves (append-only; kinds receipt, issue, transfer_out, transfer_in, adjust; adjust waits as pending for a PM). pro_po_items.stock_item_id ties a PO line to a store item so goods received go into stock.
+- pro_party_docs: documents of vendors and contractors with valid_till, reminder_days, superseded_by (a newer copy replaces the old one and stops its reminders). party_label is stored so reminders need no lookup in another module.
+- Petty cash: pty_funds (one custodian per fund), pty_entries (expense, top_up, return; balance counts approved entries only; cancelled or rejected entries stay on record).

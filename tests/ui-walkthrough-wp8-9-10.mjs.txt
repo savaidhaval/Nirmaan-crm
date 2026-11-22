@@ -1,0 +1,125 @@
+import { createRequire } from 'node:module';
+const { chromium } = createRequire(import.meta.url)('/opt/node-tools/node_modules/playwright');
+const BASE = process.env.BASE || 'http://localhost:8787', SHOTS = '/tmp/claude-0/scratch/shots';
+const run = Date.now().toString(36);
+let pass = 0, fail = 0; const ok = (n, c, x = '') => { c ? pass++ : fail++; console.log(`${c ? 'PASS' : 'FAIL'}  ${n}${c ? '' : '  ' + x}`); };
+class C { constructor() { this.cookie = ''; } async call(m, p, b) { const h = { 'X-NirmaanCRM': '1' }; if (this.cookie) h.cookie = this.cookie; let body; if (b) { h['Content-Type'] = 'application/json'; body = JSON.stringify(b); }
+  const r = await fetch(BASE + p, { method: m, headers: h, body }); const sc = r.headers.get('set-cookie'); if (sc) this.cookie = sc.split(';')[0]; let d = null; try { d = await r.json(); } catch (e) {} return { status: r.status, data: d && d.data, err: d && d.error }; } }
+const o = new C(); await o.call('POST', '/api/auth/login', { email: 'owner@test.local', password: 'CiStrongPass-12345' });
+const pid = (await o.call('POST', '/api/projects', { name: 'UI Tower ' + run, code: 'UI' + run.toUpperCase().slice(-5), budget_paise: 5e9 })).data.id;
+await o.call('POST', '/api/settings/con.enabled', { value: 'on' });
+await o.call('POST', '/api/settings/con.pm_approval_limit_paise', { value: 50000000 });
+const users = {};
+for (const role of ['site', 'pm', 'purchase', 'accounts']) {
+  const email = `ui-${role}-${run}@test.local`; const r = await o.call('POST', '/api/users', { name: 'UI ' + role + ' ' + run, email, role, projects: role === 'site' ? [pid] : [] });
+  const c = new C(); await c.call('POST', '/api/auth/login', { email, password: r.data.temporaryPassword }); const pw = 'UiStrongPass-' + run;
+  await c.call('POST', '/api/auth/change-password', { currentPassword: r.data.temporaryPassword, newPassword: pw }); users[role] = { email, pw };
+}
+const browser = await chromium.launch();
+const ctxs = {};
+async function page(role) {
+  if (!ctxs[role]) {
+    const ctx = await browser.newContext({ viewport: { width: 390, height: 800 } });
+    const email = role === 'owner' ? 'owner@test.local' : users[role].email, password = role === 'owner' ? 'CiStrongPass-12345' : users[role].pw;
+    const r = await ctx.request.post(BASE + '/api/auth/login', { headers: { 'X-NirmaanCRM': '1', 'Content-Type': 'application/json' }, data: { email, password } });
+    if (!r.ok()) throw new Error('login ' + role + ' ' + r.status());
+    ctxs[role] = ctx;
+  }
+  const p = await ctxs[role].newPage(); p.on('dialog', (d) => d.accept()); p.on('pageerror', (e) => console.log('PAGEERROR', role, e.message));
+  await p.goto(BASE + '/'); await p.waitForFunction(() => typeof navigate === 'function' && typeof currentUser !== 'undefined' && currentUser, null, { timeout: 15000 }); return p;
+}
+const go = async (p, route) => { await p.evaluate((r) => navigate(r), route); await p.waitForTimeout(800); };
+const toastText = async (p) => { await p.waitForTimeout(500); return p.evaluate(() => (document.getElementById('toast') || {}).textContent || ''); };
+const submit = (p) => p.click('#modal-form button[type=submit]');
+const pick = (p, sel, label) => p.selectOption(sel, { label });
+const shot = (p, n) => p.screenshot({ path: `${SHOTS}/${n}.png` });
+const proj = 'UI Tower ' + run;
+const pc = new C(); await pc.call('POST', '/api/auth/login', { email: users.purchase.email, password: users.purchase.pw });
+const cementName = 'Cement ' + run;
+const item = (await pc.call('POST', '/api/stores/items', { name: cementName, unit: 'bags', category: 'civil' })).data.id;
+const vend = (await o.call('POST', '/api/procurement/vendors', { name: 'UI Supplier ' + run })).data.id;
+const po = (await pc.call('POST', '/api/procurement/pos', { project_id: pid, vendor_id: vend, stock_item_id: item, items: [{ description: 'Cement', qty: 100, unit: 'bags', rate_paise: 40000 }] })).data;
+await pc.call('POST', `/api/procurement/pos/${po.id}/submit`, {}); await o.call('POST', `/api/procurement/pos/${po.id}/approve`, {});
+const stockNow = async () => ((await o.call('GET', `/api/stores/stock?project_id=${pid}`)).data.stock.find((s) => s.item_id === item) || {}).qty;
+const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==', 'base64');
+
+// ===== STORE: site receives 100 bags -> store shows 100 =====
+let s = await page('site'); await go(s, 'procurement'); await s.click(`[data-grn="${po.id}"]`); await s.waitForSelector('#modal-form');
+await (await s.$('input[id^="f_q"]')).fill('100'); await submit(s);
+ok('site records 100 bags received', /Receipt recorded/.test(await toastText(s)));
+ok('the receipt went into the store by itself', (await stockNow()) === 100);
+await go(s, 'stores'); await pick(s, '#stk-project', proj); await s.waitForTimeout(900);
+ok('Store screen shows 100 bags', (await s.textContent('#stk-body')).includes(cementName) && (await s.textContent('#stk-body')).includes('100'));
+await shot(s, '40-store-stock');
+
+// ===== STORE: issue 30 =====
+await s.click('#stk-issue'); await s.waitForSelector('#f_item_id');
+await pick(s, '#f_item_id', `${cementName} (100 bags in store)`); await s.fill('#f_qty', '30'); await s.fill('#f_where_used', 'Slab 3'); await shot(s, '41-store-issue-form'); await submit(s);
+ok('issue 30 to Slab 3', /Issued/.test(await toastText(s)));
+ok('store now 70', (await stockNow()) === 70);
+
+// ===== STORE: airplane mode =====
+await s.waitForTimeout(600); await ctxs.site.setOffline(true);
+await s.evaluate(() => { storeIssue(Number(document.getElementById('stk-project').value)); });
+await s.waitForSelector('#f_item_id', { timeout: 8000 }).catch(() => {});
+const haveForm = (await s.$('#f_item_id')) !== null; ok('offline: issue form still opens (stock list remembered on the phone)', haveForm);
+if (haveForm) { await s.fill('#f_qty', '10'); await s.fill('#f_where_used', 'Offline Wing B'); await submit(s); const t = await toastText(s); ok('offline: issue saved on the phone', /Saved on this phone/.test(t), t); }
+await ctxs.site.setOffline(false); await s.waitForTimeout(500);
+await s.evaluate(() => syncQueue()); await s.waitForTimeout(1500); await s.evaluate(() => syncQueue()); await s.waitForTimeout(800);
+ok('reconnect: exactly one issue of 10 arrived (store 60)', (await stockNow()) === 60, String(await stockNow()));
+
+// ===== STORE: reorder level and count difference =====
+const pu = await page('purchase'); await go(pu, 'stores'); await pick(pu, '#stk-project', proj); await pu.waitForTimeout(900);
+await pu.click('[data-reorder]'); await pu.waitForSelector('#f_reorder_level'); await pu.fill('#f_reorder_level', '80'); await submit(pu);
+ok('Purchase sets the reorder level to 80', /Saved/.test(await toastText(pu)));
+await pu.waitForTimeout(900); ok('store shows the item as Low', (await pu.textContent('#stk-body')).includes('Low'));
+await shot(pu, '42-store-low');
+await go(s, 'stores'); await pick(s, '#stk-project', proj); await s.waitForTimeout(700); await s.click('#stk-adjust'); await s.waitForSelector('#f_reason'); await pick(s, '#f_item_id', `${cementName} (60 in store)`);
+await s.fill('#f_qty', '-5'); await s.fill('#f_reason', 'bags torn'); await submit(s); ok('site reports a count difference of -5', /Sent for approval/.test(await toastText(s)));
+const pm = await page('pm'); await go(pm, 'stores'); await pick(pm, '#stk-project', proj); await pm.waitForTimeout(900);
+ok('PM sees the adjustment waiting', (await pm.textContent('#stk-body')).includes('Waiting for approval'));
+await pm.click('[data-mv="approve"]'); const tpm = await toastText(pm); ok('PM approves it', /Done/.test(tpm), tpm); ok('store now 55', (await stockNow()) === 55);
+
+// ===== PETTY CASH =====
+const ac = await page('accounts'); await go(ac, 'petty'); await ac.waitForSelector('#pty-open'); await ac.click('#pty-open'); await ac.waitForSelector('#f_custodian_user_id');
+await pick(ac, '#f_project_id', proj); await pick(ac, '#f_custodian_user_id', `UI site ${run} (site)`); await ac.fill('#f_opening_paise', '5000'); await shot(ac, '43-petty-open-fund'); await submit(ac);
+ok('Accounts opens a Rs 5,000 fund for the site engineer', /Fund opened/.test(await toastText(ac)));
+await ac.waitForTimeout(800); await ac.locator(`[data-fund]:has-text("${proj}")`).click(); await ac.waitForSelector('#pf-top'); await ac.click('#pf-top'); await ac.waitForSelector('#f_amount_paise'); await ac.fill('#f_amount_paise', '3000'); await submit(ac);
+ok('Accounts adds Rs 3,000 cash', /Cash added/.test(await toastText(ac)));
+await ac.waitForTimeout(700); console.log('MODAL', (await ac.textContent('.modal')).replace(/\s+/g,' ').slice(0,300)); ok('fund shows Rs 8,000 in hand', (await ac.textContent('.modal')).includes('8,000'));
+await shot(ac, '44-petty-fund-accounts');
+
+s = await page('site'); await go(s, 'petty'); await s.waitForSelector('[data-fund]');
+console.log('SITEPETTY', (await s.textContent('#pty-body')).replace(/\s+/g,' ').slice(0,300)); ok('site engineer sees only their own fund with Rs 8,000', (await s.textContent('#pty-body')).includes('8,000') && (await s.$$('[data-fund]')).length === 1);
+await s.click('[data-fund]'); await s.waitForSelector('#pf-exp'); await s.click('#pf-exp'); await s.waitForSelector('#f_category');
+await s.fill('#f_amount_paise', '600'); await s.fill('#f_category', 'Tea & snacks'); await s.setInputFiles('#f_photos', { name: 'bill.png', mimeType: 'image/png', buffer: png }); await shot(s, '45-petty-expense-form'); await submit(s);
+ok('site records a Rs 600 expense with a bill photo', /Sent for approval/.test(await toastText(s)));
+await s.waitForTimeout(1500);
+const fundId = (await o.call('GET', '/api/petty/funds')).data.funds.find((f) => f.project_id === pid).id;
+const ents = (await o.call('GET', `/api/petty/funds/${fundId}`)).data.entries; const exp = ents.find((e) => e.kind === 'expense');
+ok('expense waits for approval, balance still Rs 8,000', exp && exp.status === 'submitted' && (await o.call('GET', '/api/petty/funds')).data.funds.find((f) => f.id === fundId).balance_paise === 800000);
+const att = (await o.call('GET', `/api/attachments?entity=pty_entries&entity_id=${exp.id}`)).data.files; ok('the bill photo is attached to the entry', att.length === 1, JSON.stringify(att));
+pm.on('dialog', (d) => d.accept()); await go(pm, 'petty'); await pm.waitForSelector(`.card:has-text("${proj}") [data-pty="approve"]`); await shot(pm, '46-petty-pm-approvals');
+await pm.locator(`.card:has-text("${proj}") [data-pty="approve"]`).click(); ok('PM approves the expense', /Done/.test(await toastText(pm)));
+await pm.waitForTimeout(900); ok('balance is now Rs 7,400', (await pm.locator(`[data-fund]:has-text("${proj}")`).textContent()).includes('7,400'));
+await shot(pm, '47-petty-after-approval');
+
+// ===== DOCUMENTS WITH EXPIRY =====
+const vend2 = vend; const pu2 = await page('purchase'); await go(pu2, 'procurement'); await pu2.waitForSelector(`[data-vendor-led="${vend2}"]`); await pu2.click(`[data-vendor-led="${vend2}"]`);
+await pu2.waitForSelector('#vl-docs'); await pu2.click('#vl-docs'); await pu2.waitForSelector('#pd-add'); await pu2.click('#pd-add'); await pu2.waitForSelector('#f_doc_type');
+const iso = (d) => new Date(Date.now() + 19800000 + d * 86400000).toISOString().slice(0, 10);
+await pu2.fill('#f_doc_type', 'Insurance policy'); await pu2.fill('#f_valid_till', iso(20)); await pu2.setInputFiles('#f_file', { name: 'policy.png', mimeType: 'image/png', buffer: png }); await shot(pu2, '48-doc-add'); await submit(pu2);
+ok('Purchase adds an insurance document expiring in 20 days', /Document added/.test(await toastText(pu2)));
+await pu2.waitForSelector('#pd-x'); await pu2.waitForTimeout(500);
+let mt = (await pu2.locator('.modal').last().textContent()).replace(/\s+/g, ' ');
+ok('listed as "Expiring soon" with days left', mt.includes('Insurance policy') && mt.includes('Expiring soon') && mt.includes('20 days left'), mt.slice(0, 300));
+ok('the uploaded file can be opened', (await pu2.$('a[href^="/api/files/download/"]')) !== null);
+await shot(pu2, '49-doc-expiring');
+await pu2.click('[data-renew]'); await pu2.waitForSelector('#f_doc_type'); await pu2.fill('#f_valid_till', iso(365)); await submit(pu2);
+ok('renewing replaces the old copy', /Replaced/.test(await toastText(pu2)));
+await pu2.waitForSelector('#pd-x'); await pu2.waitForTimeout(500); mt = (await pu2.locator('.modal').last().textContent()).replace(/\s+/g, ' ');
+ok('old copy shows Replaced, new copy shows Valid', mt.includes('Replaced') && mt.includes('Valid') && mt.includes('365 days left'), mt.slice(0, 400));
+await shot(pu2, '50-doc-renewed');
+// a site engineer has no documents button / API
+const s2 = await page('accounts'); ok('Accounts can view the documents API', (await s2.evaluate(async (v) => (await fetch(`/api/partydocs?party_type=vendor&party_id=${v}`)).status, vend2)) === 200);
+await browser.close(); console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);

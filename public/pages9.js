@@ -113,7 +113,7 @@ async function loadPetty() {
     const [funds, pending] = await Promise.all([api('/api/petty/funds'), canA ? api('/api/petty/pending') : { data: { entries: [] } }]);
     let html = mgr && isRole('owner', 'pm', 'accounts') ? '<button class="btn btn-full" id="pty-open">➕ Open a petty-cash fund</button>' : '';
     if (pending.data.entries.length) html += '<h3>Waiting for your approval</h3>' + pending.data.entries.map((e) => `<div class="card"><div class="row"><div><b>${moneyP(e.amount_paise)}</b> · ${esc(e.kind === 'return' ? 'cash returned' : (e.category || 'expense'))}<p class="muted">${esc(e.by_name || '')} · ${esc(e.project)} · ${esc(e.entry_date)}${e.narration ? ' · ' + esc(e.narration) : ''}</p></div></div>
-      <div class="row-btns"><button class="btn small" data-pty-photos="${e.id}">Bill photo</button>${e.created_by !== currentUser.user_id ? `<button class="btn small btn-primary" data-pty="approve" data-id="${e.id}">Approve</button><button class="btn small" data-pty="reject" data-id="${e.id}">Reject</button>` : '<span class="muted">Another approver is needed</span>'}</div></div>`).join('');
+      <div class="row-btns"><button class="btn small" data-pty-photos="${e.id}">Bill photo</button>${e.created_by !== currentUser.id ? `<button class="btn small btn-primary" data-pty="approve" data-id="${e.id}">Approve</button><button class="btn small" data-pty="reject" data-id="${e.id}">Reject</button>` : '<span class="muted">Another approver is needed</span>'}</div></div>`).join('');
     html += '<h3>' + (isRole('site') ? 'My fund' : 'Funds') + '</h3>' + (funds.data.funds.map((f) => `<div class="card clickable" data-fund="${f.id}"><div class="row"><div><b>${esc(f.project)}</b><p class="muted">${esc(f.custodian || '')}</p></div><div style="text-align:right"><b style="font-size:1.4em">${moneyP(f.balance_paise)}</b>${f.low ? '<br>' + chip('Running low', 'bad') : ''}${f.pending_paise ? `<br><span class="muted">${moneyP(f.pending_paise)} waiting</span>` : ''}</div></div></div>`).join('')
       || '<div class="card"><p>No petty-cash fund yet.</p><p class="muted">' + (mgr ? 'Open one for the person who keeps cash at the site.' : 'Ask Accounts or the Owner to open one for you.') + '</p></div>');
     body.innerHTML = html;
@@ -139,7 +139,7 @@ async function openFund() {
 async function fundDetail(id) {
   const d = (await api(`/api/petty/funds/${id}`)).data, f = d.fund;
   const ov = document.createElement('div'); ov.className = 'modal-overlay';
-  const mayTopUp = isRole('owner', 'accounts'), maySpend = f.custodian_user_id === currentUser.user_id || isRole('owner', 'pm');
+  const mayTopUp = isRole('owner', 'accounts'), maySpend = f.custodian_user_id === currentUser.id || isRole('owner', 'pm');
   ov.innerHTML = `<div class="modal"><h2>${esc(f.project)}</h2><p>${esc(f.custodian || '')}</p><p style="font-size:1.6em"><b>${moneyP(f.balance_paise)}</b> <span class="muted" style="font-size:.6em">in hand</span></p>${f.pending_paise ? `<p class="muted">${moneyP(f.pending_paise)} waiting for approval</p>` : ''}
     <div class="row-btns">${maySpend ? '<button class="btn btn-primary" id="pf-exp">+ Expense</button><button class="btn" id="pf-ret">Return cash</button>' : ''}${mayTopUp ? '<button class="btn" id="pf-top">Add cash</button>' : ''}<a class="btn" href="/api/petty/funds/${f.id}?csv=1">Statement CSV</a></div>
     ${d.categories.length ? '<h3>Spent, by type</h3>' + d.categories.map((c) => `<p>${esc(c.category)}: <b>${moneyP(c.total)}</b></p>`).join('') : ''}
