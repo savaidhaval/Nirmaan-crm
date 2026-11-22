@@ -50,3 +50,4 @@
 - PO and work order forms ask for a budget head (optional). Approving a PO or work order that pushes a head over budget still works but shows a warning, and tells the Owner and PM (once per head per week).
 - New setting: budget.gst_basis (without/with GST), default without.
 - Migration 0017; code in `src/routes/budget.js` plus service functions in procurement2.js and contractors.js; test `tests/budget.mjs` (30 checks, in CI); browser walkthrough (10 checks).
+- WP-7 released after GitHub checks passed.
