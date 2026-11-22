@@ -131,3 +131,6 @@ Remaining, in this order, with the extra items folded in:
 
 ## WP-22 status
 Code complete; 23 API suites and 11 browser walkthroughs pass locally. Migration 0030 NOT applied to production. Sweep adds 2 statements to the hourly run. WP-18 is live.
+
+## WP-17 status
+Code complete; 24 API suites and 12 browser walkthroughs pass locally. Migration 0031 NOT applied to production. WP-22 is live. FORMAT UNTESTED against a real Tally: Dhaval's accountant must import a one-day sample into a test company before real use. Each vouchers request is about 6 database statements (50 vouchers per page).

@@ -1,0 +1,63 @@
+import { createRequire } from 'node:module';
+const { chromium } = createRequire(import.meta.url)('/opt/node-tools/node_modules/playwright');
+const BASE = process.env.BASE || 'http://localhost:8787', SHOTS = '/tmp/claude-0/scratch/shots';
+const run = Date.now().toString(36);
+let pass = 0, fail = 0; const ok = (n, c, x = '') => { c ? pass++ : fail++; console.log(`${c ? 'PASS' : 'FAIL'}  ${n}${c ? '' : '  ' + x}`); };
+class C { constructor() { this.cookie = ''; } async call(m, p, b) { const h = { 'X-NirmaanCRM': '1' }; if (this.cookie) h.cookie = this.cookie; let body; if (b) { h['Content-Type'] = 'application/json'; body = JSON.stringify(b); }
+  const r = await fetch(BASE + p, { method: m, headers: h, body }); const sc = r.headers.get('set-cookie'); if (sc) this.cookie = sc.split(';')[0]; let d = null; try { d = await r.json(); } catch (e) {} return { status: r.status, data: d && d.data, err: d && d.error }; } }
+const o = new C(); await o.call('POST', '/api/auth/login', { email: 'owner@test.local', password: 'CiStrongPass-12345' });
+const pid = (await o.call('POST', '/api/projects', { name: 'UI Tower ' + run, code: 'UI' + run.toUpperCase().slice(-5), budget_paise: 5e9 })).data.id;
+await o.call('POST', '/api/settings/con.enabled', { value: 'on' });
+await o.call('POST', '/api/settings/con.pm_approval_limit_paise', { value: 50000000 });
+const users = {};
+for (const role of ['site', 'pm', 'purchase', 'accounts', 'sales', 'viewer']) {
+  const email = `ui-${role}-${run}@test.local`; const r = await o.call('POST', '/api/users', { name: 'UI ' + role + ' ' + run, email, role, projects: role === 'site' ? [pid] : [] });
+  const c = new C(); await c.call('POST', '/api/auth/login', { email, password: r.data.temporaryPassword }); const pw = 'UiStrongPass-' + run;
+  await c.call('POST', '/api/auth/change-password', { currentPassword: r.data.temporaryPassword, newPassword: pw }); users[role] = { email, pw };
+}
+const browser = await chromium.launch();
+const ctxs = {};
+async function page(role) {
+  if (!ctxs[role]) {
+    const ctx = await browser.newContext({ viewport: { width: 390, height: 800 } });
+    const email = role === 'owner' ? 'owner@test.local' : users[role].email, password = role === 'owner' ? 'CiStrongPass-12345' : users[role].pw;
+    const r = await ctx.request.post(BASE + '/api/auth/login', { headers: { 'X-NirmaanCRM': '1', 'Content-Type': 'application/json' }, data: { email, password } });
+    if (!r.ok()) throw new Error('login ' + role + ' ' + r.status());
+    ctxs[role] = ctx;
+  }
+  const p = await ctxs[role].newPage(); p.on('dialog', (d) => d.accept()); p.on('pageerror', (e) => console.log('PAGEERROR', role, e.message));
+  await p.goto(BASE + '/'); await p.waitForFunction(() => typeof navigate === 'function' && typeof currentUser !== 'undefined' && currentUser, null, { timeout: 15000 }); return p;
+}
+const go = async (p, route) => { await p.evaluate((r) => navigate(r), route); await p.waitForTimeout(800); };
+const toastText = async (p) => { await p.waitForTimeout(500); return p.evaluate(() => (document.getElementById('toast') || {}).textContent || ''); };
+const submit = (p) => p.click('#modal-form button[type=submit]');
+const pick = (p, sel, label) => p.selectOption(sel, { label });
+const shot = (p, n) => p.screenshot({ path: `${SHOTS}/${n}.png` });
+import { readFileSync } from 'node:fs';
+const proj = 'UI Tower ' + run;
+const iso = (d) => new Date(Date.now() + 19800000 + d * 86400000).toISOString().slice(0, 10);
+await o.call('POST', '/api/sales/plan-stages', { project_id: pid, stages: [{ stage_name: 'All', pct_bp: 10000 }] });
+const cust = 'Mr Tally ' + run;
+const u = (await o.call('POST', '/api/sales/inventory', { project_id: pid, wing: 'Y', floor: 1, unit_no: 'TL' + run.slice(-3), type: '2BHK', carpet_sqft: 600, rera_carpet_sqft: 500, price_paise: 100000000 })).data.id;
+const bk = (await o.call('POST', '/api/sales/bookings', { unit_id: u, customer_name: cust, phone: '9744000111', agreed_price_paise: 100000000, token_paise: 0 })).data.id;
+const dem = (await o.call('GET', `/api/sales/bookings/${bk}`)).data.demands[0].id;
+await o.call('POST', `/api/sales/bookings/${bk}/receipts`, { amount_paise: 12345678, mode: 'neft', ref_no: 'TY' + run, demand_id: dem, received_on: iso(0) });
+const a = await page('accounts'); await go(a, 'tally'); await a.waitForSelector('#ty-check');
+ok('the screen says plainly that the file is not yet checked with Tally', (await a.textContent('main')).includes('Not yet checked with your Tally'));
+await a.selectOption('#ty-kind', 'receipts'); await a.fill('#ty-from', iso(-2)); await a.fill('#ty-to', iso(1)); await a.click('#ty-check'); await a.waitForSelector('text=ready to export'); await a.waitForTimeout(600);
+let tx = (await a.textContent('#ty-result')).replace(/\s+/g, ' ');
+ok('before the ledger names are set, the vouchers are held back and the reason is shown', tx.includes('held back') && tx.includes('Bank ledger is not set'), tx.slice(0, 300));
+await shot(a, '140-tally-held');
+await a.fill('[data-map="bank"]', 'HDFC Bank A/c'); await a.click('#ty-save'); ok('Accounts saves the ledger names', /Ledger names saved/.test(await toastText(a)));
+await a.click('#ty-check'); await a.waitForSelector('#ty-dl'); await a.waitForTimeout(500);
+tx = (await a.textContent('#ty-result')).replace(/\s+/g, ' ');
+ok('the receipt is ready, with the total to the paisa', tx.includes('ready to export') && tx.includes('1,23,456.78'), tx.slice(0, 300));
+await shot(a, '141-tally-ready');
+const [dl] = await Promise.all([a.waitForEvent('download'), a.click('#ty-dl')]);
+const xml = readFileSync(await dl.path(), 'utf8');
+ok('an XML file is downloaded', dl.suggestedFilename().startsWith('tally-receipts-') && xml.startsWith('<?xml'));
+ok('it holds the voucher: type, date, party, bank debit and customer credit with exact amounts', xml.includes('VCHTYPE="Receipt"') && xml.includes(`<DATE>${iso(0).replace(/-/g, '')}</DATE>`) && xml.includes(`<PARTYLEDGERNAME>${cust}</PARTYLEDGERNAME>`) && xml.includes('<LEDGERNAME>HDFC Bank A/c</LEDGERNAME><ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE><AMOUNT>-123456.78</AMOUNT>') && xml.includes(`<LEDGERNAME>${cust}</LEDGERNAME><ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE><AMOUNT>123456.78</AMOUNT>`), xml.slice(0, 600));
+await a.waitForTimeout(800);
+ok('the export is listed in the log', (await a.textContent('#ty-log')).includes('Receipts from customers'));
+const s = await page('sales'); ok('Sales has no Tally menu', !(await s.evaluate(() => sidebarItems(currentUser.role).flatMap((g) => g[1]).some((i) => i.route === 'tally'))));
+await browser.close(); console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);
