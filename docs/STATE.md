@@ -114,3 +114,6 @@ Code complete; 19 API suites and 7 browser walkthroughs pass locally. Migrations
 
 ## WP-16 status
 Code complete; 20 API suites and 8 browser walkthroughs pass locally. Migration 0027 NOT applied to production. Measured: one process request = 20-50 D1 statements (about 10 fixed + 6 per letter, +4 per letter the first time its Demand No is issued), so 3 letters per request; 4 reached 50. Real SMTP/Brevo sending in bulk has not been run against the live provider (mock only).
+
+## WP-1 to WP-3 status
+Code complete; 21 API suites and 9 browser walkthroughs pass locally. Migration 0028 NOT applied to production. The member-document checklist is intentionally empty (waiting for Dhaval's list). Legal majority and transit-rent rules are settings/notes, not built in. Sweep adds 6 statements to the hourly run.
