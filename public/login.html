@@ -6,7 +6,9 @@
   <title>NirmaanCRM — Sign In</title>
   <link rel="stylesheet" href="app.css">
   <meta name="mobile-web-app-capable" content="yes">
-  <meta name="theme-color" content="#1d4ed8">
+  <meta name="theme-color" content="#f5f5f7">
+  <link rel="manifest" href="manifest.json">
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
 </head>
 <body>
   <div class="login-card">
@@ -34,12 +36,14 @@
 
     <button class="btn btn-primary" id="btn-login">Sign In</button>
 
+    <p style="text-align:center;margin-top:16px"><button type="button" class="btn small" data-install>Install the app on this device</button></p>
     <p class="help">
       First time? Your temporary password was shown to you once when you were added.<br>
       At first login you must choose your own password (10+ characters).
     </p>
   </div>
 
+  <script src="install.js"></script>
   <script src="ui.js"></script>
   <script src="login.js"></script>
 </body>

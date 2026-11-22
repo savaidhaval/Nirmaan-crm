@@ -89,8 +89,9 @@ ok('head detail lists the POs behind it', det.pos.length === 3 && det.pos.every(
 ok('labour head detail lists the work order', (await acc.call('GET', `/api/budget/heads/${lab}/detail`)).data.work_orders[0].wo_no === wo.wo_no);
 const csv = await acc.call('GET', `/api/budget/overview?project_id=${pid}&csv=1`, null, true);
 const txt = await csv.text(); ok('CSV has a header and the Steel row', csv.status === 200 && txt.includes('Committed') && txt.includes('Steel'));
-ok('head with tagged orders cannot be removed', (await pm.call('DELETE', `/api/budget/heads/${st}`)).status === 409);
-ok('empty head can be removed', (await pm.call('DELETE', `/api/budget/heads/${cem}`)).status === 200);
+ok('only the Owner can delete a head: the PM is refused', (await pm.call('DELETE', `/api/budget/heads/${cem}`)).status === 403);
+ok('head with tagged orders cannot be removed', (await o.call('DELETE', `/api/budget/heads/${st}`)).status === 409);
+ok('empty head can be removed by the Owner', (await o.call('DELETE', `/api/budget/heads/${cem}`)).status === 200);
 ok('budget can be changed and is audited', (await pm.call('PUT', `/api/budget/heads/${st}`, { budget_paise: 6000 * L })).status === 200 && (await pm.call('GET', `/api/budget/overview?project_id=${pid}`)).data.rows.find((x) => x.id === st).level === 'ok');
 ok('accounts cannot change a budget', (await acc.call('PUT', `/api/budget/heads/${st}`, { budget_paise: 1 })).status === 403);
 ok('another project is not visible when picking its overview as site-only user', (await site.call('GET', `/api/budget/overview?project_id=${pid2}`)).status === 403);

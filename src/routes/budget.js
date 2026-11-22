@@ -109,7 +109,7 @@ export function registerBudget(router, h) {
   // Remove a head only while nothing is tagged to it.
   router.delete('/api/budget/heads/:id', async (req, env) => withAuth(req, env, 'budget', 'E', async (req, env) => {
     try {
-      if (!WRITERS.includes(req.user.role)) return json({ ok: false, error: 'Only the Owner or the PM can remove a head.' }, 403);
+      if (req.user.role !== 'owner') return json({ ok: false, error: 'Only the Owner can delete a budget head.' }, 403);
       const head = await env.DB.prepare('SELECT * FROM bud_heads WHERE id = ? AND deleted_at IS NULL').bind(Number(req.params.id)).first();
       if (!head || !(await projectOk(env, req, head.project_id))) return json({ ok: false, error: 'Budget head not found.' }, 404);
       if ((await poItemsTaggedCount(env, head.id)) + (await wosTaggedCount(env, head.id)) > 0) return json({ ok: false, error: 'Purchase orders or work orders are tagged to this head. Set its budget to 0 instead.' }, 409);

@@ -128,7 +128,8 @@ ok('Accounts and the booking\'s own salesperson see PAN last 4 and masked Aadhaa
 ok('PM sees neither PAN nor Aadhaar', seenPm.pan_masked === '' && seenPm.aadhaar_masked === '' && seenPm.has_pan === true);
 ok('the full Aadhaar or PAN never appears in any response', !JSON.stringify([seenA, seenPm, seenS]).includes('123456789012') && !JSON.stringify([seenA, seenS]).includes('ABCDE1234F'));
 ok('another salesperson cannot touch this booking', (await sales2.call('GET', `/api/sales/bookings/${bk}/parties`)).status === 403);
-ok('co-applicant can be removed (kept in the audit log)', (await sales.call('DELETE', `/api/sales/parties/${cp1.data.id}`)).status === 200 && (await o.call('GET', `/api/sales/bookings/${bk}/parties`)).data.parties.length === 0);
+ok('only the Owner can delete a co-applicant: Sales is refused', (await sales.call('DELETE', `/api/sales/parties/${cp1.data.id}`)).status === 403);
+ok('co-applicant can be removed (kept in the audit log)', (await o.call('DELETE', `/api/sales/parties/${cp1.data.id}`)).status === 200 && (await o.call('GET', `/api/sales/bookings/${bk}/parties`)).data.parties.length === 0);
 
 // =========================== WP-13 ===========================
 await setSetting('tax.gst_bp', 500); await setSetting('tax.stamp_duty_bp', 600); await setSetting('sales.discount_pm_limit_paise', 10000000);

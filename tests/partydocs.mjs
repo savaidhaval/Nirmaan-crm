@@ -69,7 +69,8 @@ await pur.call('POST', '/api/partydocs', { party_type: 'vendor', party_id: vendo
 if (tick.status === 200) { await fetch(BASE + '/__scheduled?cron=30+*+*+*+*'); await new Promise((r) => setTimeout(r, 1200)); ok('no reminder for a document that was replaced', !JSON.stringify((await pm.call('GET', '/api/notifications')).data).includes('(#' + exp2 + ')')); }
 
 // ---------- removing, header ----------
-ok('document can be removed', (await pur.call('DELETE', `/api/partydocs/${gone}?party_type=vendor`)).status === 200 && !(await pur.call('GET', `/api/partydocs?party_type=vendor&party_id=${vendor}`)).data.docs.some((d) => d.id === gone));
+ok('only the Owner can delete a document: Purchase is refused', (await pur.call('DELETE', `/api/partydocs/${gone}?party_type=vendor`)).status === 403);
+ok('document can be removed', (await o.call('DELETE', `/api/partydocs/${gone}?party_type=vendor`)).status === 200 && !(await pur.call('GET', `/api/partydocs?party_type=vendor&party_id=${vendor}`)).data.docs.some((d) => d.id === gone));
 ok('viewer-only roles cannot remove (sales is refused)', (await sales.call('DELETE', `/api/partydocs/${noExp}?party_type=vendor`)).status === 403);
 ok('requests without the header are refused', (await fetch(BASE + '/api/partydocs', { method: 'POST', headers: { cookie: pur.cookie, 'Content-Type': 'application/json' }, body: JSON.stringify({ party_type: 'vendor' }) })).status === 403);
 console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);

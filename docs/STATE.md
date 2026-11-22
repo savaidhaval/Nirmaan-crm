@@ -134,3 +134,6 @@ Code complete; 23 API suites and 11 browser walkthroughs pass locally. Migration
 
 ## WP-17 status
 Code complete; 24 API suites and 12 browser walkthroughs pass locally. Migration 0031 NOT applied to production. WP-22 is live. FORMAT UNTESTED against a real Tally: Dhaval's accountant must import a one-day sample into a test company before real use. Each vouchers request is about 6 database statements (50 vouchers per page).
+
+## Design refresh status
+Code complete; 24 API suites and 13 browser walkthroughs pass locally. No migration. Delete is Owner-only everywhere. Install is a web app install (no app-store account, no paid service). The Tally package (PR 16) and this refresh are on the same branch.

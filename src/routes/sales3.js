@@ -298,6 +298,7 @@ export function registerSales3(router, h) {
 
   router.delete('/api/sales/parties/:id', async (req, env) => withAuth(req, env, 'sales', 'E', async (req, env) => {
     try {
+      if (req.user.role !== 'owner') return json({ ok: false, error: 'Only the Owner can delete a co-applicant.' }, 403);
       const p = await env.DB.prepare('SELECT * FROM sal_booking_parties WHERE id = ? AND deleted_at IS NULL').bind(Number(req.params.id)).first();
       if (!p) return json({ ok: false, error: 'Not found.' }, 404);
       const { booking, err } = await loadBooking(env, req, p.booking_id); if (err) return err;
