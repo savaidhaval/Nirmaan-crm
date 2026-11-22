@@ -29,7 +29,7 @@ function withBanner(render) {
   return async (main) => {
     render(main);
     const html = await quoteBanner();
-    if (html && main.isConnected) main.insertAdjacentHTML('afterbegin', html);
+    if (html && main.isConnected && !main.querySelector('.quote-banner')) main.insertAdjacentHTML('afterbegin', html);   // two quick navigations must not add it twice
   };
 }
 

@@ -140,3 +140,6 @@ Code complete; 24 API suites and 13 browser walkthroughs pass locally. No migrat
 
 ## WP-24 (part 1) and WP-25 status
 Code complete; 26 API suites and 14 browser walkthroughs pass locally. No new migration. WP-24 part 2 (portal email parsing) and a live buyer-statement page are intentionally NOT built: each needs Dhaval's decision. The enquiry form stays off until Turnstile keys are set. Tally export (WP-17) is live (PR 16 merged by Dhaval).
+
+## WP-20 status
+Code complete; 27 API suites and 15 browser walkthroughs pass locally. Migration 0032 NOT applied to production. Measured: /api/dashboard/extras = 14 database statements (plus session and settings reads), well under the 40 target; no snapshot is needed for the other lines. Turnstile keys are set in production, so the enquiry form is switched on. Remaining: WP-21 (offline and Hindi/Marathi), WP-23 (hardening).
