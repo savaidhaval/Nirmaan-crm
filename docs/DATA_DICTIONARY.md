@@ -354,3 +354,6 @@ id TEXT PK, source TEXT, seen_at TEXT
 - red_rehab_allotments (one per member; flat must be a sal_inventory row with category rehab; one active allotment per flat). red_transit_terms (rent, start/end, deposit, bank guarantee ref/amount/expiry), red_transit_schedule (one row per member per month, UNIQUE member+period), red_transit_payments (money in paise, reversed with a reason, never deleted), red_corpus_entries (charge, paid_on, reversal).
 - red_meetings (kind, date, agenda, attendees, resolution text and passed flag, minutes document, next action + due + done).
 - Society documents use documents.category 'society' and are visible only to Owner, PM, Accounts and the CA.
+
+## 0029 additions (WP-18 bank statement import)
+- bank_profiles (saved column choices per bank format). bank_import_batches (file name, who, counts). bank_import_rows (credit lines only: date, scrubbed narration, amount in paise, reference, row_key UNIQUE so a statement can be imported twice safely, status unmatched|suggested|confirmed|ignored, links to demand/booking/receipt or waiting receipt request; a receipt or request can be linked to at most one line). No bank account numbers are stored: digit runs of 9 or more are masked to the last 4.

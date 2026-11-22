@@ -117,3 +117,14 @@ Code complete; 20 API suites and 8 browser walkthroughs pass locally. Migration 
 
 ## WP-1 to WP-3 status
 Code complete; 21 API suites and 9 browser walkthroughs pass locally. Migration 0028 NOT applied to production. The member-document checklist is intentionally empty (waiting for Dhaval's list). Legal majority and transit-rent rules are settings/notes, not built in. Sweep adds 6 statements to the hourly run.
+
+## Plan reassessment (all remaining work fits inside WP-1 to WP-25; no WP-26 or later)
+Done in production: WP-1 to WP-16 and WP-19, plus AI assistant, professional/vendor contracts, profile/engagement/charts/feasibility. WP-18 built (PR pending).
+Remaining, in this order, with the extra items folded in:
+- WP-22 Drawing acknowledgement.
+- WP-17 Tally export (Phase 12 CSV/ZIP parity check folded in; needs Dhaval's sample file, otherwise built and marked UNTESTED).
+- WP-24 Lead capture form (Part 1 build; Part 2 email parsing stops for Dhaval's go-ahead).
+- WP-25 Buyer statement snapshot through the existing share link (live page only with approval).
+- WP-20 Dashboard extras and reports (guide Phase 12 baseline; adds redevelopment, bank, bulk letters, work-report and feasibility lines).
+- WP-21 Offline queues and Hindi/Marathi (new screens including profile, team, demand letters, redevelopment consent taps).
+- WP-23 Hardening and Phase 13 (also: D1 100-variable limit above 100 projects, measured CPU/queries for every new route, real email and real AI trial, restore drill including all new tables).

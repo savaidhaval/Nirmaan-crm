@@ -26,6 +26,9 @@ const MATRIX = {
   transit: {
     owner: 'VCEAX', pm: 'V', site: '–', sales: '–', accounts: 'VCE', purchase: '–', hr: '–', viewer: 'V',
   },
+  bank: {
+    owner: 'VCEAX', pm: '–', site: '–', sales: '–', accounts: 'VCE', purchase: '–', hr: '–', viewer: '–',
+  },
   feasibility: {
     owner: 'VCEAX', pm: 'VCE', site: '–', sales: '–', accounts: 'V', purchase: '–', hr: '–', viewer: 'V',
   },
