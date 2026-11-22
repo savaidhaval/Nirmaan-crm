@@ -44,3 +44,10 @@
 - Backup/restore include `site_dpr_labour`. Migration 0016; test `tests/dprlabour.mjs` (20 checks, in CI); browser walkthrough with airplane mode (11 checks).
 
 - WP-6 merged and deployed after GitHub checks passed.
+
+## WP-7 budget heads (2026-11-22)
+- New "Budget" screen per project: heads with budget, committed, billed, paid, balance and % used, in words and colour (Within budget / Close to the limit / Over budget). Tap a head to see the POs and work orders behind it. CSV download. Owner/PM set heads; Accounts, Purchase and Viewer can read; Site and Sales cannot.
+- PO and work order forms ask for a budget head (optional). Approving a PO or work order that pushes a head over budget still works but shows a warning, and tells the Owner and PM (once per head per week).
+- New setting: budget.gst_basis (without/with GST), default without.
+- Migration 0017; code in `src/routes/budget.js` plus service functions in procurement2.js and contractors.js; test `tests/budget.mjs` (30 checks, in CI); browser walkthrough (10 checks).
+- WP-7 released after GitHub checks passed.

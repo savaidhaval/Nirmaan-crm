@@ -57,6 +57,7 @@ function woItemsEditor(intro) {
 async function newWorkOrder() {
   const cons = (await api('/api/contractors/contractors')).data.contractors.filter((c) => c.active);
   if (!cons.length) { toast('Add a contractor first'); return; }
+  const heads = await budgetHeadOptions();
   const v = await openForm({ title: 'New work order', fields: [
     { name: 'project_id', label: 'Project', type: 'select', options: await projectOptions() },
     { name: 'contractor_id', label: 'Contractor', type: 'select', options: cons.map((c) => [c.id, c.name + (c.trade ? ' · ' + c.trade : '')]) },
@@ -64,11 +65,12 @@ async function newWorkOrder() {
     { name: 'basis', label: 'Paid on', type: 'select', options: [['lump_sum', 'Lump sum'], ['item_rate', 'Item rates'], ['measured', 'Measured quantities']] },
     { name: 'value_paise', label: 'Lump-sum value (₹) — leave blank if you list items next', type: 'money' },
     { name: 'retention', label: 'Retention held back (%)', type: 'number', value: 5, help: 'Usually 5%. Set per work order.' },
-    { name: 'advance_paise', label: 'Advance agreed (₹)', type: 'money' }] });
+    { name: 'advance_paise', label: 'Advance agreed (₹)', type: 'money' },
+    ...(heads.length ? [{ name: 'budget_head_id', label: 'Budget head', type: 'select', options: heads, help: 'Which cost this belongs to. Used to watch the budget.' }] : [])] });
   if (!v) return;
   let items = [];
   if (v.basis !== 'lump_sum' || !v.value_paise) { items = await woItemsEditor('List each item with quantity and rate. The value is added up for you.'); if (!items) return; }
-  const body = { project_id: Number(v.project_id), contractor_id: Number(v.contractor_id), scope: v.scope, basis: v.basis, value_paise: v.value_paise || 0, retention_bp: Math.round((Number(v.retention) || 0) * 100), advance_paise: v.advance_paise || 0, items };
+  const body = { project_id: Number(v.project_id), contractor_id: Number(v.contractor_id), scope: v.scope, basis: v.basis, value_paise: v.value_paise || 0, retention_bp: Math.round((Number(v.retention) || 0) * 100), advance_paise: v.advance_paise || 0, budget_head_id: v.budget_head_id ? Number(v.budget_head_id) : null, items };
   const r = await act(api('/api/contractors/work-orders', { method: 'POST', body }), 'Work order drafted');
   if (r) { loadContractors(); woDetail(r.data.id); }
 }
@@ -93,7 +95,7 @@ async function woDetail(id) {
   document.body.appendChild(ov);
   const again = () => { ov.remove(); loadContractors(); woDetail(id); };
   $('wo-x').onclick = () => { ov.remove(); loadContractors(); };
-  const post = async (path, body, msg) => { if (await act(api(path, { method: 'POST', body: body || {} }), msg)) again(); };
+  const post = async (path, body, msg) => { const r = await act(api(path, { method: 'POST', body: body || {} }), msg); if (r) { if (r.data && r.data.warnings && r.data.warnings.length) toast('Budget warning: ' + r.data.warnings.join(' '), 9000); again(); } };
   const on = (i, fn) => { if ($(i)) $(i).onclick = fn; };
   on('wo-print', () => window.open(`/print.html?k=wo&id=${id}`, '_blank', 'noopener'));
   on('wo-submit', () => post(`/api/contractors/work-orders/${id}/submit`, {}, 'Sent for approval'));

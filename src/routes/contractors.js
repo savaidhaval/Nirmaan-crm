@@ -34,8 +34,32 @@ export async function contractorNames(env, ids) {
   return Object.fromEntries(rows.map((r) => [r.id, r]));
 }
 
+// Per budget head for one project: committed (approved work orders), billed (approved RA bills) and paid on RA bills. Key 0 = not tagged.
+export async function contractsByHead(env, projectId, inclGst) {
+  const out = {};
+  const add = (h, k, v) => { const key = h || 0; (out[key] = out[key] || { committed: 0, billed: 0, paid: 0 })[k] += Math.round(Number(v) || 0); };
+  const [wo, ra, paid] = await Promise.all([
+    env.DB.prepare("SELECT budget_head_id AS h, SUM(value_paise) AS v FROM con_work_orders WHERE project_id = ? AND status IN ('approved', 'closed') GROUP BY budget_head_id").bind(projectId).all(),
+    env.DB.prepare(`SELECT w.budget_head_id AS h, SUM(r.gross_paise + CASE WHEN ?2 = 1 THEN r.gst_paise ELSE 0 END) AS v FROM con_ra_bills r JOIN con_work_orders w ON w.id = r.wo_id
+      WHERE w.project_id = ?1 AND r.status IN ('approved', 'part_paid', 'paid') GROUP BY w.budget_head_id`).bind(projectId, inclGst ? 1 : 0).all(),
+    env.DB.prepare(`SELECT w.budget_head_id AS h, SUM(x.amount_paise) AS v FROM con_payments x JOIN con_work_orders w ON w.id = x.wo_id
+      WHERE w.project_id = ? AND x.kind = 'ra' AND x.reversed_at IS NULL GROUP BY w.budget_head_id`).bind(projectId).all(),
+  ]);
+  for (const r of wo.results) add(r.h, 'committed', r.v);
+  for (const r of ra.results) add(r.h, 'billed', r.v);
+  for (const r of paid.results) add(r.h, 'paid', r.v);
+  return out;
+}
+export async function wosForHead(env, headId) {
+  return (await env.DB.prepare(`SELECT w.id, w.wo_no, w.status, c.name AS contractor, w.value_paise FROM con_work_orders w JOIN con_contractors c ON c.id = w.contractor_id
+    WHERE w.budget_head_id = ? ORDER BY w.id DESC LIMIT 100`).bind(headId).all()).results;
+}
+export async function wosTaggedCount(env, headId) {
+  return (await env.DB.prepare('SELECT COUNT(*) AS n FROM con_work_orders WHERE budget_head_id = ?').bind(headId).first()).n;
+}
+
 export function registerContractors(router, h) {
-  const { withAuth, json, serverError, visibleProjectIds, nowStr, getSetting, encryptSetting, decryptSetting, printBrand, csvBom } = h;
+  const { withAuth, json, serverError, visibleProjectIds, nowStr, getSetting, encryptSetting, decryptSetting, printBrand, csvBom, headBelongsToProject, onWoApproved } = h;
 
   const guard = (action, fn) => (req, env) => withAuth(req, env, 'contractors', action, async (req, env) => {
     if (!(await conEnabled(env, getSetting))) return json({ ok: false, error: 'The Contractors module is switched off. The Owner can switch it on in Settings.' }, 403);
@@ -148,11 +172,13 @@ export function registerContractors(router, h) {
       if (ret < 0 || ret > 3000) return json({ ok: false, error: 'Retention looks wrong (0 to 30%).' }, 400);
       const adv = Math.round(num(b.advance_paise));
       if (adv < 0 || adv > value) return json({ ok: false, error: 'Advance cannot be more than the work order value.' }, 400);
+      const headId = b.budget_head_id ? Number(b.budget_head_id) : null;
+      if (headId && !(await headBelongsToProject(env, headId, pid))) return json({ ok: false, error: 'That budget head belongs to a different project.' }, 400);
       const c = await env.DB.prepare('INSERT INTO counters (key, value) VALUES (?, 1) ON CONFLICT(key) DO UPDATE SET value = value + 1 RETURNING value').bind(`wo:${pid}`).first();
       const proj = await env.DB.prepare('SELECT code FROM projects WHERE id = ?').bind(pid).first();
       const no = `WO-${proj ? proj.code : pid}-${String(c.value).padStart(4, '0')}`;
-      const r = await env.DB.prepare("INSERT INTO con_work_orders (project_id, contractor_id, wo_no, scope, basis, value_paise, retention_bp, advance_paise, status, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?)")
-        .bind(pid, cid, no, String(b.scope || '').slice(0, 1000), basis, value, ret, adv, req.user.user_id, nowStr()).run();
+      const r = await env.DB.prepare("INSERT INTO con_work_orders (project_id, contractor_id, wo_no, scope, basis, value_paise, retention_bp, advance_paise, status, created_by, created_at, budget_head_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?)")
+        .bind(pid, cid, no, String(b.scope || '').slice(0, 1000), basis, value, ret, adv, req.user.user_id, nowStr(), headId).run();
       const id = r.meta.last_row_id;
       await env.DB.batch([
         ...items.map((i) => env.DB.prepare('INSERT INTO con_wo_items (wo_id, description, qty, unit, rate_paise, amount_paise) VALUES (?, ?, ?, ?, ?, ?)').bind(id, i.description, i.qty, i.unit, i.rate, Math.round(i.qty * i.rate))),
@@ -212,7 +238,8 @@ export function registerContractors(router, h) {
       await audit(env, req.user, decision === 'approved' ? 'approve' : 'reject', 'con_work_orders', wo.id, `${req.user.name} ${decision} ${wo.wo_no} (${rupees(wo.value_paise)})`).run();
       if (decision === 'approved') emit('wo.approved', { wo_id: wo.id, project_id: wo.project_id, contractor_id: wo.contractor_id, value_paise: wo.value_paise });
       if (wo.created_by) await env.DB.prepare('INSERT INTO notifications (user_id, title, body, link, created_at) VALUES (?, ?, ?, ?, ?)').bind(wo.created_by, `Work order ${decision}: ${wo.wo_no}`, String(b.note || ''), 'contractors', nowStr()).run();
-      return json({ ok: true });
+      const warnings = decision === 'approved' && wo.budget_head_id ? await onWoApproved(env, wo) : [];
+      return json({ ok: true, data: { warnings } });
     } catch (e) { return serverError(e, 'wo-decide'); }
   });
   router.post('/api/contractors/work-orders/:id/approve', decideWo('approved'));
