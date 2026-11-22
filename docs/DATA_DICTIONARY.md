@@ -1,4 +1,4 @@
-# NirmaanCRM data dictionary (real schema from migrations 0001-0016, updated 2026-11-22)
+# NirmaanCRM data dictionary (real schema from migrations 0001-0017, updated 2026-11-22)
 
 Source: replaying migrations/*.sql into an empty SQLite DB. Live D1 not verified (see docs/STATE.md). Money = paise INTEGER, percentages = basis points (_bp). NN = NOT NULL, PK = primary key.
 
@@ -19,6 +19,8 @@ id INTEGER PK, kind TEXT, status TEXT, cursor_json TEXT, files_written INTEGER, 
 id INTEGER PK, project_id INTEGER, legal_name TEXT, trade_name TEXT, tagline TEXT, address TEXT, phone TEXT, email TEXT, website TEXT, gstin TEXT, cin_or_llpin TEXT, promoter_rera_ref TEXT, pan_enc TEXT, bank_account_name TEXT, bank_name TEXT, bank_branch TEXT, bank_ifsc TEXT, bank_account_enc TEXT, signatory_name TEXT, signatory_title TEXT, footer_text TEXT, wa_intro_text TEXT, colour_primary TEXT, colour_secondary TEXT, colour_accent TEXT, letterhead_mode TEXT, margin_top_mm INTEGER, margin_bottom_mm INTEGER, margin_side_mm INTEGER, updated_by INTEGER, updated_at TEXT, created_at TEXT, brand_id INTEGER
 ### brands
 id INTEGER PK, name TEXT NN, is_default INTEGER NN, created_at TEXT, deleted_at TEXT
+### bud_heads
+id INTEGER PK, project_id INTEGER NN, code TEXT NN, name TEXT NN, budget_paise INTEGER NN, sort_order INTEGER NN, created_by INTEGER, created_at TEXT, deleted_at TEXT
 ### con_contractors
 id INTEGER PK, vendor_id INTEGER, name TEXT NN, phone TEXT, trade TEXT, pan_enc TEXT, gstin TEXT, agreement_document_id INTEGER, active INTEGER NN, created_at TEXT, deleted_at TEXT
 ### con_ledger
@@ -32,7 +34,7 @@ id INTEGER PK, ra_id INTEGER NN, wo_item_id INTEGER NN, qty_this_bill REAL NN, r
 ### con_wo_items
 id INTEGER PK, wo_id INTEGER NN, description TEXT NN, qty REAL NN, unit TEXT, rate_paise INTEGER NN, amount_paise INTEGER NN
 ### con_work_orders
-id INTEGER PK, project_id INTEGER NN, contractor_id INTEGER NN, wo_no TEXT NN, scope TEXT, basis TEXT NN, value_paise INTEGER NN, retention_bp INTEGER NN, advance_paise INTEGER NN, status TEXT NN, created_by INTEGER, approved_by INTEGER, approved_at TEXT, decision_note TEXT, created_at TEXT
+id INTEGER PK, project_id INTEGER NN, contractor_id INTEGER NN, wo_no TEXT NN, scope TEXT, basis TEXT NN, value_paise INTEGER NN, retention_bp INTEGER NN, advance_paise INTEGER NN, status TEXT NN, created_by INTEGER, approved_by INTEGER, approved_at TEXT, decision_note TEXT, created_at TEXT, budget_head_id INTEGER
 ### counters
 key TEXT PK, value INTEGER NN
 ### documents
@@ -76,7 +78,7 @@ id INTEGER PK, project_id INTEGER NN, indent_no TEXT NN, needed_by TEXT, note TE
 ### pro_payments
 id INTEGER PK, bill_id INTEGER NN, amount_paise INTEGER NN, tds_paise INTEGER NN, paid_on TEXT NN, mode TEXT, ref_no TEXT, note TEXT, reversed_at TEXT, reversal_note TEXT, created_by INTEGER, created_at TEXT
 ### pro_po_items
-id INTEGER PK, po_id INTEGER NN, description TEXT NN, qty REAL, unit TEXT, rate_paise INTEGER, amount_paise INTEGER
+id INTEGER PK, po_id INTEGER NN, description TEXT NN, qty REAL, unit TEXT, rate_paise INTEGER, amount_paise INTEGER, budget_head_id INTEGER
 ### pro_pos
 id INTEGER PK, project_id INTEGER NN, vendor_id INTEGER NN, rfq_id INTEGER, po_no TEXT, po_seq INTEGER NN, amount_paise INTEGER NN, gst_bp INTEGER, gst_paise INTEGER NN, total_paise INTEGER NN, terms TEXT, status TEXT, approved_by INTEGER, approved_at TEXT, created_by INTEGER, created_at TEXT, deleted_at TEXT
 ### pro_quote_items
@@ -150,6 +152,8 @@ id TEXT PK, source TEXT, seen_at TEXT
 - backup_log:idx_backup_started
 - brand_profiles:uq_brand_scope
 - brands:uq_brand_name
+- bud_heads:uq_bud_head_code
+- bud_heads:idx_bud_project
 - con_contractors:idx_con_active
 - con_ledger:idx_conledger_contractor
 - con_ledger:idx_conledger_wo
@@ -164,6 +168,7 @@ id TEXT PK, source TEXT, seen_at TEXT
 - con_work_orders:uq_wo_no
 - con_work_orders:idx_wo_project
 - con_work_orders:idx_wo_contractor
+- con_work_orders:idx_wo_head
 - documents:idx_documents_link
 - documents:idx_documents_project
 - documents:uq_doc_latest
@@ -192,6 +197,7 @@ id TEXT PK, source TEXT, seen_at TEXT
 - pro_indents:idx_indent_project_status
 - pro_payments:idx_pay_bill
 - pro_po_items:idx_poitem_po
+- pro_po_items:idx_poitem_head
 - pro_pos:idx_po_project
 - pro_pos:uq_po_seq
 - pro_quote_items:idx_quote_items
@@ -250,3 +256,8 @@ id TEXT PK, source TEXT, seen_at TEXT
 
 ## 0016 additions (WP-6)
 - site_dpr_labour (dpr_id, contractor_id, trade, headcount): labour per contractor and trade on each daily report. contractor_id has no foreign key: the Site module asks the Contractors module (`activeContractorsForProject`, `contractorNames`) and never reads contractor tables. site_dprs.labour_count = sum of the lines for new reports; old reports keep their single number.
+
+## 0017 additions (WP-7 Budget)
+- bud_heads (project_id, code unique per project, name, budget_paise, sort_order, soft delete). pro_po_items.budget_head_id and con_work_orders.budget_head_id tag spend to a head (optional).
+- Committed = approved/part-received/received POs + approved/closed work orders. Billed = bills (ex-GST by default) shared across heads by item value + approved RA bills. Paid = payments on those bills. Setting budget.gst_basis exclusive|inclusive (confirm with CA).
+- Budget reads other modules only through procurementByHead / contractsByHead / posForHead / wosForHead (one aggregate query each).

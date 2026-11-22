@@ -93,3 +93,6 @@ Decisions taken by default: D4 both bases, retention per work order, contractor-
 
 ## WP-6 status
 Code complete, all 10 suites + browser walkthroughs pass locally. Migration 0016 applied to the STAGING database only; NOT applied to production. Note: public/pages2.js overrides newDpr/loadSite from pages.js, so edit the DPR form there.
+
+## WP-7 status
+Code complete; all 11 suites and 3 browser walkthroughs pass locally. Migration 0017 applied to STAGING database only, not production. Known limit found: lists that filter by project use one SQL variable per project, so more than 100 visible projects would fail (task suggested separately).

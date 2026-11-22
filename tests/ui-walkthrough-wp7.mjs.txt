@@ -1,0 +1,75 @@
+import { createRequire } from 'node:module';
+const { chromium } = createRequire(import.meta.url)('/opt/node-tools/node_modules/playwright');
+const BASE = process.env.BASE || 'http://localhost:8787', SHOTS = '/tmp/claude-0/scratch/shots';
+const run = Date.now().toString(36);
+let pass = 0, fail = 0; const ok = (n, c, x = '') => { c ? pass++ : fail++; console.log(`${c ? 'PASS' : 'FAIL'}  ${n}${c ? '' : '  ' + x}`); };
+class C { constructor() { this.cookie = ''; } async call(m, p, b) { const h = { 'X-NirmaanCRM': '1' }; if (this.cookie) h.cookie = this.cookie; let body; if (b) { h['Content-Type'] = 'application/json'; body = JSON.stringify(b); }
+  const r = await fetch(BASE + p, { method: m, headers: h, body }); const sc = r.headers.get('set-cookie'); if (sc) this.cookie = sc.split(';')[0]; let d = null; try { d = await r.json(); } catch (e) {} return { status: r.status, data: d && d.data, err: d && d.error }; } }
+const o = new C(); await o.call('POST', '/api/auth/login', { email: 'owner@test.local', password: 'CiStrongPass-12345' });
+const pid = (await o.call('POST', '/api/projects', { name: 'UI Tower ' + run, code: 'UI' + run.toUpperCase().slice(-5), budget_paise: 5e9 })).data.id;
+await o.call('POST', '/api/settings/con.enabled', { value: 'on' });
+await o.call('POST', '/api/settings/con.pm_approval_limit_paise', { value: 50000000 });
+const users = {};
+for (const role of ['site', 'pm', 'purchase', 'accounts']) {
+  const email = `ui-${role}-${run}@test.local`; const r = await o.call('POST', '/api/users', { name: 'UI ' + role, email, role, projects: role === 'site' ? [pid] : [] });
+  const c = new C(); await c.call('POST', '/api/auth/login', { email, password: r.data.temporaryPassword }); const pw = 'UiStrongPass-' + run;
+  await c.call('POST', '/api/auth/change-password', { currentPassword: r.data.temporaryPassword, newPassword: pw }); users[role] = { email, pw };
+}
+const browser = await chromium.launch();
+const ctxs = {};
+async function page(role) {
+  if (!ctxs[role]) {
+    const ctx = await browser.newContext({ viewport: { width: 390, height: 800 } });
+    const email = role === 'owner' ? 'owner@test.local' : users[role].email, password = role === 'owner' ? 'CiStrongPass-12345' : users[role].pw;
+    const r = await ctx.request.post(BASE + '/api/auth/login', { headers: { 'X-NirmaanCRM': '1', 'Content-Type': 'application/json' }, data: { email, password } });
+    if (!r.ok()) throw new Error('login ' + role + ' ' + r.status());
+    ctxs[role] = ctx;
+  }
+  const p = await ctxs[role].newPage(); p.on('dialog', (d) => d.accept()); p.on('pageerror', (e) => console.log('PAGEERROR', role, e.message));
+  await p.goto(BASE + '/'); await p.waitForFunction(() => typeof navigate === 'function' && typeof currentUser !== 'undefined' && currentUser, null, { timeout: 15000 }); return p;
+}
+const go = async (p, route) => { await p.evaluate((r) => navigate(r), route); await p.waitForTimeout(800); };
+const toastText = async (p) => { await p.waitForTimeout(500); return p.evaluate(() => (document.getElementById('toast') || {}).textContent || ''); };
+const submit = (p) => p.click('#modal-form button[type=submit]');
+const pick = (p, sel, label) => p.selectOption(sel, { label });
+const shot = (p, n) => p.screenshot({ path: `${SHOTS}/${n}.png` });
+const proj = 'UI Tower ' + run;
+const vend = (await o.call('POST', '/api/procurement/vendors', { name: 'UI Steel Co ' + run })).data.id;
+
+// ===== PM sets the Steel budget head =====
+const pm = await page('pm'); await go(pm, 'budget');
+await pick(pm, '#bud-project', proj); await pm.waitForTimeout(600);
+await pm.click('#bud-add'); await pm.fill('#f_code', 'ST'); await pm.fill('#f_name', 'Steel'); await pm.fill('#f_budget_paise', '5000000'); await shot(pm, '30-budget-new-head'); await submit(pm);
+ok('PM adds the Steel head with a Rs 50,00,000 budget', /Budget head added/.test(await toastText(pm)));
+await pm.waitForTimeout(800);
+ok('head shows within budget with words', (await pm.textContent('#bud-body')).includes('Within budget') && (await pm.textContent('#bud-body')).includes('50,00,000'));
+await shot(pm, '31-budget-empty-head');
+
+// ===== Purchase makes a Rs 52,00,000 PO tagged to Steel =====
+const pu = await page('purchase'); await go(pu, 'procurement'); await pu.click('#p-po'); await pu.waitForSelector('#f_budget_head_id');
+await pick(pu, '#f_project_id', proj); await pick(pu, '#f_vendor_id', 'UI Steel Co ' + run);
+await pu.fill('#f_description', 'TMT bars'); await pu.fill('#f_qty', '1'); await pu.fill('#f_unit', 't'); await pu.fill('#f_rate', '5200000');
+const opts = await pu.$$eval('#f_budget_head_id option', (os) => os.map((x) => x.textContent)); ok('PO form offers the budget heads', opts.some((x) => x.includes('ST Steel')), JSON.stringify(opts));
+await pu.selectOption('#f_budget_head_id', { label: opts.find((x) => x.includes(proj) && x.includes('ST Steel')) }); await shot(pu, '32-po-with-head'); await submit(pu);
+ok('PO drafted with the head', /PO created as draft/.test(await toastText(pu)));
+await pu.waitForTimeout(800); await pu.click('[data-po="submit"]'); ok('sent for approval', /Done/.test(await toastText(pu)));
+
+// ===== Owner approves: soft warning, not a block =====
+const ow = await page('owner'); await go(ow, 'procurement'); await ow.waitForSelector('[data-po="approve"]'); await ow.click('[data-po="approve"]');
+const wt = await toastText(ow); ok('approval goes through and warns the budget is exceeded', /Budget warning/.test(wt) && /over budget/i.test(wt), wt);
+await shot(ow, '33-owner-approve-warning');
+
+// ===== The budget screen turns red, in words =====
+await pm.reload(); await pm.waitForFunction(() => typeof navigate === 'function' && currentUser, null, { timeout: 15000 });
+await go(pm, 'budget'); await pick(pm, '#bud-project', proj); await pm.waitForTimeout(900);
+const txt = (await pm.textContent('#bud-body')).replace(/\s+/g, ' ');
+ok('head says Over budget in words', txt.includes('Over budget'), txt.slice(0, 300));
+ok('shows committed 52,00,000 and over by 2,00,000', txt.includes('52,00,000') && txt.includes('Over by') && txt.includes('2,00,000'), txt.slice(0, 400));
+await shot(pm, '34-budget-over');
+await pm.click('[data-head]'); await pm.waitForSelector('#bh-x');
+ok('tapping the head shows the PO behind it', (await pm.textContent('.modal')).includes('PO-'));
+await shot(pm, '35-head-detail');
+// ===== other roles =====
+const ac = await page('accounts'); await go(ac, 'budget'); await pick(ac, '#bud-project', proj); await ac.waitForTimeout(800);
+ok('Accounts can read the budget but not change it', (await ac.textContent('#bud-body')).includes('Steel') && (await ac.$('#bud-add')) === null);
+await browser.close(); console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);

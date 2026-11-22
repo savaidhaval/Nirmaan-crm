@@ -15,6 +15,7 @@ import { registerReports } from './routes/reports.js';
 import { registerFinance } from './routes/finance.js';
 import { registerProcurement2 } from './routes/procurement2.js';
 import { csvBom } from './core/util.js';
+import { registerBudget, checkHeadOver, headBelongsToProject, headsOnPo } from './routes/budget.js';
 import { registerContractors, raDueSweep, activeContractorsForProject, contractorNames } from './routes/contractors.js';
 import { registerMfa, mfaChallenge } from './routes/mfa.js';
 import { registerImporter } from './routes/importer.js';
@@ -531,7 +532,7 @@ const EDITABLE_SETTINGS = ['po.pm_approval_limit_paise', 'access.allow_second_ow
   'demand.due_days_after_milestone', 'share.default_expiry_days', 'share.default_max_views', 'files.brochure_max_mb', 'branding.apply_colours_to_app',
   'brochure.price_list_default_audience', 'storage.warn_percent', 'sales.max_holds_per_user', 'sales.max_discount_bp', 'sales.pm_max_discount_bp',
   'interest.rate_bp', 'interest.grace_days', 'interest.enabled', 'security.require_mfa_roles', 'tax.stamp_duty_bp', 'tax.metro_cess_bp', 'tax.women_concession_bp', 'tax.registration_bp', 'tax.registration_cap_paise', 'tax.gst_bp',
-  'con.enabled', 'con.pm_approval_limit_paise', 'con.gst_bp', 'con.tds_bp'];
+  'con.enabled', 'con.pm_approval_limit_paise', 'con.gst_bp', 'con.tds_bp', 'budget.gst_basis'];
 
 router.post('/api/settings/:key', async (req, env) => {
   return withAuth(req, env, 'users_settings', 'E', async (req, env) => {
@@ -1045,6 +1046,8 @@ router.post('/api/procurement/pos', async (req, env) => {
       if (!ids.includes(Number(project_id))) {
         return json({ ok: false, error: 'Not allowed.' }, 403);
       }
+      const headId = body.budget_head_id ? Number(body.budget_head_id) : null;
+      if (headId && !(await headBelongsToProject(env, headId, Number(project_id)))) return json({ ok: false, error: 'That budget head belongs to a different project.' }, 400);
       const gstBp = gst_bp !== undefined ? Number(gst_bp) : 1800;
       const gst_paise = Math.round(amount_paise * gstBp / 10000);
       const total_paise = amount_paise + gst_paise;
@@ -1059,7 +1062,7 @@ router.post('/api/procurement/pos', async (req, env) => {
       const result = await env.DB.prepare(`INSERT INTO pro_pos (project_id, vendor_id, rfq_id, po_no, po_seq, amount_paise, gst_bp, gst_paise, total_paise, terms, status, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(project_id, vendor_id, rfq_id || null, poNo, nextSeq, amount_paise, gstBp, gst_paise, total_paise, terms || '', status, user.user_id, now).run();
       for (const it of items) {
         const qty = Number(it.qty) || 0; const rate = Math.round(Number(it.rate_paise) || 0);
-        await env.DB.prepare('INSERT INTO pro_po_items (po_id, description, qty, unit, rate_paise, amount_paise) VALUES (?, ?, ?, ?, ?, ?)').bind(result.meta.last_row_id, String(it.description), qty, it.unit || '', rate, Math.round(qty * rate)).run();
+        await env.DB.prepare('INSERT INTO pro_po_items (po_id, description, qty, unit, rate_paise, amount_paise, budget_head_id) VALUES (?, ?, ?, ?, ?, ?, ?)').bind(result.meta.last_row_id, String(it.description), qty, it.unit || '', rate, Math.round(qty * rate), headId).run();
       }
       await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, ?, 'pro_pos', ?, ?, ?)`).bind(user.user_id, 'create', result.meta.last_row_id, `Created PO ${poNo}`, now).run();
       return json({ ok: true, data: { id: result.meta.last_row_id, po_no: poNo } });
@@ -1242,7 +1245,8 @@ async function decidePo(req, env, decision) {
   const status = decision === 'approve' ? 'approved' : 'rejected';
   await env.DB.prepare('UPDATE pro_pos SET status = ?, approved_by = ?, approved_at = ? WHERE id = ?').bind(status, req.user.user_id, now, po.id).run();
   await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, ?, 'pro_pos', ?, ?, ?)`).bind(req.user.user_id, decision, po.id, `${req.user.name} ${status} ${po.po_no} (₹${(po.total_paise / 100).toLocaleString('en-IN')})`, now).run();
-  return json({ ok: true, data: { status } });
+  const warnings = decision === 'approve' ? await checkHeadOver(env, getSetting, nowStr, po.project_id, await headsOnPo(env, po.id)) : [];
+  return json({ ok: true, data: { status, warnings } });
 }
 router.post('/api/procurement/pos/:id/approve', (req, env) => withAuth(req, env, 'procurement', 'A', (req, env) => decidePo(req, env, 'approve')));
 router.post('/api/procurement/pos/:id/reject', (req, env) => withAuth(req, env, 'procurement', 'A', (req, env) => decidePo(req, env, 'reject')));
@@ -1472,7 +1476,7 @@ const EXPORT_TABLES = ['projects', 'apr_items', 'apr_events', 'drw_drawings', 'd
     'sal_leads', 'sal_activities', 'sal_visits', 'sal_inventory', 'sal_partners', 'sal_bookings', 'sal_plan_stages', 'sal_demands', 'sal_receipts', 'documents', 'audit_log',
     'pro_grn_items', 'pro_payments', 'ppl_staff', 'ppl_hiring', 'ppl_candidates', 'sal_brokerage_payments', 'sal_refunds', 'sal_interest_waivers', 'mkt_spend', 'brands', 'counters',
     'pro_indents', 'pro_indent_items', 'pro_rfq_items', 'pro_quote_items',
-    'site_dpr_labour', 'con_contractors', 'con_work_orders', 'con_wo_items', 'con_ra_bills', 'con_ra_lines', 'con_payments', 'con_ledger'];
+    'site_dpr_labour', 'bud_heads', 'con_contractors', 'con_work_orders', 'con_wo_items', 'con_ra_bills', 'con_ra_lines', 'con_payments', 'con_ledger'];
 const EXPORT_PARTS = 3;
 
 async function buildExport(env, part = 1) {
@@ -2058,7 +2062,9 @@ registerImporter(router, { withAuth, json, serverError, visibleProjectIds, nowSt
 registerPrivacy(router, { withAuth, json, serverError, nowStr, decryptSetting });
 registerReports(router, { withAuth, json, serverError, visibleProjectIds, getSetting, nowStr });
 registerProcurement2(router, { withAuth, json, serverError, visibleProjectIds, nowStr, csvBom, getCurrentUser, userCan });
-registerContractors(router, { withAuth, json, serverError, visibleProjectIds, nowStr, getSetting, encryptSetting, decryptSetting, printBrand, csvBom });
+registerContractors(router, { withAuth, json, serverError, visibleProjectIds, nowStr, getSetting, encryptSetting, decryptSetting, printBrand, csvBom, headBelongsToProject,
+  onWoApproved: (env, wo) => checkHeadOver(env, getSetting, nowStr, wo.project_id, [wo.budget_head_id]) });
+registerBudget(router, { withAuth, json, serverError, visibleProjectIds, nowStr, getSetting, csvBom });
 registerSalesOps(router, { withAuth, json, serverError, visibleProjectIds, userCan, getSetting, nowStr, encryptSetting, clientIp, checkRateLimit });
 
 // ---------- Branding routes ----------

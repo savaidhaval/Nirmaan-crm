@@ -5,6 +5,49 @@ const rupees = (p) => '₹' + (Number(p) / 100).toLocaleString('en-IN');
 const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
 const MONEY_ROLES = ['owner', 'pm', 'accounts', 'purchase'];
 
+// ----- Service functions other modules call (Budget asks here; it never reads pro_* tables itself) -----
+const PO_LIVE = "('approved', 'part_received', 'received')";
+
+// Per budget head for one project: committed (approved POs), billed (bills, shared by item value) and paid. Key 0 = not tagged to any head.
+// inclGst: false = figures without GST (default), true = with GST. Money in paise.
+export async function procurementByHead(env, projectId, inclGst) {
+  const g = inclGst ? 1 : 0;
+  const out = { 0: { committed: 0, billed: 0, paid: 0 } };
+  const add = (h, k, v) => { const key = h || 0; (out[key] = out[key] || { committed: 0, billed: 0, paid: 0 })[k] += Math.round(Number(v) || 0); };
+  const [committed, noItems, billed] = await Promise.all([
+    env.DB.prepare(`SELECT i.budget_head_id AS h, SUM(i.amount_paise + CASE WHEN ?2 = 1 THEN i.amount_paise * p.gst_bp / 10000 ELSE 0 END) AS v
+      FROM pro_po_items i JOIN pro_pos p ON p.id = i.po_id WHERE p.project_id = ?1 AND p.deleted_at IS NULL AND p.status IN ${PO_LIVE} GROUP BY i.budget_head_id`).bind(projectId, g).all(),
+    env.DB.prepare(`SELECT SUM(CASE WHEN ?2 = 1 THEN p.total_paise ELSE p.amount_paise END) AS v FROM pro_pos p WHERE p.project_id = ?1 AND p.deleted_at IS NULL AND p.status IN ${PO_LIVE}
+      AND NOT EXISTS (SELECT 1 FROM pro_po_items i WHERE i.po_id = p.id)`).bind(projectId, g).first(),
+    env.DB.prepare(`WITH bp AS (SELECT b.po_id,
+        CASE WHEN ?2 = 1 THEN b.amount_paise ELSE COALESCE(b.taxable_paise, b.amount_paise - b.gst_paise) END AS base,
+        CASE WHEN b.status = 'paid' AND NOT EXISTS (SELECT 1 FROM pro_payments x WHERE x.bill_id = b.id AND x.reversed_at IS NULL) THEN b.amount_paise - b.tds_paise
+             ELSE COALESCE((SELECT SUM(x.amount_paise) FROM pro_payments x WHERE x.bill_id = b.id AND x.reversed_at IS NULL), 0) END AS paid
+      FROM pro_bills b WHERE b.project_id = ?1 AND b.status != 'cancelled')
+      SELECT i.budget_head_id AS h, SUM(bp.base * 1.0 * i.amount_paise / p.amount_paise) AS billed, SUM(bp.paid * 1.0 * i.amount_paise / p.amount_paise) AS paid
+        FROM bp JOIN pro_pos p ON p.id = bp.po_id JOIN pro_po_items i ON i.po_id = p.id WHERE p.amount_paise > 0 GROUP BY i.budget_head_id
+      UNION ALL
+      SELECT NULL, SUM(base), SUM(paid) FROM bp WHERE po_id IS NULL OR NOT EXISTS (SELECT 1 FROM pro_po_items i WHERE i.po_id = bp.po_id)`).bind(projectId, g).all(),
+  ]);
+  for (const r of committed.results) add(r.h, 'committed', r.v);
+  add(0, 'committed', noItems && noItems.v);
+  for (const r of billed.results) { add(r.h, 'billed', r.billed); add(r.h, 'paid', r.paid); }
+  return out;
+}
+
+// The POs behind one head (for the head detail screen).
+export async function posForHead(env, headId) {
+  return (await env.DB.prepare(`SELECT p.id, p.po_no, p.status, v.name AS vendor, SUM(i.amount_paise) AS amount_paise
+    FROM pro_po_items i JOIN pro_pos p ON p.id = i.po_id JOIN pro_vendors v ON v.id = p.vendor_id WHERE i.budget_head_id = ? AND p.deleted_at IS NULL GROUP BY p.id ORDER BY p.id DESC LIMIT 100`).bind(headId).all()).results;
+}
+export async function poItemsTaggedCount(env, headId) {
+  return (await env.DB.prepare('SELECT COUNT(*) AS n FROM pro_po_items WHERE budget_head_id = ?').bind(headId).first()).n;
+}
+// Head ids on a PO (to check budgets after the PO is approved).
+export async function headsOnPo(env, poId) {
+  return (await env.DB.prepare('SELECT DISTINCT budget_head_id AS h FROM pro_po_items WHERE po_id = ? AND budget_head_id IS NOT NULL').bind(poId).all()).results.map((r) => r.h);
+}
+
 export function registerProcurement2(router, h) {
   const { withAuth, json, serverError, visibleProjectIds, nowStr, csvBom, getCurrentUser, userCan } = h;
 
