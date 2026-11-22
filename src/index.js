@@ -17,6 +17,8 @@ import { registerFinance } from './routes/finance.js';
 import { registerProcurement2 } from './routes/procurement2.js';
 import { csvBom } from './core/util.js';
 import { registerPetty } from './routes/petty.js';
+import { registerProfile } from './routes/profile.js';
+import { registerFeasibility, feasibilitySweep } from './routes/feasibility.js';
 import { registerVisits, visitOptions, cleanFeedback } from './routes/visits.js';
 import { registerRera, reraSweep } from './routes/rera.js';
 import { registerAi } from './routes/ai.js';
@@ -458,6 +460,7 @@ router.get('/api/documents', async (req, env) => {
         params.push(...ids);
       }
       if (!canSeeRestricted(user)) sql += " AND COALESCE(category, '') NOT IN ('kyc', 'legal', 'agreement')";
+      if (!['owner', 'pm', 'accounts', 'viewer'].includes(user.role)) sql += " AND COALESCE(category, '') != 'feasibility'";
       sql += ' ORDER BY created_at DESC';
       const rows = await query(env.DB, sql, params);
       return json({ ok: true, data: { documents: rows.results } });
@@ -540,7 +543,7 @@ const EDITABLE_SETTINGS = ['po.pm_approval_limit_paise', 'access.allow_second_ow
   'demand.due_days_after_milestone', 'share.default_expiry_days', 'share.default_max_views', 'files.brochure_max_mb', 'branding.apply_colours_to_app',
   'brochure.price_list_default_audience', 'storage.warn_percent', 'sales.max_holds_per_user', 'sales.max_discount_bp', 'sales.pm_max_discount_bp',
   'interest.rate_bp', 'interest.grace_days', 'interest.enabled', 'security.require_mfa_roles', 'tax.stamp_duty_bp', 'tax.metro_cess_bp', 'tax.women_concession_bp', 'tax.registration_bp', 'tax.registration_cap_paise', 'tax.gst_bp',
-  'con.enabled', 'con.pm_approval_limit_paise', 'con.gst_bp', 'con.tds_bp', 'budget.gst_basis', 'petty.low_balance_paise', 'ai.enabled', 'ai.daily_limit', 'ai.model', 'rera.designated_pct_bp', 'sales.visit_objections', 'sales.visit_radius_m',
+  'con.enabled', 'con.pm_approval_limit_paise', 'con.gst_bp', 'con.tds_bp', 'budget.gst_basis', 'petty.low_balance_paise', 'ai.enabled', 'ai.daily_limit', 'ai.model', 'rera.designated_pct_bp', 'fea.review_days', 'sales.visit_objections', 'sales.visit_radius_m',
   'sales.receipt_approval_limit_paise', 'sales.discount_pm_limit_paise', 'sales.handover_template'];
 
 router.post('/api/settings/:key', async (req, env) => {
@@ -1490,7 +1493,7 @@ const EXPORT_TABLES = ['projects', 'apr_items', 'apr_events', 'drw_drawings', 'd
     'sal_leads', 'sal_activities', 'sal_visits', 'sal_inventory', 'sal_partners', 'sal_bookings', 'sal_plan_stages', 'sal_demands', 'sal_receipts', 'documents', 'audit_log',
     'pro_grn_items', 'pro_payments', 'ppl_staff', 'ppl_hiring', 'ppl_candidates', 'sal_brokerage_payments', 'sal_refunds', 'sal_interest_waivers', 'mkt_spend', 'brands', 'counters',
     'pro_indents', 'pro_indent_items', 'pro_rfq_items', 'pro_quote_items',
-    'site_dpr_labour', 'bud_heads', 'stk_items', 'stk_balance', 'stk_moves', 'pro_party_docs', 'pro_professionals', 'ai_log', 'sal_receipt_requests', 'sal_adjustments', 'sal_booking_parties', 'sal_cost_sheets', 'sal_cost_sheet_lines', 'sal_handover', 'sal_handover_items', 'sal_booking_loans', 'rera_account_entries', 'pty_funds', 'pty_entries', 'con_contractors', 'con_work_orders', 'con_wo_items', 'con_ra_bills', 'con_ra_lines', 'con_payments', 'con_ledger'];
+    'site_dpr_labour', 'bud_heads', 'stk_items', 'stk_balance', 'stk_moves', 'pro_party_docs', 'pro_professionals', 'ai_log', 'sal_receipt_requests', 'sal_adjustments', 'sal_booking_parties', 'sal_cost_sheets', 'sal_cost_sheet_lines', 'sal_handover', 'sal_handover_items', 'sal_booking_loans', 'rera_account_entries', 'eng_kudos', 'fea_versions', 'pty_funds', 'pty_entries', 'con_contractors', 'con_work_orders', 'con_wo_items', 'con_ra_bills', 'con_ra_lines', 'con_payments', 'con_ledger'];
 const EXPORT_PARTS = 3;
 
 async function buildExport(env, part = 1) {
@@ -1498,7 +1501,7 @@ async function buildExport(env, part = 1) {
   const out = { exported_at: new Date().toISOString(), part, of: EXPORT_PARTS, tables: {} };
   for (const t of EXPORT_TABLES.slice((part - 1) * per, part * per)) out.tables[t] = (await env.DB.prepare(`SELECT * FROM ${t}`).all()).results;
   if (out.tables.sal_bookings) for (const r of out.tables.sal_bookings) r.pan = await maskPan(env, r.pan); // never export a customer's PAN
-  if (part === EXPORT_PARTS) out.tables.users = (await env.DB.prepare('SELECT id, name, email, phone, role, lang, active, created_at FROM users').all()).results;
+  if (part === EXPORT_PARTS) out.tables.users = (await env.DB.prepare('SELECT id, name, email, phone, role, lang, active, created_at, position, about FROM users').all()).results;
   return out;
 }
 
@@ -2083,6 +2086,8 @@ registerReports(router, { withAuth, json, serverError, visibleProjectIds, getSet
 registerProcurement2(router, { withAuth, json, serverError, visibleProjectIds, nowStr, csvBom, getCurrentUser, userCan, grnStockStatements });
 registerStores(router, { withAuth, json, serverError, visibleProjectIds, nowStr, csvBom });
 registerPartyDocs(router, { withAuth, json, serverError, nowStr, getSetting });
+registerProfile(router, { withAuth, json, serverError, visibleProjectIds, nowStr, getSetting, printBrand, csvBom });
+registerFeasibility(router, { withAuth, json, serverError, visibleProjectIds, nowStr });
 registerVisits(router, { withAuth, json, serverError, visibleProjectIds, getSetting, nowStr, leadAccess, csvBom });
 registerRera(router, { withAuth, json, serverError, visibleProjectIds, nowStr, getSetting, csvBom });
 registerAi(router, { withAuth, json, serverError, visibleProjectIds, nowStr, getSetting, userCan, checkRateLimit });
@@ -2972,7 +2977,8 @@ function sniffOk(type, h, body) {
 // Buyer KYC, legal and agreement documents are for sales/accounts/PM/Owner only (site, purchase, HR, viewer never see them).
 const RESTRICTED_DOC_CATS = ['kyc', 'legal', 'agreement'];
 const canSeeRestricted = (user) => ['owner', 'pm', 'sales', 'accounts'].includes(user.role);
-const docVisible = (user, doc) => !RESTRICTED_DOC_CATS.includes(doc.category) || canSeeRestricted(user);
+// Feasibility studies carry cost and revenue forecasts: Owner, PM, Accounts and the CA (viewer) only.
+const docVisible = (user, doc) => (doc.category === 'feasibility' ? ['owner', 'pm', 'accounts', 'viewer'].includes(user.role) : (!RESTRICTED_DOC_CATS.includes(doc.category) || canSeeRestricted(user)));
 
 // D1 returns BLOB columns as plain number arrays; turn them back into bytes before responding.
 function blobBytes(d) {
@@ -3075,6 +3081,7 @@ function safeUser(u) {
     lang: u.lang, active: !!u.active, extra_roles: u.extra_roles,
     must_change_password: !!u.must_change_password,
     is_primary_owner: !!u.is_primary_owner,
+    position: u.position || '', about: u.about || '', has_avatar: !!u.avatar_blob_id, avatar_v: u.avatar_updated_at || '',
   };
 }
 
@@ -3152,6 +3159,7 @@ async function runCron(cron, env) {
     await partyDocsSweep(env);
     await handoverDueSweep(env);
     await reraSweep(env, getSetting);
+    await feasibilitySweep(env, getSetting);
   } else if (cron === '30 2 * * *') {
     // 08:00 IST digest to every active Owner
     const owners = await env.DB.prepare("SELECT email FROM users WHERE role = 'owner' AND active = 1 AND deleted_at IS NULL").all();
