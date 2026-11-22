@@ -13,6 +13,8 @@ import * as gdrive from './core/gdrive.js';
 import { registerSalesOps, expireHolds, LEAD_TRANSITIONS } from './routes/sales_ops.js';
 import { registerReports } from './routes/reports.js';
 import { registerFinance } from './routes/finance.js';
+import { registerProcurement2 } from './routes/procurement2.js';
+import { csvBom } from './core/util.js';
 import { registerMfa, mfaChallenge } from './routes/mfa.js';
 import { registerImporter } from './routes/importer.js';
 import { registerPrivacy } from './routes/privacy.js';
@@ -1297,20 +1299,10 @@ router.get('/api/procurement/bills', async (req, env) => {
     if (req.user.role === 'site') return json({ ok: false, error: 'Not allowed.' }, 403);
     const ids = await visibleProjectIds(env, req.user);
     if (!ids.length) return json({ ok: true, data: { bills: [] } });
-    const rows = await env.DB.prepare(`SELECT b.*, v.name AS vendor, p.po_no FROM pro_bills b JOIN pro_vendors v ON v.id = b.vendor_id LEFT JOIN pro_pos p ON p.id = b.po_id
+    const rows = await env.DB.prepare(`SELECT b.*, v.name AS vendor, p.po_no, COALESCE((SELECT SUM(x.amount_paise) FROM pro_payments x WHERE x.bill_id = b.id AND x.reversed_at IS NULL), 0) AS paid_paise FROM pro_bills b JOIN pro_vendors v ON v.id = b.vendor_id LEFT JOIN pro_pos p ON p.id = b.po_id
       WHERE (p.id IS NULL OR p.project_id IN (${ids.map(() => '?').join(',')})) ORDER BY b.status = 'paid', b.due_date LIMIT 200`).bind(...ids).all();
+    for (const r of rows.results) { const net = r.amount_paise - (r.tds_paise || 0); if (r.status === 'paid' && !r.paid_paise) r.paid_paise = net; r.balance_paise = Math.max(0, net - r.paid_paise); }
     return json({ ok: true, data: { bills: rows.results } });
-  });
-});
-
-router.post('/api/procurement/bills/:id/pay', async (req, env) => {
-  return withAuth(req, env, 'procurement', 'E', async (req, env) => {
-    const b = await req.json();
-    const bill = await env.DB.prepare('SELECT * FROM pro_bills WHERE id = ?').bind(Number(req.params.id)).first();
-    if (!bill) return json({ ok: false, error: 'Bill not found.' }, 404);
-    await env.DB.prepare("UPDATE pro_bills SET status = 'paid', paid_on = ?, payment_ref = ? WHERE id = ?").bind(b.paid_on || nowStr().substring(0, 10), b.payment_ref || '', bill.id).run();
-    await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, 'pay', 'pro_bills', ?, ?, ?)`).bind(req.user.user_id, bill.id, `Marked bill ${bill.bill_no || bill.id} paid`, nowStr()).run();
-    return json({ ok: true });
   });
 });
 
@@ -1425,7 +1417,8 @@ router.get('/api/export/:what', async (req, env) => {
 async function buildExport(env) {
   const tables = ['projects', 'apr_items', 'apr_events', 'drw_drawings', 'drw_revisions', 'site_milestones', 'site_dprs', 'site_snags', 'pro_vendors', 'pro_rfqs', 'pro_quotes', 'pro_pos', 'pro_po_items', 'pro_grns', 'pro_bills',
     'sal_leads', 'sal_activities', 'sal_visits', 'sal_inventory', 'sal_partners', 'sal_bookings', 'sal_plan_stages', 'sal_demands', 'sal_receipts', 'documents', 'audit_log',
-    'pro_grn_items', 'pro_payments', 'ppl_staff', 'ppl_hiring', 'ppl_candidates', 'sal_brokerage_payments', 'sal_refunds', 'sal_interest_waivers', 'mkt_spend', 'brands', 'counters'];
+    'pro_grn_items', 'pro_payments', 'ppl_staff', 'ppl_hiring', 'ppl_candidates', 'sal_brokerage_payments', 'sal_refunds', 'sal_interest_waivers', 'mkt_spend', 'brands', 'counters',
+    'pro_indents', 'pro_indent_items', 'pro_rfq_items', 'pro_quote_items'];
   const out = { exported_at: new Date().toISOString(), tables: {} };
   for (const t of tables) out.tables[t] = (await env.DB.prepare(`SELECT * FROM ${t}`).all()).results;
   for (const r of out.tables.sal_bookings) r.pan = await maskPan(env, r.pan); // never export a customer's PAN
@@ -1982,6 +1975,7 @@ registerMfa(router, { json, serverError, getCurrentUser, getSetting, nowStr, enc
 registerImporter(router, { withAuth, json, serverError, visibleProjectIds, nowStr, encryptSetting });
 registerPrivacy(router, { withAuth, json, serverError, nowStr, decryptSetting });
 registerReports(router, { withAuth, json, serverError, visibleProjectIds, getSetting, nowStr });
+registerProcurement2(router, { withAuth, json, serverError, visibleProjectIds, nowStr, csvBom, getCurrentUser, userCan });
 registerSalesOps(router, { withAuth, json, serverError, visibleProjectIds, userCan, getSetting, nowStr, encryptSetting, clientIp, checkRateLimit });
 
 // ---------- Branding routes ----------

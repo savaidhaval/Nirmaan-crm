@@ -1,4 +1,4 @@
-# NirmaanCRM data dictionary (real schema from migrations 0001-0013, updated 2026-11-22)
+# NirmaanCRM data dictionary (real schema from migrations 0001-0014, updated 2026-11-22)
 
 Source: replaying migrations/*.sql into an empty SQLite DB. Live D1 not verified (see docs/STATE.md). Money = paise INTEGER, percentages = basis points (_bp). NN = NOT NULL, PK = primary key.
 
@@ -55,16 +55,24 @@ id INTEGER PK, po_id INTEGER, vendor_id INTEGER NN, bill_no TEXT, amount_paise I
 id INTEGER PK, grn_id INTEGER NN, po_item_id INTEGER NN, qty_received REAL NN, note TEXT, created_at TEXT
 ### pro_grns
 id INTEGER PK, po_id INTEGER NN, received_on TEXT NN, qty_note TEXT, challan_no TEXT, received_by INTEGER, document_id INTEGER, client_uuid TEXT, created_at TEXT, deleted_at TEXT
+### pro_indent_items
+id INTEGER PK, indent_id INTEGER NN, description TEXT NN, qty REAL, unit TEXT
+### pro_indents
+id INTEGER PK, project_id INTEGER NN, indent_no TEXT NN, needed_by TEXT, note TEXT, status TEXT NN, requested_by INTEGER, decided_by INTEGER, decided_at TEXT, decision_note TEXT, rfq_id INTEGER, client_uuid TEXT, created_at TEXT, deleted_at TEXT
 ### pro_payments
 id INTEGER PK, bill_id INTEGER NN, amount_paise INTEGER NN, tds_paise INTEGER NN, paid_on TEXT NN, mode TEXT, ref_no TEXT, note TEXT, reversed_at TEXT, reversal_note TEXT, created_by INTEGER, created_at TEXT
 ### pro_po_items
 id INTEGER PK, po_id INTEGER NN, description TEXT NN, qty REAL, unit TEXT, rate_paise INTEGER, amount_paise INTEGER
 ### pro_pos
 id INTEGER PK, project_id INTEGER NN, vendor_id INTEGER NN, rfq_id INTEGER, po_no TEXT, po_seq INTEGER NN, amount_paise INTEGER NN, gst_bp INTEGER, gst_paise INTEGER NN, total_paise INTEGER NN, terms TEXT, status TEXT, approved_by INTEGER, approved_at TEXT, created_by INTEGER, created_at TEXT, deleted_at TEXT
+### pro_quote_items
+id INTEGER PK, quote_id INTEGER NN, rfq_item_id INTEGER NN, rate_paise INTEGER NN
 ### pro_quotes
 id INTEGER PK, rfq_id INTEGER NN, vendor_id INTEGER NN, rate_paise INTEGER, amount_paise INTEGER, delivery_days INTEGER, terms TEXT, document_id INTEGER, selected INTEGER, created_at TEXT, deleted_at TEXT
+### pro_rfq_items
+id INTEGER PK, rfq_id INTEGER NN, description TEXT NN, qty REAL, unit TEXT
 ### pro_rfqs
-id INTEGER PK, project_id INTEGER, title TEXT NN, material TEXT, qty REAL, unit TEXT, needed_by TEXT, status TEXT, created_by INTEGER, created_at TEXT, deleted_at TEXT
+id INTEGER PK, project_id INTEGER, title TEXT NN, material TEXT, qty REAL, unit TEXT, needed_by TEXT, status TEXT, created_by INTEGER, created_at TEXT, deleted_at TEXT, indent_id INTEGER
 ### pro_vendors
 id INTEGER PK, name TEXT NN, category TEXT, contact_person TEXT, phone TEXT, email TEXT, gstin TEXT, address TEXT, rating INTEGER, notes TEXT, active INTEGER, created_at TEXT, deleted_at TEXT, pan TEXT
 ### project_members
@@ -149,11 +157,16 @@ id TEXT PK, source TEXT, seen_at TEXT
 - pro_grn_items:idx_grn_items_grn
 - pro_grn_items:idx_grn_items_poitem
 - pro_grns:idx_grn_po
+- pro_indent_items:idx_indent_items
+- pro_indents:uq_indent_no
+- pro_indents:idx_indent_project_status
 - pro_payments:idx_pay_bill
 - pro_po_items:idx_poitem_po
 - pro_pos:idx_po_project
 - pro_pos:uq_po_seq
+- pro_quote_items:idx_quote_items
 - pro_quotes:idx_quote_rfq
+- pro_rfq_items:idx_rfq_items
 - pro_rfqs:idx_rfq_project
 - project_members:uq_project_member
 - project_members:idx_project_member_user
@@ -192,3 +205,7 @@ id TEXT PK, source TEXT, seen_at TEXT
 
 ## 0013 additions (v1.3.1 fixes)
 - ppl_staff.trade, ppl_staff.project_id; pro_grn_items (per-PO-line received qty); pro_payments (partial bill payments, reversed never deleted). Not yet used by any screen.
+
+## 0014 additions (WP-4)
+- pro_indents, pro_indent_items (site material requests; status submitted/approved/rejected/converted; numbers from counters key `ind:<project_id>`), pro_rfq_items, pro_quote_items (per-line quote rates), pro_rfqs.indent_id.
+- pro_bills.status gains `part_paid`. Paid amounts come from pro_payments (reversed rows ignored); legacy bills marked paid before 0013 have no payment rows and count as fully paid.

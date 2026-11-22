@@ -83,3 +83,6 @@ npx wrangler secret list
 
 ## S2 status
 Decisions: option B (adapt WPs to current structure; new code goes in `src/routes/<area>.js` + `public/pagesN.js`), S2 items already in schema dropped. `migrations/0013_guide_fixes.sql` written; replays clean on empty SQLite. Guide text edits skipped (guide not in repo). Backup export list in `buildExport` extended with the 2 new tables plus 9 existing tables it omitted (`ppl_*`, `sal_brokerage_payments`, `sal_refunds`, `sal_interest_waivers`, `mkt_spend`, `brands`, `counters`). `docs/proposed/0010_reconcile.sql` removed (superseded by 0013).
+
+## WP-4 status
+Code complete and tested locally (all 8 suites pass). Migration 0014 NOT applied to staging/production yet. Export-everything/nightly backup now reads 41 tables (+users, +auth lookups, about 44 queries): close to the 50-query cap, move to chunked export in WP-23 before adding more tables.

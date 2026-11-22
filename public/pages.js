@@ -879,8 +879,9 @@ function renderProcurement(main) {
   main.innerHTML = `<h1>Procurement</h1><div class="grid">
     <button class="btn btn-primary btn-full" id="p-po">📄 New purchase order</button>
     <button class="btn btn-full" id="p-vendor">🛒 New vendor</button>
-    <button class="btn btn-full" id="p-rfq">📋 New RFQ</button></div><div id="procurement-list">Loading...</div>`;
-  $('p-po').onclick = newPo; $('p-vendor').onclick = newVendor; $('p-rfq').onclick = newRfq;
+    <button class="btn btn-full" id="p-rfq">📋 New RFQ</button>
+    <button class="btn btn-full" id="p-indent">📝 Ask for material (indent)</button></div><div id="procurement-list">Loading...</div>`;
+  $('p-po').onclick = newPo; $('p-vendor').onclick = newVendor; $('p-rfq').onclick = newRfq; $('p-indent').onclick = newIndent;
   loadProcurement();
 }
 
@@ -915,13 +916,15 @@ const openPrint = (k, id) => window.open(`/print.html?k=${k}&id=${id}`, '_blank'
 async function loadProcurement() {
   try {
     const noBills = currentUser.role === 'site';
-    const [vendors, pos, rfqs, bills] = await Promise.all([api('/api/procurement/vendors'), api('/api/procurement/pos'), api('/api/procurement/rfqs'), noBills ? { data: { bills: [] } } : api('/api/procurement/bills')]);
+    // A site engineer may raise indents and receive material but cannot view the lists below: show what is allowed, quietly skip the rest.
+    const soft = (p, d) => p.catch(() => ({ data: d }));
+    const [vendors, pos, rfqs, bills, indents] = await Promise.all([soft(api('/api/procurement/vendors'), { vendors: [] }), soft(api('/api/procurement/pos'), { pos: [] }), soft(api('/api/procurement/rfqs'), { rfqs: [] }), noBills ? { data: { bills: [] } } : soft(api('/api/procurement/bills'), { bills: [] }), soft(api('/api/procurement/indents'), { indents: [] })]);
     const canA = userCanClient('procurement', 'A'), canE = userCanClient('procurement', 'E');
-    let html = '<h3>Purchase orders</h3>' + (pos.data.pos.map((p) => `<div class="card"><div class="row"><div><b>${esc(p.po_no)}</b><p class="muted">Total ${moneyP(p.total_paise)}</p></div>${statusChip(p.status)}</div>
+    let html = indentsHtml(indents.data.indents) + '<h3>Purchase orders</h3>' + (pos.data.pos.map((p) => `<div class="card"><div class="row"><div><b>${esc(p.po_no)}</b><p class="muted">Total ${moneyP(p.total_paise)}</p></div>${statusChip(p.status)}</div>
       <div class="row-btns">${p.status === 'draft' && canE ? `<button class="btn small" data-po="submit" data-id="${p.id}">Send for approval</button>` : ''}${p.status === 'pending_approval' && canA ? `<button class="btn small btn-primary" data-po="approve" data-id="${p.id}">Approve</button><button class="btn small" data-po="reject" data-id="${p.id}">Reject</button>` : ''}
       ${['approved', 'part_received'].includes(p.status) ? `<button class="btn small btn-primary" data-grn="${p.id}">Material received</button>` : ''}${!noBills && canE && ['approved', 'part_received', 'received'].includes(p.status) ? `<button class="btn small" data-bill="${p.id}" data-vendor="${p.vendor_id}">Add bill</button>` : ''}
       ${!noBills ? `<button class="btn small" data-print="${p.id}">Print</button>` : ''}</div></div>`).join('') || '<p class="muted">No purchase orders yet.</p>');
-    if (!noBills) html += '<h3>Bills</h3>' + (bills.data.bills.map((b) => `<div class="card"><div class="row"><div><b>${esc(b.vendor)}</b> · ${esc(b.bill_no || '')}<p class="muted">${moneyP(b.amount_paise)}${b.due_date ? ' · due ' + esc(b.due_date) : ''}${b.po_no ? ' · ' + esc(b.po_no) : ''}</p></div>${statusChip(b.status === 'received' ? 'open' : b.status)}</div>${b.status !== 'paid' && canE ? `<button class="btn small" data-pay="${b.id}">Mark paid</button>` : ''}</div>`).join('') || '<p class="muted">No bills yet.</p>');
+    if (!noBills) html += '<h3>Bills</h3>' + (bills.data.bills.map((b) => `<div class="card"><div class="row"><div><b>${esc(b.vendor)}</b> · ${esc(b.bill_no || '')}<p class="muted">${moneyP(b.amount_paise)}${b.due_date ? ' · due ' + esc(b.due_date) : ''}${b.po_no ? ' · ' + esc(b.po_no) : ''}</p>${b.paid_paise && b.balance_paise ? `<p class="muted">Paid ${moneyP(b.paid_paise)} · <b>Still due ${moneyP(b.balance_paise)}</b></p>` : ''}</div>${statusChip(b.status === 'received' ? 'open' : b.status)}</div>${b.balance_paise > 0 && canE && ['owner', 'accounts'].includes(currentUser.role) ? `<button class="btn small" data-pay="${b.id}" data-bal="${b.balance_paise}">Record payment</button>` : ''}</div>`).join('') || '<p class="muted">No bills yet.</p>');
     html += '<h3>RFQs</h3>' + (rfqs.data.rfqs.map((r) => `<div class="card clickable" data-rfq="${r.id}"><div class="row"><b>${esc(r.title)}</b>${statusChip(r.status)}</div></div>`).join('') || '<p class="muted">No RFQs.</p>');
     html += '<h3>Vendors</h3>' + (vendors.data.vendors.map((v) => `<div class="card ${noBills ? '' : 'clickable'}" data-vendor-led="${v.id}"><b>${esc(v.name)}</b><p class="muted">${esc(v.category || '')}${v.phone ? ' · ' : ''}${v.phone ? `<a href="tel:${esc(v.phone)}">${esc(v.phone)}</a>` : ''}</p></div>`).join('') || '<p class="muted">No vendors yet.</p>');
     const el = $('procurement-list'); el.innerHTML = html;
@@ -929,52 +932,16 @@ async function loadProcurement() {
     el.querySelectorAll('[data-print]').forEach((b) => { b.onclick = () => openPrint('po', b.dataset.print); });
     el.querySelectorAll('[data-grn]').forEach((b) => { b.onclick = () => receiveMaterial(b.dataset.grn); });
     el.querySelectorAll('[data-bill]').forEach((b) => { b.onclick = () => addBill(b.dataset.bill, b.dataset.vendor); });
-    el.querySelectorAll('[data-pay]').forEach((b) => { b.onclick = async () => { const v = await openForm({ title: 'Mark bill paid', fields: [{ name: 'paid_on', label: 'Paid on', type: 'date', value: today() }, { name: 'payment_ref', label: 'Payment reference' }] }); if (v && await act(api(`/api/procurement/bills/${b.dataset.pay}/pay`, { method: 'POST', body: v }), 'Marked paid')) loadProcurement(); }; });
+    el.querySelectorAll('[data-pay]').forEach((b) => { b.onclick = () => payBill(b.dataset.pay, Number(b.dataset.bal)); });
+    wireIndents(el);
     el.querySelectorAll('[data-rfq]').forEach((b) => { b.onclick = () => rfqDetail(b.dataset.rfq); });
     if (!noBills) el.querySelectorAll('[data-vendor-led]').forEach((b) => { b.onclick = () => vendorLedger(b.dataset.vendorLed); });
   } catch (e) { $('procurement-list').innerHTML = `<div class="error">${esc(e.message)}</div>`; }
 }
 
-async function receiveMaterial(poId) {
-  const v = await openForm({ title: 'Material received', fields: [
-    { name: 'received_on', label: 'Date', type: 'date', value: today() }, { name: 'challan_no', label: 'Challan / delivery note no.' },
-    { name: 'qty_note', label: 'What came? (quantity, condition)', type: 'textarea', required: true }, { name: 'full', type: 'checkbox', label: 'Complete', checkLabel: 'This completes the order (nothing more is due)' }] });
-  if (!v) return;
-  if (await postOrQueue(`/api/procurement/pos/${poId}/grn`, v, 'Receipt recorded')) loadProcurement();
-}
-
 async function addBill(poId, vendorId) {
   const v = await openForm({ title: 'Add vendor bill', fields: [{ name: 'bill_no', label: 'Bill number' }, { name: 'amount_paise', label: 'Amount (₹, with GST)', type: 'money', required: true }, { name: 'due_date', label: 'Due date', type: 'date' }] });
   if (v && await act(api('/api/procurement/bills', { method: 'POST', body: { ...v, po_id: Number(poId), vendor_id: Number(vendorId) } }), 'Bill recorded')) loadProcurement();
-}
-
-async function vendorLedger(id) {
-  const d = (await api(`/api/procurement/vendors/${id}/ledger`)).data;
-  const owed = d.bills.filter((b) => b.status !== 'paid').reduce((t, b) => t + b.amount_paise, 0);
-  const ov = document.createElement('div'); ov.className = 'modal-overlay';
-  ov.innerHTML = `<div class="modal"><h2>Vendor ledger</h2><p><b>Unpaid bills: ${moneyP(owed)}</b></p>
-    <h3>POs</h3>${d.pos.map((p) => `<p>${esc(p.po_no)} · ${moneyP(p.total_paise)} · ${esc(p.status)}</p>`).join('') || '<p class="muted">None</p>'}
-    <h3>Bills</h3>${d.bills.map((b) => `<p>${esc(b.bill_no || '—')} · ${moneyP(b.amount_paise)} · ${esc(b.status)}</p>`).join('') || '<p class="muted">None</p>'}
-    <div class="modal-actions"><button class="btn btn-primary" id="vl-close">Close</button></div></div>`;
-  document.body.appendChild(ov); $('vl-close').onclick = () => ov.remove();
-}
-
-async function rfqDetail(id) {
-  const d = (await api(`/api/procurement/rfqs/${id}/quotes`)).data;
-  const lowest = d.quotes.length ? Math.min(...d.quotes.map((q) => q.amount_paise)) : 0;
-  const fastest = d.quotes.filter((q) => q.delivery_days != null).length ? Math.min(...d.quotes.filter((q) => q.delivery_days != null).map((q) => q.delivery_days)) : null;
-  const ov = document.createElement('div'); ov.className = 'modal-overlay';
-  ov.innerHTML = `<div class="modal"><h2>${esc(d.rfq.title)}</h2>
-    <p class="muted">${d.quotes.length} quote${d.quotes.length === 1 ? '' : 's'} received${d.quotes.length < 3 ? ' — get at least 3 if you can' : ''}.${d.last_paid ? ` Last paid: ${moneyP(d.last_paid.rate_paise)}/${esc(d.last_paid.unit || 'unit')} (${esc(d.last_paid.po_no)}).` : ''}</p>
-    ${d.quotes.map((q) => `<div class="card"><div class="row"><div><b>${esc(q.vendor)}</b> ${q.selected ? chip('Chosen', 'good') : ''}<p class="muted">${moneyP(q.amount_paise)}${q.delivery_days != null ? ' · ' + esc(q.delivery_days) + ' days' : ''}</p></div><div>${q.amount_paise === lowest ? chip('Lowest', 'good') : ''} ${q.delivery_days != null && q.delivery_days === fastest ? chip('Fastest', 'info') : ''}</div></div>${q.terms ? `<p class="muted">${esc(q.terms)}</p>` : ''}${!q.selected && userCanClient('procurement', 'E') ? `<button class="btn small" data-sel="${q.id}">Choose this quote</button>` : ''}</div>`).join('')}
-    <div class="modal-actions">${userCanClient('procurement', 'C') ? '<button class="btn" id="rq-add">Add quote</button>' : ''}<button class="btn btn-primary" id="rq-close">Close</button></div></div>`;
-  document.body.appendChild(ov); $('rq-close').onclick = () => ov.remove();
-  ov.querySelectorAll('[data-sel]').forEach((b) => { b.onclick = async () => { if (await act(api(`/api/procurement/quotes/${b.dataset.sel}/select`, { method: 'POST' }), 'Quote chosen')) { ov.remove(); rfqDetail(id); loadProcurement(); } }; });
-  if ($('rq-add')) $('rq-add').onclick = async () => {
-    const vendors = (await api('/api/procurement/vendors')).data.vendors;
-    const v = await openForm({ title: 'Add quote', fields: [{ name: 'vendor_id', label: 'Vendor', type: 'select', options: vendors.map((x) => [x.id, x.name]) }, { name: 'rate_paise', label: 'Rate per unit (₹)', type: 'money' }, { name: 'amount_paise', label: 'Total (₹)', type: 'money', required: true }, { name: 'delivery_days', label: 'Delivery in (days)', type: 'number' }, { name: 'terms', label: 'Terms', type: 'textarea' }] });
-    if (v && await act(api(`/api/procurement/rfqs/${id}/quotes`, { method: 'POST', body: { ...v, vendor_id: Number(v.vendor_id) } }), 'Quote added')) { ov.remove(); rfqDetail(id); }
-  };
 }
 
 // ---------- Sales ----------
