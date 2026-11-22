@@ -1,0 +1,101 @@
+import { createRequire } from 'node:module';
+const { chromium } = createRequire(import.meta.url)('/opt/node-tools/node_modules/playwright');
+const BASE = process.env.BASE || 'http://localhost:8787', SHOTS = '/tmp/claude-0/scratch/shots';
+const run = Date.now().toString(36);
+let pass = 0, fail = 0; const ok = (n, c, x = '') => { c ? pass++ : fail++; console.log(`${c ? 'PASS' : 'FAIL'}  ${n}${c ? '' : '  ' + x}`); };
+class C { constructor() { this.cookie = ''; } async call(m, p, b) { const h = { 'X-NirmaanCRM': '1' }; if (this.cookie) h.cookie = this.cookie; let body; if (b) { h['Content-Type'] = 'application/json'; body = JSON.stringify(b); }
+  const r = await fetch(BASE + p, { method: m, headers: h, body }); const sc = r.headers.get('set-cookie'); if (sc) this.cookie = sc.split(';')[0]; let d = null; try { d = await r.json(); } catch (e) {} return { status: r.status, data: d && d.data, err: d && d.error }; } }
+const o = new C(); await o.call('POST', '/api/auth/login', { email: 'owner@test.local', password: 'CiStrongPass-12345' });
+const pid = (await o.call('POST', '/api/projects', { name: 'UI Tower ' + run, code: 'UI' + run.toUpperCase().slice(-5), budget_paise: 5e9 })).data.id;
+await o.call('POST', '/api/settings/con.enabled', { value: 'on' });
+await o.call('POST', '/api/settings/con.pm_approval_limit_paise', { value: 50000000 });
+const users = {};
+for (const role of ['site', 'pm', 'purchase', 'accounts', 'sales', 'viewer']) {
+  const email = `ui-${role}-${run}@test.local`; const r = await o.call('POST', '/api/users', { name: 'UI ' + role + ' ' + run, email, role, projects: role === 'site' ? [pid] : [] });
+  const c = new C(); await c.call('POST', '/api/auth/login', { email, password: r.data.temporaryPassword }); const pw = 'UiStrongPass-' + run;
+  await c.call('POST', '/api/auth/change-password', { currentPassword: r.data.temporaryPassword, newPassword: pw }); users[role] = { email, pw };
+}
+const browser = await chromium.launch();
+const ctxs = {};
+async function page(role) {
+  if (!ctxs[role]) {
+    const ctx = await browser.newContext({ viewport: { width: 390, height: 800 } });
+    const email = role === 'owner' ? 'owner@test.local' : users[role].email, password = role === 'owner' ? 'CiStrongPass-12345' : users[role].pw;
+    const r = await ctx.request.post(BASE + '/api/auth/login', { headers: { 'X-NirmaanCRM': '1', 'Content-Type': 'application/json' }, data: { email, password } });
+    if (!r.ok()) throw new Error('login ' + role + ' ' + r.status());
+    ctxs[role] = ctx;
+  }
+  const p = await ctxs[role].newPage(); p.on('dialog', (d) => d.accept()); p.on('pageerror', (e) => console.log('PAGEERROR', role, e.message));
+  await p.goto(BASE + '/'); await p.waitForFunction(() => typeof navigate === 'function' && typeof currentUser !== 'undefined' && currentUser, null, { timeout: 15000 }); return p;
+}
+const go = async (p, route) => { await p.evaluate((r) => navigate(r), route); await p.waitForTimeout(800); };
+const toastText = async (p) => { await p.waitForTimeout(500); return p.evaluate(() => (document.getElementById('toast') || {}).textContent || ''); };
+const submit = (p) => p.click('#modal-form button[type=submit]');
+const pick = (p, sel, label) => p.selectOption(sel, { label });
+const shot = (p, n) => p.screenshot({ path: `${SHOTS}/${n}.png` });
+const iso = (d) => new Date(Date.now() + 19800000 + d * 86400000).toISOString().slice(0, 10);
+const sitec = new C(); await sitec.call('POST', '/api/auth/login', { email: users.site.email, password: users.site.pw });
+const pmc = new C(); await pmc.call('POST', '/api/auth/login', { email: users.pm.email, password: users.pm.pw });
+const acc = new C(); await acc.call('POST', '/api/auth/login', { email: users.accounts.email, password: users.accounts.pw });
+const me = (await sitec.call('GET', '/api/auth/me')).data.user;
+const code = 'OF-' + run.slice(-4);
+const dr = (await pmc.call('POST', '/api/drawings', { project_id: pid, code, title: 'Typical floor plan', discipline: 'arch' })).data.id;
+await pmc.call('POST', `/api/drawings/${dr}/revisions`, { status: 'ifc' });
+const fund = (await acc.call('POST', '/api/petty/funds', { project_id: pid, custodian_user_id: me.id, opening_paise: 500000 })).data.id;
+
+const s = await page('site'); await go(s, 'drawings'); await s.waitForSelector('#drawings-list .card'); await s.waitForTimeout(1500);
+await s.evaluate(() => navigator.serviceWorker.ready); await s.waitForTimeout(2500);
+ok('the service worker has kept the app files for offline use', await s.evaluate(async () => !!(await caches.match('/pages22.js')) && !!(await caches.match('/'))));
+const ctx = ctxs.site;
+
+// ===== open the app with no connection =====
+await ctx.setOffline(true); await s.reload(); await s.waitForFunction(() => typeof currentUser !== 'undefined' && currentUser, null, { timeout: 15000 }); await s.waitForTimeout(1500);
+ok('the app opens with no connection and still knows who is signed in', (await s.evaluate(() => currentUser.name)).includes('UI site'));
+await s.waitForSelector('#offline-bar:not([hidden])'); ok('an orange bar says "You are offline" in plain words', (await s.textContent('#offline-bar')).includes('You are offline'));
+await go(s, 'drawings'); await s.waitForSelector('#drawings-list .card', { timeout: 10000 });
+ok('a screen already opened shows its saved information, with a note saying so', (await s.textContent('#drawings-list')).includes(code) && (await s.textContent('main')).includes('Showing information saved on this phone'));
+await shot(s, '180-offline-drawings');
+
+// ===== entries made while offline =====
+const snagBody = { project_id: pid, title: 'Offline crack ' + run, severity: 'high' };
+const q1 = await s.evaluate((b) => api('/api/site/snags', { method: 'POST', body: b }), snagBody);
+const q2 = await s.evaluate(([f]) => api('/api/petty/entries', { method: 'POST', body: { fund_id: f, kind: 'expense', category: 'Tea and snacks', amount_paise: 4500, narration: 'offline ' + Date.now() } }), [fund]);
+const revId = (await sitec.call('GET', `/api/drawings/${dr}/acks`)).data.revision.id;
+const q3 = await s.evaluate((id) => api(`/api/drawings/revisions/${id}/ack`, { method: 'POST' }), revId);
+const q4 = await s.evaluate(() => api('/api/redev/members/99999999/consent', { method: 'POST', body: { status: 'consented' } }));
+ok('each entry is saved on the phone and reported as saved, not as an error', [q1, q2, q3, q4].every((r) => r && r.data && r.data.queued === true));
+// the same entry sent twice must never double up: copy the snag in the queue
+await s.evaluate(() => { const q = JSON.parse(localStorage.getItem('nirmaan.q2')); const snag = q.find((i) => i.url === '/api/site/snags'); q.push({ ...snag, id: 'dup-' + Date.now() }); localStorage.setItem('nirmaan.q2', JSON.stringify(q)); });
+await s.evaluate(() => paintOffline()); await s.waitForTimeout(300);
+let bar = (await s.textContent('#offline-bar')).replace(/\s+/g, ' ');
+ok('the bar counts what is waiting', bar.includes('5 waiting to send'), bar);
+await s.click('#offline-bar'); await s.waitForSelector('text=Waiting to send'); await shot(s, '181-waiting-list');
+const listTxt = (await s.locator('.modal').last().textContent()); ok('the list names them: snag, petty cash, drawing seen, consent', ['Snag', 'Petty cash entry', 'Drawing seen', 'Consent update'].every((x) => listTxt.includes(x)), listTxt.slice(0, 200));
+await s.click('#ow-close');
+const before = (await sitec.call('GET', '/api/site/snags')).data;
+ok('nothing reached the server while offline', !JSON.stringify(before).includes('Offline crack ' + run));
+
+// ===== back online: it sends by itself =====
+await ctx.setOffline(false); await s.waitForFunction(() => JSON.parse(localStorage.getItem('nirmaan.q2') || '[]').length === 0, null, { timeout: 25000 }); await s.waitForTimeout(800);
+const after = JSON.stringify((await sitec.call('GET', '/api/site/snags')).data);
+ok('the snag arrived exactly once, even though it was sent twice', (after.match(new RegExp('Offline crack ' + run, 'g')) || []).length === 1, String((after.match(new RegExp('Offline crack ' + run, 'g')) || []).length));
+ok('the petty cash entry arrived', JSON.stringify((await sitec.call('GET', `/api/petty/funds/${fund}`)).data).includes('Tea and snacks'));
+ok('the drawing "seen" was recorded', (await pmc.call('GET', `/api/drawings/${dr}/acks`)).data.seen === 1);
+ok('the entry the server refused was not lost silently: it is listed with the reason', (await s.evaluate(() => JSON.parse(localStorage.getItem('nirmaan.q2.failed') || '[]').length)) === 1);
+await s.waitForTimeout(500); bar = (await s.textContent('#offline-bar')).replace(/\s+/g, ' ');
+ok('the bar turns red and says 1 could not be sent', bar.includes('1 could not be sent') && !bar.includes('offline'), bar);
+await s.click('#offline-bar'); await s.waitForSelector('text=Could not be sent'); await shot(s, '182-could-not-send');
+const why = (await s.locator('.modal').last().textContent()); ok('the reason from the server is shown in plain words', /not allowed|not found|permission|cannot/i.test(why), why.slice(0, 200));
+await s.click('[data-drop]'); await s.waitForTimeout(300); ok('Discard removes it', (await s.evaluate(() => JSON.parse(localStorage.getItem('nirmaan.q2.failed') || '[]').length)) === 0); await s.click('#ow-close');
+
+// ===== log out =====
+await ctx.setOffline(true);
+await s.evaluate(() => api('/api/site/snags', { method: 'POST', body: { project_id: window.__pid || 0, title: 'x', severity: 'low' } }).catch(() => null));
+const pending = await s.evaluate(() => JSON.parse(localStorage.getItem('nirmaan.q2') || '[]').length);
+let asked = '';
+s.on('dialog', (d) => { asked = d.message(); });
+await s.evaluate(() => logout()); await s.waitForTimeout(1200);
+ok('logging out with entries waiting asks first and says they stay saved', pending >= 1 && asked.includes('still waiting') && asked.includes('stay saved'), asked);
+ok('saved information and the profile are cleared; the waiting entries are kept', await s.evaluate(async () => localStorage.getItem('nirmaan.me') === null && JSON.parse(localStorage.getItem('nirmaan.q2') || '[]').length >= 1));
+await ctx.setOffline(false);
+await browser.close(); console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);

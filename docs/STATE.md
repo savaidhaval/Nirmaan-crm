@@ -143,3 +143,6 @@ Code complete; 26 API suites and 14 browser walkthroughs pass locally. No new mi
 
 ## WP-20 status
 Code complete; 27 API suites and 15 browser walkthroughs pass locally. Migration 0032 NOT applied to production. Measured: /api/dashboard/extras = 14 database statements (plus session and settings reads), well under the 40 target; no snapshot is needed for the other lines. Turnstile keys are set in production, so the enquiry form is switched on. Remaining: WP-21 (offline and Hindi/Marathi), WP-23 (hardening).
+
+## WP-21 (offline) status
+Hindi/Marathi dropped by Dhaval; offline mode built and walked through in a browser with the network switched off (17 checks). No migration. Remaining before the WP-25 stop: WP-23 (hardening and final checks). PR 19 (WP-20) is still waiting for CI approval and merge.
