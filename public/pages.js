@@ -225,7 +225,7 @@ function getBottomNavItems(role) {
 
 const PAGES = {
   home: renderHome, dashboard: renderDashboard, projects: renderProjects, users: renderUsers, documents: renderDocuments,
-  settings: renderSettings, approvals: renderApprovals, drawings: renderDrawings, site: renderSite, procurement: renderProcurement, contractors: renderContractors,
+  settings: renderSettings, approvals: renderApprovals, drawings: renderDrawings, site: renderSite, procurement: renderProcurement, contractors: (m) => renderContractors(m),
   sales: renderSales, storage: renderStorage, branding: (m) => renderBranding(m), sharelinks: renderShareLinks, more: renderMore,
   audit: renderAudit, notifications: renderNotifications, help: renderHelp, password: renderChangePassword, email: renderEmailSettings,
 };
@@ -754,7 +754,7 @@ async function approvalDetail(id) {
 // Client-side permission hint only (the server enforces everything).
 function userCanClient(module, action) {
   const r = currentUser.role;
-  const deny = { share: { C: ['owner', 'pm', 'sales'] }, approvals: { E: ['owner', 'pm'] }, drawings: { C: ['owner', 'pm'], A: ['owner', 'pm'] }, site: { C: ['owner', 'pm', 'site'] }, procurement: { C: ['owner', 'pm', 'accounts', 'purchase', 'site'], E: ['owner', 'pm', 'accounts', 'purchase'], A: ['owner', 'pm'] }, sales: { C: ['owner', 'pm', 'sales', 'accounts'], E: ['owner', 'pm', 'sales', 'accounts'], A: ['owner', 'pm'] } };
+  const deny = { contractors: { C: ['owner', 'pm', 'accounts', 'purchase'], E: ['owner', 'pm', 'accounts', 'purchase'], A: ['owner', 'pm'] }, share: { C: ['owner', 'pm', 'sales'] }, approvals: { E: ['owner', 'pm'] }, drawings: { C: ['owner', 'pm'], A: ['owner', 'pm'] }, site: { C: ['owner', 'pm', 'site'] }, procurement: { C: ['owner', 'pm', 'accounts', 'purchase', 'site'], E: ['owner', 'pm', 'accounts', 'purchase'], A: ['owner', 'pm'] }, sales: { C: ['owner', 'pm', 'sales', 'accounts'], E: ['owner', 'pm', 'sales', 'accounts'], A: ['owner', 'pm'] } };
   return ((deny[module] || {})[action] || []).includes(r);
 }
 
@@ -923,9 +923,9 @@ async function loadProcurement() {
     const noBills = currentUser.role === 'site';
     // A site engineer may raise indents and receive material but cannot view the lists below: show what is allowed, quietly skip the rest.
     const soft = (p, d) => p.catch(() => ({ data: d }));
-    const [vendors, pos, rfqs, bills, indents] = await Promise.all([soft(api('/api/procurement/vendors'), { vendors: [] }), soft(api('/api/procurement/pos'), { pos: [] }), soft(api('/api/procurement/rfqs'), { rfqs: [] }), noBills ? { data: { bills: [] } } : soft(api('/api/procurement/bills'), { bills: [] }), soft(api('/api/procurement/indents'), { indents: [] })]);
+    const [vendors, pos, rfqs, bills, indents] = await Promise.all([soft(api('/api/procurement/vendors'), { vendors: [] }), soft(api(noBills ? '/api/procurement/pos-to-receive' : '/api/procurement/pos'), { pos: [] }), soft(api('/api/procurement/rfqs'), { rfqs: [] }), noBills ? { data: { bills: [] } } : soft(api('/api/procurement/bills'), { bills: [] }), soft(api('/api/procurement/indents'), { indents: [] })]);
     const canA = userCanClient('procurement', 'A'), canE = userCanClient('procurement', 'E');
-    let html = indentsHtml(indents.data.indents) + '<h3>Purchase orders</h3>' + (pos.data.pos.map((p) => `<div class="card"><div class="row"><div><b>${esc(p.po_no)}</b><p class="muted">Total ${moneyP(p.total_paise)}</p></div>${statusChip(p.status)}</div>
+    let html = indentsHtml(indents.data.indents) + '<h3>Purchase orders</h3>' + (pos.data.pos.map((p) => `<div class="card"><div class="row"><div><b>${esc(p.po_no)}</b><p class="muted">${noBills ? esc(p.vendor_name || '') : 'Total ' + moneyP(p.total_paise)}</p></div>${statusChip(p.status)}</div>
       <div class="row-btns">${p.status === 'draft' && canE ? `<button class="btn small" data-po="submit" data-id="${p.id}">Send for approval</button>` : ''}${p.status === 'pending_approval' && canA ? `<button class="btn small btn-primary" data-po="approve" data-id="${p.id}">Approve</button><button class="btn small" data-po="reject" data-id="${p.id}">Reject</button>` : ''}
       ${['approved', 'part_received'].includes(p.status) ? `<button class="btn small btn-primary" data-grn="${p.id}">Material received</button>` : ''}${!noBills && canE && ['approved', 'part_received', 'received'].includes(p.status) ? `<button class="btn small" data-bill="${p.id}" data-vendor="${p.vendor_id}">Add bill</button>` : ''}
       ${!noBills ? `<button class="btn small" data-print="${p.id}">Print</button>` : ''}</div></div>`).join('') || '<p class="muted">No purchase orders yet.</p>');

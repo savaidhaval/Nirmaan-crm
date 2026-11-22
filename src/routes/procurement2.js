@@ -191,6 +191,17 @@ export function registerProcurement2(router, h) {
     } catch (e) { return serverError(e, 'line-quote'); }
   }));
 
+  // POs the site can receive material against: names and status only, never amounts.
+  router.get('/api/procurement/pos-to-receive', async (req, env) => viewOrCreate(req, env, async (req, env) => {
+    try {
+      const ids = await visibleProjectIds(env, req.user);
+      if (!ids.length) return json({ ok: true, data: { pos: [] } });
+      const rows = await env.DB.prepare(`SELECT p.id, p.po_no, p.status, p.project_id, v.name AS vendor_name FROM pro_pos p JOIN pro_vendors v ON v.id = p.vendor_id
+        WHERE p.deleted_at IS NULL AND p.status IN ('approved', 'part_received') AND p.project_id IN (${ids.map(() => '?').join(',')}) ORDER BY p.id DESC LIMIT 50`).bind(...ids).all();
+      return json({ ok: true, data: { pos: rows.results } });
+    } catch (e) { return serverError(e, 'pos-to-receive'); }
+  }));
+
   // ---------- GRN by PO line ----------
   router.get('/api/procurement/pos/:id/lines', async (req, env) => viewOrCreate(req, env, async (req, env) => {
     try {

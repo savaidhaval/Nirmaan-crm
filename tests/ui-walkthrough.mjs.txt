@@ -1,0 +1,114 @@
+import { createRequire } from 'node:module';
+const { chromium } = createRequire(import.meta.url)('/opt/node-tools/node_modules/playwright');
+const BASE = 'http://localhost:8787', SHOTS = '/tmp/claude-0/scratch/shots';
+const run = Date.now().toString(36);
+let pass = 0, fail = 0; const ok = (n, c, x = '') => { c ? pass++ : fail++; console.log(`${c ? 'PASS' : 'FAIL'}  ${n}${c ? '' : '  ' + x}`); };
+class C { constructor() { this.cookie = ''; } async call(m, p, b) { const h = { 'X-NirmaanCRM': '1' }; if (this.cookie) h.cookie = this.cookie; let body; if (b) { h['Content-Type'] = 'application/json'; body = JSON.stringify(b); }
+  const r = await fetch(BASE + p, { method: m, headers: h, body }); const sc = r.headers.get('set-cookie'); if (sc) this.cookie = sc.split(';')[0]; let d = null; try { d = await r.json(); } catch (e) {} return { status: r.status, data: d && d.data, err: d && d.error }; } }
+const o = new C(); await o.call('POST', '/api/auth/login', { email: 'owner@test.local', password: 'CiStrongPass-12345' });
+const pid = (await o.call('POST', '/api/projects', { name: 'UI Tower ' + run, code: 'UI' + run.toUpperCase().slice(-5), budget_paise: 5e9 })).data.id;
+await o.call('POST', '/api/settings/con.enabled', { value: 'on' });
+await o.call('POST', '/api/settings/con.pm_approval_limit_paise', { value: 50000000 });
+const users = {};
+for (const role of ['site', 'pm', 'purchase', 'accounts']) {
+  const email = `ui-${role}-${run}@test.local`; const r = await o.call('POST', '/api/users', { name: 'UI ' + role, email, role, projects: role === 'site' ? [pid] : [] });
+  const c = new C(); await c.call('POST', '/api/auth/login', { email, password: r.data.temporaryPassword }); const pw = 'UiStrongPass-' + run;
+  await c.call('POST', '/api/auth/change-password', { currentPassword: r.data.temporaryPassword, newPassword: pw }); users[role] = { email, pw };
+}
+const browser = await chromium.launch();
+const ctxs = {};
+async function page(role) {
+  if (!ctxs[role]) {
+    const ctx = await browser.newContext({ viewport: { width: 390, height: 800 } });
+    const email = role === 'owner' ? 'owner@test.local' : users[role].email, password = role === 'owner' ? 'CiStrongPass-12345' : users[role].pw;
+    const r = await ctx.request.post(BASE + '/api/auth/login', { headers: { 'X-NirmaanCRM': '1', 'Content-Type': 'application/json' }, data: { email, password } });
+    if (!r.ok()) throw new Error('login ' + role + ' ' + r.status());
+    ctxs[role] = ctx;
+  }
+  const p = await ctxs[role].newPage(); p.on('dialog', (d) => d.accept()); p.on('pageerror', (e) => console.log('PAGEERROR', role, e.message));
+  await p.goto(BASE + '/'); await p.waitForFunction(() => typeof navigate === 'function' && typeof currentUser !== 'undefined' && currentUser, null, { timeout: 15000 }); return p;
+}
+const go = async (p, route) => { await p.evaluate((r) => navigate(r), route); await p.waitForTimeout(800); };
+const toastText = async (p) => { await p.waitForTimeout(500); return p.evaluate(() => (document.getElementById('toast') || {}).textContent || ''); };
+const submit = (p) => p.click('#modal-form button[type=submit]');
+const pick = (p, sel, label) => p.selectOption(sel, { label });
+const shot = (p, n) => p.screenshot({ path: `${SHOTS}/${n}.png` });
+
+// ===== WP-4: indent -> approve -> RFQ =====
+let s = await page('site'); await go(s, 'procurement');
+await s.click('#p-indent'); await s.fill('#ie_needed_by', '2026-12-31');
+await s.fill('[data-row]:nth-child(1) [data-d]', 'Cement'); await s.fill('[data-row]:nth-child(1) [data-q]', '100'); await s.fill('[data-row]:nth-child(1) [data-u]', 'bags');
+await s.fill('[data-row]:nth-child(2) [data-d]', 'Sand'); await s.fill('[data-row]:nth-child(2) [data-q]', '5'); await s.fill('[data-row]:nth-child(2) [data-u]', 'brass');
+await shot(s, '01-site-indent-form'); await s.click('#ie-ok');
+ok('site raises an indent from the phone screen', /Request sent/.test(await toastText(s)));
+await s.waitForTimeout(800); await shot(s, '02-site-indent-list');
+ok('site sees the indent waiting', (await s.textContent('#procurement-list')).includes('IND-UI'));
+let pm = await page('pm'); await go(pm, 'procurement'); await pm.click('[data-ind=approve]');
+ok('PM approves with one tap', /Done/.test(await toastText(pm)));
+let pu = await page('purchase'); await go(pu, 'procurement'); await shot(pu, '03-purchase-approved-indent'); await pu.click('[data-ind=convert]');
+ok('Purchase makes the RFQ with one tap', /RFQ created/.test(await toastText(pu)));
+await pu.waitForTimeout(800);
+await pu.click('[data-rfq]'); await pu.waitForSelector('#rq-add');
+ok('RFQ shows both indent items', (await pu.textContent('.modal')).includes('Cement') && (await pu.textContent('.modal')).includes('Sand'));
+const vend = (await o.call('POST', '/api/procurement/vendors', { name: 'UI Vendor ' + run })).data.id; await pu.click('#rq-add');
+await pu.waitForSelector('#f_vendor_id'); await pick(pu, '#f_vendor_id', 'UI Vendor ' + run);
+const rateFields = await pu.$$('input[id^="f_r"]'); ok('quote form asks a rate per item', rateFields.length === 2);
+await rateFields[0].fill('400'); await rateFields[1].fill('5000'); await shot(pu, '04-line-quote-form'); await submit(pu);
+ok('quote total is worked out for you', /Quote added/.test(await toastText(pu)));
+await pu.waitForTimeout(800); ok('quote total = 100x400 + 5x5000 = 65,000', (await pu.textContent('.modal')).replace(/\s/g, '').includes('65,000'));
+await shot(pu, '05-rfq-compare');
+
+// ===== WP-4: PO -> GRN by line -> payments =====
+const po = (await (async () => { const pc = new C(); const r = await pc.call('POST', '/api/auth/login', { email: users.purchase.email, password: users.purchase.pw });
+  const p = await pc.call('POST', '/api/procurement/pos', { project_id: pid, vendor_id: vend, gst_bp: 1800, items: [{ description: 'Cement', qty: 100, unit: 'bags', rate_paise: 40000 }] });
+  await pc.call('POST', `/api/procurement/pos/${p.data.id}/submit`, {}); await o.call('POST', `/api/procurement/pos/${p.data.id}/approve`, {}); return p.data; })());
+s = await page('site'); await go(s, 'procurement'); await s.click(`[data-grn="${po.id}"]`); await s.waitForSelector('#modal-form');
+const q = await s.$('input[id^="f_q"]'); await q.fill('90'); await shot(s, '06-site-receive-by-line'); await submit(s);
+ok('site records 90 of 100 bags', /Receipt recorded/.test(await toastText(s)));
+const st1 = (await o.call('GET', '/api/procurement/pos')).data.pos.find((x) => x.id === po.id).status; ok('PO becomes part received', st1 === 'part_received', st1);
+const ac = new C(); await ac.call('POST', '/api/auth/login', { email: users.accounts.email, password: users.accounts.pw });
+const bill = (await o.call('POST', '/api/procurement/bills', { po_id: po.id, vendor_id: vend, bill_no: 'UIB' + run, amount_paise: 1000000 })).data.id;
+let a = await page('accounts'); await go(a, 'procurement'); await a.click(`[data-pay="${bill}"]`); await a.waitForSelector('#f_amount_paise'); await a.fill('#f_amount_paise', '4000'); await shot(a, '07-accounts-part-payment'); await submit(a);
+ok('Accounts pays the first instalment', /Payment recorded/.test(await toastText(a)));
+await a.waitForTimeout(800); ok('screen shows the exact balance still due', (await a.textContent('#procurement-list')).replace(/\s/g, '').includes('Stilldue₹6,000'), (await a.textContent('#procurement-list')).slice(-300));
+await shot(a, '08-bill-balance');
+await a.click(`[data-pay="${bill}"]`); await a.waitForSelector('#f_amount_paise'); await submit(a);
+ok('second instalment (default = balance) settles it', /Payment recorded/.test(await toastText(a)));
+
+// ===== WP-5: contractors =====
+pu = await page('purchase'); await go(pu, 'contractors');
+await pu.click('#con-new'); await pu.fill('#f_name', 'UI Civil ' + run); await pu.fill('#f_trade', 'civil'); await pu.fill('#f_pan', 'ABCDE1234F'); await submit(pu);
+ok('Purchase adds a contractor', /Contractor added/.test(await toastText(pu)));
+await pu.waitForTimeout(600); await pu.click('#con-wo'); await pu.waitForSelector('#f_scope');
+await pick(pu, '#f_project_id', 'UI Tower ' + run); await pick(pu, '#f_contractor_id', 'UI Civil ' + run + ' · civil');
+await pu.fill('#f_scope', 'RCC structure'); await pu.fill('#f_value_paise', '1000000'); await pu.fill('#f_retention', '5'); await pu.fill('#f_advance_paise', '100000'); await shot(pu, '09-new-work-order'); await submit(pu);
+ok('work order is drafted', /Work order drafted/.test(await toastText(pu)));
+await pu.waitForSelector('#wo-submit'); await shot(pu, '10-wo-detail-draft'); await pu.click('#wo-submit');
+ok('sent for approval', /Sent for approval/.test(await toastText(pu)));
+let ow = await page('owner'); await go(ow, 'contractors'); await ow.click('[data-wo]'); await ow.waitForSelector('#wo-approve'); await ow.click('#wo-approve');
+ok('Owner approves the work order', /Approved/.test(await toastText(ow)));
+a = await page('accounts'); await go(a, 'contractors'); await a.click('[data-wo]'); await a.waitForSelector('#wo-adv'); await a.click('#wo-adv'); await a.waitForSelector('#f_amount_paise'); await submit(a);
+ok('Accounts pays the Rs 1,00,000 advance', /Recorded/.test(await toastText(a)));
+pu = await page('purchase'); await go(pu, 'contractors'); await pu.click('[data-wo]'); await pu.waitForSelector('#wo-ra'); await pu.click('#wo-ra');
+await pu.fill('#ra-gross', '200000'); await pu.fill('#ra-rec', '50000'); await pu.fill('#ra-due', '2026-12-05'); await shot(pu, '11-new-ra-bill'); await pu.click('#ra-ok');
+ok('RA bill 1 saved with net Rs 1,40,000', /net ₹1,40,000/.test(await toastText(pu)), await toastText(pu));
+await pu.waitForTimeout(900); await shot(pu, '12-ra-bill-draft');
+pm = await page('pm'); await go(pm, 'contractors'); await pm.click('[data-wo]'); await pm.waitForSelector('[data-ra=check]'); await pm.click('[data-ra=check]'); await pm.waitForSelector('[data-ra=approve]'); await pm.click('[data-ra=approve]');
+ok('PM checks then approves the RA bill', /Done/.test(await toastText(pm)));
+a = await page('accounts'); await go(a, 'contractors'); await a.click('[data-wo]'); await a.waitForSelector('[data-ra-pay]'); await a.click('[data-ra-pay]'); await a.waitForSelector('#f_amount_paise'); await a.fill('#f_amount_paise', '100000'); await submit(a);
+ok('Accounts pays Rs 1,00,000 part payment', /Recorded/.test(await toastText(a)));
+await a.waitForTimeout(900); const modal = (await a.textContent('.modal')).replace(/\s+/g, ' ');
+ok('screen shows paid 1,00,000 and due 40,000', modal.includes('paid ₹1,00,000') && modal.includes('due ₹40,000'), modal.slice(0, 700));
+ok('screen shows advance outstanding 50,000 and retention held 10,000', modal.includes('outstanding ₹50,000') && modal.includes('Retention held: ₹10,000'), modal.slice(0, 500));
+await shot(a, '13-wo-after-part-payment');
+await a.click('[data-ra-pay]'); await a.waitForSelector('#f_amount_paise'); await submit(a);
+await a.waitForTimeout(1200); ok('second part clears the bill (status paid)', (await a.textContent('.modal')).includes('paid') && !(await a.textContent('.modal')).includes('Record payment'));
+await shot(a, '14-ra-paid');
+const site2 = await page('site'); await go(site2, 'contractors');
+ok('site sees contractors/work orders without any amounts', !(await site2.textContent('#con-body')).includes('₹'), (await site2.textContent('#con-body')).slice(0, 200));
+await shot(site2, '15-site-view');
+// plain-language off state
+await o.call('POST', '/api/settings/con.enabled', { value: 'off' }); const pu2 = await page('purchase'); await go(pu2, 'contractors');
+ok('module off shows a plain message', (await pu2.textContent('#con-body')).includes('switched off'));
+await o.call('POST', '/api/settings/con.enabled', { value: 'on' });
+await browser.close(); console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);

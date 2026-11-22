@@ -35,3 +35,4 @@
 - Changed: Export-everything and the nightly backup now come in 3 parts (the free plan allows 50 database reads per run). `scripts/restore.mjs` takes all parts and now restores every table, including ones it used to skip.
 - Changed: `api()` errors carry `.data` so screens can offer "save anyway". Staging workers.dev address switched off; crm.mysociety.tech is the only public address.
 - Migration 0015; code in `src/routes/contractors.js`, `public/pages7.js`; test `tests/contractors.mjs` (61 checks, in CI).
+- Fix (found by the browser walkthrough): the Contractors menu entry broke the whole app because it was wired before its script loaded; site engineers could not see any PO to receive material against (new money-free `/api/procurement/pos-to-receive`); the Contractors screen hid its buttons from Purchase/Accounts. Browser walkthrough: 26 checks as 5 roles on a phone-sized screen (`tests/ui-walkthrough.mjs.txt`, screenshots in `docs/ui-walkthrough/`).

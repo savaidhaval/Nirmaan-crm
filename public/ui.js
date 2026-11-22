@@ -10,7 +10,7 @@ function setScopeProject(id) {
   scopeProject = Number(id) || 0;
   try { scopeProject ? localStorage.setItem('nirmaan.project', String(scopeProject)) : localStorage.removeItem('nirmaan.project'); } catch (e) { /* ignore */ }
 }
-const SCOPED_PATHS = /^\/api\/(approvals|drawings|site\/|procurement\/(pos|rfqs|bills|grns|indents|vendors\/\d+\/ledger)|contractors\/work-orders|sales\/(leads|bookings)|documents|brochures|dashboard)/;
+const SCOPED_PATHS = /^\/api\/(approvals|drawings|site\/|procurement\/(pos|pos-to-receive|rfqs|bills|grns|indents|vendors\/\d+\/ledger)|contractors\/work-orders|sales\/(leads|bookings)|documents|brochures|dashboard)/;
 
 async function api(path, options = {}) {
   if (scopeProject && (options.method || 'GET') === 'GET' && SCOPED_PATHS.test(path) && !/[?&]project_id=/.test(path)) {
