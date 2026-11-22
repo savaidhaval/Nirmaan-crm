@@ -56,3 +56,22 @@ Use a real phone for the site steps. Tick each line. Anything that fails: note t
 5. Finance > TDS: record a bill with 194C 1%; a vendor without PAN gets 20%; record the challan; download Tally CSVs.
 6. Booking > Statement of account prints with interest block.
 7. Privacy requests: find by mobile, export, erase a cancelled booking.
+
+
+## UAT: flows added in 2026 (tick each on STAGING, then production)
+1. **Menu**: sign in as Owner, PM, Site, Sales, Accounts, HR. Each sees only its groups. Open two groups at once; reload: both stay open.
+2. **Install**: top-bar install icon opens steps for iPhone/iPad, Android, Windows, Mac. On Android/Chrome tap Install now.
+3. **Offline**: as Site, open Drawings, switch on aeroplane mode, reload (app still opens), raise a snag, switch off aeroplane mode: snag arrives once.
+4. **Profile**: add a picture, crop it, save; position and mobile number show on Team (number only to Owner/PM).
+5. **Redevelopment**: new society (type Redevelopment project), paste 10 members, mark 6 consented: Owner and PM are notified once; approvals row note appears. Sales cannot open it.
+6. **Transit rent**: set rent for a member; 12 months appear; record month 1 paid with a cheque number; reverse it with a reason.
+7. **Meetings**: add a meeting with minutes PDF and a next action 2 days ahead; the PM is reminded.
+8. **Demand letters**: 25 ready demands emailed in steps; one forced failure retried; print sheet of 10.
+9. **Bank statement**: import a 20-row CSV, confirm 3 matches, ignore the rest, import the same file again: nothing is added.
+10. **Tally**: set ledger names, export a day of receipts, import it into a TEST company in Tally; totals match the receipt register.
+11. **Statement link**: Accounts sends a statement link; the customer opens it with no login; revoke; it says expired.
+12. **Drawing seen**: PM issues R2; Site taps "I have seen R2"; PM sees 1 of N; an unconfirmed user is reminded after 24 hours.
+13. **Enquiry form**: submit /enquiry with consent ticked: a lead appears (source website); the same number again adds a note, not a second lead.
+14. **Dashboard**: Owner home shows Needs your attention; each line opens its list; Insights downloads open in Excel.
+15. **Delete**: PM and Accounts cannot delete anything; Owner can.
+16. **Backup**: More → Everything backup (3 files) downloads; run the restore drill on staging.

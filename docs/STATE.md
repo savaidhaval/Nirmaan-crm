@@ -146,3 +146,6 @@ Code complete; 27 API suites and 15 browser walkthroughs pass locally. Migration
 
 ## WP-21 (offline) status
 Hindi/Marathi dropped by Dhaval; offline mode built and walked through in a browser with the network switched off (17 checks). No migration. Remaining before the WP-25 stop: WP-23 (hardening and final checks). PR 19 (WP-20) is still waiting for CI approval and merge.
+
+## WP-23 status
+Hardening checks pass (docs/HARDENING.md). NOT deployed beyond what Dhaval has already merged: the WP-23 fixes are in the next PR. Real-world trials still open: real email provider (bulk letters), real Cloudflare AI model, Tally import with the accountant, and Worker CPU time (read from the Cloudflare dashboard after deploy). WP-25 is the stop point: no work beyond it unless Dhaval says so.

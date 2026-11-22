@@ -13,7 +13,7 @@ const PRIVATE_ID_ROLES = ['owner', 'accounts'];
 const KIND_PREFIX = { credit_note: 'CN', debit_note: 'DN', adjustment: 'AD' };
 const STARTER_HANDOVER = ['All dues cleared', 'Snag inspection done and snags fixed', 'Possession letter signed', 'Keys handed over', 'Utility meters transferred'];
 const todayIST = () => new Date(Date.now() + 19800000).toISOString().substring(0, 10);
-const fyOf = (d = new Date(Date.now() + 19800000)) => { const y = d.getUTCFullYear(), m = d.getUTCMonth() + 1; const a = m >= 4 ? y : y - 1; return `${a}-${String(a + 1).slice(2)}`; };
+export const fyOf = (d = new Date(Date.now() + 19800000)) => { const y = d.getUTCFullYear(), m = d.getUTCMonth() + 1; const a = m >= 4 ? y : y - 1; return `${a}-${String(a + 1).slice(2)}`; };
 
 // ----- Service functions -----
 // Give a demand its number the first time the letter is printed or sent. Same number every time after that. Not for stages that have not been reached.

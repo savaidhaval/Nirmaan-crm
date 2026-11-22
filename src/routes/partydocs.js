@@ -25,6 +25,8 @@ export function registerPartyDocs(router, h) {
 
   // The party's own module decides who may see and change its documents. Site never sees them.
   const guard = (action, fn) => async (req, env) => {
+    if (!/(^|;\s*)[A-Za-z_.-]*session[A-Za-z_.-]*=/.test(req.headers.get('cookie') || '')) return json({ ok: false, error: 'Please sign in.' }, 401);   // sign-in comes before anything else is checked
+    if (req.method !== 'GET' && req.headers.get('X-NirmaanCRM') !== '1') return json({ ok: false, error: 'Invalid request.' }, 403);
     const u = new URL(req.url).searchParams;
     let type = u.get('party_type');
     if (!type && req.method !== 'GET') { try { type = (await req.clone().json()).party_type; } catch (e) { type = null; } }
