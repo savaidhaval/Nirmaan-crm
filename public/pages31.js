@@ -1,5 +1,5 @@
 // pages31.js — the menu follows the five CRM modules. Loaded last: it takes whatever menu the earlier screens built and regroups it,
-// so no screen is lost. People, Library, Admin and You stay as they were. Module 5 has no screen of its own yet, so it stays hidden until one is added.
+// so no screen is lost. People, Library, Admin and You stay as they were. Module 5 holds Possession & handover and Snags (pages32.js adds them).
 Object.assign(ICONS, {
   'g-site': 'M3 21h18M5 21V10l5-4v15M10 10h9v11M13 14h3M13 17h3',
   'g-handover': 'M8 15a4 4 0 110-8 4 4 0 010 8zM11 11h10M18 11v3M21 11v3M4 21h16',
@@ -9,7 +9,7 @@ const NAV_MODULES = [
   ['2. Pre-Sales & Inventory', 'g-sales', ['sales', 'stacking', 'brochures', 'enquiryform']],
   ['3. Site & Contractors', 'g-site', ['drawings', 'site', 'quality', 'stores', 'procurement', 'contractors', 'budget', 'boq', 'petty']],
   ['4. Collections & RERA', 'g-money', ['demandletters', 'rera', 'bank', 'tally', 'finance', 'reports']],
-  ['5. Possession & Society', 'g-handover', []],
+  ['5. Possession & Society', 'g-handover', ['possession', 'snags']],
 ];
 // the open/closed state and icons look the group up by name
 NAV_MODULES.forEach(([name, ic]) => { if (!NAV_GROUPS.some((g) => g[0] === name)) NAV_GROUPS.push([name, ic, []]); });

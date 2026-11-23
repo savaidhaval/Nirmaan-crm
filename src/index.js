@@ -21,6 +21,7 @@ import { registerPetty } from './routes/petty.js';
 import { registerProfile } from './routes/profile.js';
 import { registerFeasibility, feasibilitySweep, feasibilityFromStudy } from './routes/feasibility.js';
 import { registerSiteBoard } from './routes/siteboard.js';
+import { registerPossession } from './routes/possession.js';
 import { registerRedevelopment, redevSweep, societyForProject } from './routes/redevelopment.js';
 import { registerBank, bankSweep } from './routes/bank.js';
 import { registerTally } from './routes/tally.js';
@@ -2312,6 +2313,7 @@ registerContractors(router, { withAuth, json, serverError, visibleProjectIds, no
 registerBudget(router, { withAuth, json, serverError, visibleProjectIds, nowStr, getSetting, csvBom, boqProgressCon, boqProgressPo });
 registerSalesOps(router, { withAuth, json, serverError, visibleProjectIds, userCan, getSetting, nowStr, encryptSetting, clientIp, checkRateLimit });
 registerSiteBoard(router, { withAuth, json, serverError, visibleProjectIds, getSetting });
+registerPossession(router, { withAuth, json, serverError, visibleProjectIds });
 registerRedevelopment(router, { withAuth, json, serverError, visibleProjectIds, nowStr, getSetting, csvBom, encryptSetting, decryptSetting,
   // when the consent threshold is crossed, leave a note on the project's "Society consent" approval row (approvals stays in this file, not in the module)
   onConsent: (env, p) => env.DB.prepare("UPDATE apr_items SET notes = ?1 WHERE project_id = ?2 AND deleted_at IS NULL AND name LIKE 'Society consent%'")
