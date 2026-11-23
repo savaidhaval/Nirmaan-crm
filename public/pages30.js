@@ -78,7 +78,7 @@ PAGES.siteboard = (m) => renderSiteBoard(m);
 Object.assign(ROUTE_TITLES, { siteboard: 'Site board' });
 Object.assign(ICONS, { siteboard: 'M4 4h16v16H4zM8 8h3v3H8zM13 8h3M13 11h3M8 15h8' });
 // the gate QR opens the site board for that project (staff log in as usual)
-window.addEventListener('load', () => { const m = (location.hash || '').match(/^#inspection-(\d+)$/); if (m) { SB.pid = Number(m[1]); const t0 = setInterval(() => { if (typeof currentUser !== 'undefined' && currentUser) { clearInterval(t0); navigate('siteboard'); } }, 300); setTimeout(() => clearInterval(t0), 8000); } });
+window.addEventListener('load', () => { const m = (location.hash || '').match(/^#inspection-(\d+)$/); if (m) { SB.pid = Number(m[1]); setScopeProject(SB.pid); try { sessionStorage.setItem('nirmaan.welcomed', '1'); } catch (e) { /* ignore */ } const t0 = setInterval(() => { if (typeof currentUser !== 'undefined' && currentUser) { clearInterval(t0); navigate('siteboard'); } }, 300); setTimeout(() => clearInterval(t0), 8000); } });
 
 async function renderSiteBoard(main) {
   const projects = await getProjects();
