@@ -798,15 +798,32 @@ function renderDrawings(main) {
   loadDrawings();
 }
 
+// Upload a drawing sheet (PDF or picture) for a project; returns the document id.
+async function drwUpload(file, projectId, title) {
+  const fd = new FormData(); fd.append('file', typeof compressFile === 'function' ? await compressFile(file) : file, file.name);
+  fd.append('title', title); fd.append('category', 'drawing'); fd.append('module', 'drawings'); fd.append('project_id', String(projectId)); fd.append('audience', 'internal');
+  const up = await act(api('/api/files/upload', { method: 'POST', body: fd })); return up ? up.data.id : null;
+}
+const DRW_STATUS = [['draft', 'Draft (office only)'], ['ifc', 'Issued For Construction']];
+
 async function newDrawing() {
-  const v = await openForm({ title: 'New drawing', fields: [
+  const v = await openForm({ title: 'New drawing', intro: 'Attach the drawing to save it as its first revision.', fields: [
     { name: 'project_id', label: 'Project', type: 'select', options: await projectOptions() },
     { name: 'code', label: 'Drawing code', required: true, placeholder: 'STR-A-501' }, { name: 'title', label: 'Title', required: true },
     { name: 'discipline', label: 'Discipline', type: 'select', options: [['arch', 'Architectural'], ['struct', 'Structural'], ['mep', 'MEP'], ['fire', 'Fire'], ['landscape', 'Landscape'], ['interior', 'Interior']] },
-    { name: 'zone', label: 'Wing / zone' }] });
+    { name: 'zone', label: 'Wing / zone' },
+    { name: 'file', label: 'Drawing file (PDF or photo)', type: 'file' },
+    { name: 'status', label: 'This first revision is', type: 'select', options: DRW_STATUS, help: 'Issued For Construction goes to site at once.' },
+    { name: 'received_from', label: 'Received from (architect / engineer)' }] });
   if (!v) return;
-  v.project_id = Number(v.project_id);
-  if (await act(api('/api/drawings', { method: 'POST', body: v }), 'Drawing added')) loadDrawings();
+  const body = { project_id: Number(v.project_id), code: v.code, title: v.title, discipline: v.discipline, zone: v.zone };
+  const r = await act(api('/api/drawings', { method: 'POST', body }));
+  if (!r) return;
+  if (v.file) {
+    const doc = await drwUpload(v.file, body.project_id, `${v.code} R0`);
+    if (doc && await act(api(`/api/drawings/${r.data.id}/revisions`, { method: 'POST', body: { status: v.status, received_from: v.received_from, note: 'First issue', document_id: doc } }))) toast(`${v.code} saved with its drawing`);
+  } else toast('Drawing added. Add the file with "New revision".');
+  loadDrawings();
 }
 
 async function loadDrawings() {
@@ -815,7 +832,7 @@ async function loadDrawings() {
     const draw = () => {
       const q = ($('drw-q').value || '').toLowerCase();
       const rows = all.filter((d) => !q || d.code.toLowerCase().includes(q) || d.title.toLowerCase().includes(q));
-      $('drawings-list').innerHTML = rows.map((d) => `<div class="card clickable" data-id="${d.id}"><div class="row"><div><b>${esc(d.code)}</b><p class="muted">${esc(d.title)} · ${esc(d.discipline)}${d.zone ? ' · ' + esc(d.zone) : ''}</p></div>${d.current_ifc_rev ? chip(d.current_ifc_rev + ' · IFC', 'good') : chip('No IFC yet', 'warn')}</div></div>`).join('')
+      $('drawings-list').innerHTML = rows.map((d) => `<div class="card clickable" data-id="${d.id}"><div class="row"><div><b>${esc(d.code)}</b><p class="muted">${esc(d.title)} · ${esc(d.discipline)}${d.zone ? ' · ' + esc(d.zone) : ''}</p></div><div>${d.current_ifc_rev ? chip(d.current_ifc_rev + ' · IFC', 'good') : chip('No IFC yet', 'warn')}${d.current_ifc_rev && !d.current_ifc_doc ? '<br>' + chip('No file', 'bad') : ''}</div></div></div>`).join('')
         || `<div class="empty-state"><p>${currentUser.role === 'site' ? 'No drawings have been issued for construction yet.' : 'No drawings yet.'}</p></div>`;
       $('drawings-list').querySelectorAll('[data-id]').forEach((c) => { c.onclick = () => drawingDetail(all.find((x) => String(x.id) === c.dataset.id)); });
     };
@@ -825,22 +842,32 @@ async function loadDrawings() {
 
 async function drawingDetail(d) {
   const revs = (await api(`/api/drawings/${d.id}/revisions`)).data.revisions;
+  const canC = userCanClient('drawings', 'C');
   const ov = document.createElement('div');
   ov.className = 'modal-overlay';
   ov.innerHTML = `<div class="modal"><h2>${esc(d.code)}</h2><p class="muted">${esc(d.title)}</p>
-    ${revs.map((r) => `<div class="card"><div class="row"><b>${esc(r.rev_no)}</b>${statusChip(r.status)}</div><p class="muted">${r.issued_on ? 'Issued ' + esc(r.issued_on) : 'Not issued'}${r.received_from ? ' · from ' + esc(r.received_from) : ''}</p>${r.status === 'superseded' ? '<p style="color:#dc2626"><b>SUPERSEDED — do not build from this.</b></p>' : ''}${r.note ? `<p>${esc(r.note)}</p>` : ''}</div>`).join('') || '<p class="muted">No revisions yet.</p>'}
-    <div class="modal-actions">${userCanClient('drawings', 'C') ? '<button class="btn" id="drw-rev">Issue new revision</button>' : ''}<button class="btn btn-primary" id="drw-close">Close</button></div></div>`;
+    ${revs.map((r) => `<div class="card"><div class="row"><b>${esc(r.rev_no)}</b>${statusChip(r.status)}</div><p class="muted">${r.issued_on ? 'Issued ' + esc(r.issued_on) : 'Not issued'}${r.received_from ? ' · from ' + esc(r.received_from) : ''}</p>${r.note ? `<p>${esc(r.note)}</p>` : ''}${r.status === 'superseded' ? '<p style="color:#dc2626"><b>Superseded — do not build from this.</b></p>' : ''}
+      <div class="row-btns">${r.document_id ? `<a class="btn small btn-primary" href="/api/files/download/${r.document_id}">View drawing</a>` : `<span class="muted">No file attached</span>${canC ? ` <button class="btn small" data-rfile="${r.id}">Attach file</button>` : ''}`}</div></div>`).join('') || '<p class="muted">No revisions yet.</p>'}
+    <div class="modal-actions">${canC ? '<button class="btn btn-primary" id="drw-rev">+ New revision</button>' : ''}<button class="btn" id="drw-close">Close</button></div></div>`;
   document.body.appendChild(ov);
   $('drw-close').onclick = () => ov.remove();
   const rb = $('drw-rev');
   if (rb) rb.onclick = async () => {
-    const v = await openForm({ title: `New revision of ${d.code}`, fields: [
-      { name: 'status', label: 'Status', type: 'select', options: [['draft', 'Draft (office only)'], ['ifc', 'Issued For Construction']], help: 'Issuing IFC supersedes the previous IFC and tells site and PM.' },
+    const v = await openForm({ title: `New revision of ${d.code}`, intro: `This becomes R${revs.length}. Earlier revisions and their files are kept.`, fields: [
+      { name: 'file', label: 'Revised drawing (PDF or photo)', type: 'file', required: true },
+      { name: 'status', label: 'Status', type: 'select', options: DRW_STATUS, help: 'Issuing IFC supersedes the previous IFC and tells site and PM.' },
       { name: 'received_from', label: 'Received from (architect / engineer)' }, { name: 'note', label: 'What changed', type: 'textarea' }] });
     if (!v) return;
-    const r = await act(api(`/api/drawings/${d.id}/revisions`, { method: 'POST', body: v }));
+    const doc = await drwUpload(v.file, d.project_id, `${d.code} R${revs.length}`); if (!doc) return;
+    const r = await act(api(`/api/drawings/${d.id}/revisions`, { method: 'POST', body: { status: v.status, received_from: v.received_from, note: v.note, document_id: doc } }));
     if (r) { toast(`${r.data.rev_no} saved`); ov.remove(); loadDrawings(); }
   };
+  ov.querySelectorAll('[data-rfile]').forEach((b) => { b.onclick = async () => {
+    const v = await openForm({ title: 'Attach the drawing file', fields: [{ name: 'file', label: 'Drawing (PDF or photo)', type: 'file', required: true }] }); if (!v) return;
+    const r = revs.find((x) => String(x.id) === b.dataset.rfile);
+    const doc = await drwUpload(v.file, d.project_id, `${d.code} ${r.rev_no}`); if (!doc) return;
+    if (await act(api(`/api/drawings/revisions/${r.id}/file`, { method: 'POST', body: { document_id: doc } }), 'File attached')) { ov.remove(); drawingDetail(d); }
+  }; });
 }
 
 // ---------- Site ----------

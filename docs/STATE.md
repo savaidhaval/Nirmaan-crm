@@ -170,3 +170,6 @@ Built after Dhaval's answer (architect, engineer and CA certificates before any 
 
 ## Rest of the audit (migration 0038)
 All audit items are now built. 32 API suites pass on a clean database (new: remaining, 47 checks) and a phone walkthrough (5 checks). Not deployed until Dhaval approves the PR. Recording itself needs a real phone (the browser asks for the microphone once).
+
+## Drawing files
+No migration (drw_revisions.document_id already existed). 33 API suites pass (new: drawing_files, 14 checks) and a phone walkthrough (4 checks). In the same PR as the rest of the audit.
