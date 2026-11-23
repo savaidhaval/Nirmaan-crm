@@ -1281,12 +1281,12 @@ const MUMBAI_TEMPLATE = [
   ['Site survey & layout plan', 'Licensed surveyor', 'compliance', null, 0, 'Survey plan, boundary demarcation'],
   ['Society consent & DA/development agreement registration', 'Society / Advocate', 'compliance', null, 1, 'Society resolution, registered DA'],
   ["Existing tenants' transit-rent & bank guarantee arrangements", 'Internal / Bank', 'compliance', 30, 1, 'Permanent alternate accommodation agreements, BG copies'],
-  ['Provisional CFO / Fire NOC', 'Chief Fire Officer, Mumbai Fire Brigade (MCGM)', 'noc', 30, 0, 'Fire layout drawings, CFO application receipt'],
+  ['Provisional CFO / Fire NOC (Chief Fire Officer)', 'Chief Fire Officer, Mumbai Fire Brigade (MCGM)', 'noc', 30, 0, 'Fire layout drawings, CFO application receipt'],
   ['Concessions (premium / fungible FSI, open space deficiency — confirm items with your architect)', 'MCGM', 'approval', 30, 0, 'Concession drawings, premium challans'],
   ['IOD application (BMC building-proposal system / AutoDCR — confirm current portal with your architect)', 'MCGM', 'approval', null, 0, 'AutoDCR submission receipt, approved plan, title documents'],
-  ['Height NOC (AAI colour coding)', 'Airports Authority of India', 'noc', 30, 0, 'Colour-coded zoning map, NOCAS application'],
-  ['Environment clearance / SEIAA (if built-up >= 20,000 sqm — confirm with your environment consultant)', 'SEIAA / MoEFCC', 'noc', 45, 0, 'EC application, consultant report'],
-  ['Tree authority permission', 'MCGM Tree Authority', 'noc', 30, 0, 'Tree survey, application receipt'],
+  ['Aviation / height NOC (AAI colour coding)', 'Airports Authority of India', 'noc', 30, 0, 'Colour-coded zoning map, NOCAS application'],
+  ['Environment clearance (MoEF / SEIAA) (if built-up >= 20,000 sqm — confirm with your environment consultant)', 'SEIAA / MoEFCC', 'noc', 45, 0, 'EC application, consultant report'],
+  ['Tree authority NOC (tree cutting / transplantation permission)', 'MCGM Tree Authority', 'noc', 30, 0, 'Tree survey, application receipt'],
   ['Traffic NOC (if applicable)', 'Mumbai Traffic Police', 'noc', 30, 0, 'Site plan, access details'],
   ['CRZ / MCZMA clearance (if coastal plot)', 'MCZMA', 'noc', 45, 0, 'CRZ map, consultant report'],
   ['Collector / land-tenure permission (if applicable)', 'Collector', 'noc', 30, 0, 'Land tenure documents'],
@@ -1326,6 +1326,31 @@ async function loadMumbaiTemplate(env, projectId, redevelopment, userId, extra =
   ]);
   return { count: rows.length };
 }
+
+// Adds the four standard NOCs (Aviation, Tree, MoEF / environment, CFO) to a project that already has an approvals list, skipping any it already has.
+const STANDARD_NOCS = [[/aviation|height noc|\baai\b/i, 'Aviation / height NOC'], [/\btree\b/i, 'Tree authority NOC'], [/environment|seiaa|moef/i, 'Environment clearance (MoEF / SEIAA)'], [/provisional cfo|cfo \/ fire|\bcfo\b.*provisional/i, 'Provisional CFO / Fire NOC']];
+router.post('/api/approvals/add-standard-nocs', async (req, env) => {
+  return withAuth(req, env, 'approvals', 'C', async (req, env) => {
+    try {
+      if (!['owner', 'pm'].includes(req.user.role)) return json({ ok: false, error: 'Only the Owner or PM can add approvals.' }, 403);
+      const { project_id } = await req.json().catch(() => ({}));
+      if (!project_id || !(await visibleProjectIds(env, req.user)).includes(Number(project_id))) return json({ ok: false, error: 'Not allowed.' }, 403);
+      const existing = (await env.DB.prepare('SELECT name FROM apr_items WHERE project_id = ? AND deleted_at IS NULL').bind(Number(project_id)).all()).results.map((r) => r.name);
+      const now = nowStr(); const stmts = []; const added = [];
+      MUMBAI_TEMPLATE.forEach((r, i) => {
+        const hit = STANDARD_NOCS.find(([re]) => re.test(r[0]));
+        if (!hit || r[2] !== 'noc' || existing.some((n) => hit[0].test(n))) return;
+        added.push(hit[1]);
+        stmts.push(env.DB.prepare(`INSERT INTO apr_items (project_id, name, authority, category, stage_order, status, reminder_days, notes, created_at, gate_key) VALUES (?, ?, ?, 'noc', ?, 'not_started', ?, ?, ?, ?)`)
+          .bind(Number(project_id), r[0].toUpperCase(), r[1], (i + 1) * 10, r[3] || 30, r[5], now, gateOf({ name: r[0] })));
+      });
+      if (!stmts.length) return json({ ok: true, data: { added: 0, names: [], message: 'All four standard NOCs (Aviation, Tree, MoEF and CFO) are already on this project.' } });
+      stmts.push(env.DB.prepare("INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, 'create', 'apr_items', ?, ?, ?)").bind(req.user.user_id, Number(project_id), `Added standard NOCs: ${added.join(', ')}`, now));
+      await env.DB.batch(stmts);
+      return json({ ok: true, data: { added: added.length, names: added } });
+    } catch (e) { return serverError(e, 'add-nocs'); }
+  });
+});
 
 router.post('/api/approvals/load-template', async (req, env) => {
   return withAuth(req, env, 'approvals', 'C', async (req, env) => {

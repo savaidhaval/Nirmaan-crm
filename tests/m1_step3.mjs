@@ -123,4 +123,16 @@ ok('each group has a ready message that names the items and what is late', /zz f
 ok('the message marks the late item', /LATE/.test(grp.text));
 ok('a site user on another project cannot read the follow-ups', (await (await mkUser('site', [pid2])).call('GET', `/api/projects/${redev}/consultant-summary`)).status === 403);
 
+// ============ 6. standard NOCs (Aviation, Tree, MoEF, CFO) can be added to a project that already has a list ============
+const pn = await mkProj('N', 'new_build');
+await o.call('POST', '/api/approvals', { project_id: pn, name: 'zz own item ' + run, authority: 'MCGM' });
+const siteU = await mkUser('site', [pn]);
+ok('site cannot add NOCs', (await siteU.call('POST', '/api/approvals/add-standard-nocs', { project_id: pn })).status === 403);
+const addN = await pm.call('POST', '/api/approvals/add-standard-nocs', { project_id: pn });
+ok('the four standard NOCs are added to a project that lacks them', addN.status === 200 && addN.data.added === 4, JSON.stringify(addN));
+const nn = (await o.call('GET', '/api/approvals')).data.items.filter((a) => a.project_id === pn).map((a) => a.name);
+ok('Aviation, Tree, Environment (MoEF) and CFO NOCs are on the list', ['AVIATION', 'TREE', 'ENVIRONMENT', 'CFO'].every((k) => nn.some((n) => n.includes(k))), JSON.stringify(nn));
+ok('adding again adds nothing', (await pm.call('POST', '/api/approvals/add-standard-nocs', { project_id: pn })).data.added === 0);
+ok('a project loaded from the Mumbai checklist already has all four', (await pm.call('POST', '/api/approvals/add-standard-nocs', { project_id: pid })).data.added === 0);
+
 console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);
