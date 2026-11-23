@@ -396,3 +396,10 @@ id TEXT PK, source TEXT, seen_at TEXT
 - rera_certificates (project_id, kind architect | engineer | ca, cert_no, cert_date, issued_by, pct_complete_bp (architect/engineer, 6500 = 65%), amount_paise (CA: amount that may be withdrawn), document_id (required), note, created_by/at, cancelled_at/by, cancel_note). Never deleted. In the backup list.
 - rera_account_entries: architect_cert_id, engineer_cert_id, ca_cert_id — the three certificates a withdrawal relied on (required for every new withdrawal).
 - Setting rera.cert_valid_days (default 90): a certificate older than this on the withdrawal date is not accepted. Confirm with your CA.
+
+## 0036 additions (quality and daily report)
+- qa_pours (project_id, wing, floor, element, location, grade, qty_cum, planned_date, drawing_ref, rmc_supplier, checklist JSON, photo_doc_id, status requested|approved|poured|cancelled, requested_by, approved_by/at, override_note, poured_on, poured_qty_cum, rmc_tickets, poured_by, cancel_note, client_uuid). In the backup list.
+- qa_cubes (pour_id, project_id, age_days 7|28, due_date, required_mpa, result_mpa, status pending|pass|fail, tested_on, lab, report_doc_id, entered_by/at). One row per age per pour. In the backup list.
+- qa_ncrs (project_id, wing, floor, source cube7|cube28|site, pour_id, cube_id, title, details, contractor_id, assigned_to, due_date, status open|closed, correction, closed_by/at, closing_doc_id, photo_doc_id, created_by/at, client_uuid). An open cube28 NCR stops milestone certification at that wing, at its floor and above. In the backup list.
+- site_dpr_work (dpr_id, wing, floor, activity, qty, unit): the work-done lines of a daily report. In the backup list. site_dprs: hours_lost, lost_reason (rain | material | labour | power | approvals | other).
+- Settings: qa.pour_checklist (; separated, empty = built-in list), qa.cube_7day_pct_bp (6500), dpr.activities (; separated, empty = built-in list).

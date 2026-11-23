@@ -14,9 +14,9 @@ const offDb = () => new Promise((resolve, reject) => {
 });
 const offReq = (mode, fn) => offDb().then((db) => new Promise((res, rej) => { const tx = db.transaction('reads', mode); const out = fn(tx.objectStore('reads')); tx.oncomplete = () => res(out && out.result !== undefined ? out.result : undefined); tx.onerror = () => rej(tx.error); })).catch(() => undefined);
 
-const READ_OK = /^\/api\/(projects|drawings|approvals|site\/|procurement\/(pos|pos-to-receive|indents|vendors)|stores|petty|contractors\/for-project|sales\/(leads|inventory|visit-options|handover)|redev\/societies|notifications|team)/;
+const READ_OK = /^\/api\/(qa\/|projects|drawings|approvals|site\/|procurement\/(pos|pos-to-receive|indents|vendors)|stores|petty|contractors\/for-project|sales\/(leads|inventory|visit-options|handover)|redev\/societies|notifications|team)/;
 const WRITE_OK = [
-  [/^\/api\/site\/dprs$/, 'Daily site report'], [/^\/api\/site\/milestones\/\d+\/ready$/, 'Stage reached'], [/^\/api\/contractors\/work-orders\/\d+\/measurements$/, 'Measurement'], [/^\/api\/site\/snags$/, 'Snag'], [/^\/api\/procurement\/indents$/, 'Material request'],
+  [/^\/api\/site\/dprs$/, 'Daily site report'], [/^\/api\/qa\/pours$/, 'Pour card'], [/^\/api\/qa\/pours\/\d+\/poured$/, 'Pour recorded'], [/^\/api\/qa\/cubes\/\d+\/result$/, 'Cube result'], [/^\/api\/qa\/ncrs$/, 'NCR'], [/^\/api\/site\/milestones\/\d+\/ready$/, 'Stage reached'], [/^\/api\/contractors\/work-orders\/\d+\/measurements$/, 'Measurement'], [/^\/api\/site\/snags$/, 'Snag'], [/^\/api\/procurement\/indents$/, 'Material request'],
   [/^\/api\/procurement\/pos\/\d+\/grn(-lines)?$/, 'Material received'], [/^\/api\/stores\/(issue|adjust|receive)$/, 'Stock entry'], [/^\/api\/petty\/entries$/, 'Petty cash entry'],
   [/^\/api\/drawings\/revisions\/\d+\/ack$/, 'Drawing seen'], [/^\/api\/sales\/handover-items\/\d+$/, 'Handover tick'], [/^\/api\/redev\/members\/\d+\/consent$/, 'Consent update'],
 ];

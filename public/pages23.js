@@ -77,7 +77,7 @@ async function ppChoices() { if (!PP_CH) PP_CH = (await api('/api/projects-meta/
 const peopleOpts = (ch, blank = 'Pick a person') => [['', blank], ...ch.people.map((p) => [p.id, `${p.name}${p.position ? ' · ' + p.position : ''}`])];
 const desigOpts = (ch, blank = 'Pick') => [['', blank], ...ch.designations.map((d) => [d, d])];
 const isMgr23 = () => ['owner', 'pm'].includes(currentUser.role);
-const KIND_LABEL = { approval: 'Approval', step: 'Approval step', milestone: 'Milestone', snag: 'Snag', meeting: 'Meeting action' };
+const KIND_LABEL = { approval: 'Approval', step: 'Approval step', milestone: 'Milestone', snag: 'Snag', meeting: 'Meeting action', ncr: 'NCR (quality)' };
 
 // Set the person in charge and the expected date on any task.
 async function assignTask(kind, id, uid, due) {

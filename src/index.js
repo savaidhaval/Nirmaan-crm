@@ -29,6 +29,7 @@ import { registerDashExtras, dashSnapshotSweep } from './routes/dash_extras.js';
 import { registerDrawingAcks, drawingAckSweep } from './routes/drw_acks.js';
 import { registerVisits, visitOptions, cleanFeedback } from './routes/visits.js';
 import { registerProjectPlus } from './routes/projectplus.js';
+import { registerQuality, cubeSweep } from './routes/quality.js';
 import { registerRera, reraSweep } from './routes/rera.js';
 import { registerAi } from './routes/ai.js';
 import { registerProfessionals } from './routes/professionals.js';
@@ -543,7 +544,7 @@ router.get('/api/settings', async (req, env) => {
         try { settings[r.key] = await getSetting(env, r.key); } catch (e) { settings[r.key] = '[unreadable]'; }
       }
       // Values the code uses when nothing is saved yet, so the screen shows what is really in force.
-      const DEFAULTS = { 'con.variation_owner_limit_paise': 50000000, 'con.advance_recovery_bp': 1000, 'con.dlp_months': 60, 'pro.tolerance_bp': 300, 'tax.tds_no_pan_bp': 2000, 'rera.cert_valid_days': 90 };
+      const DEFAULTS = { 'con.variation_owner_limit_paise': 50000000, 'con.advance_recovery_bp': 1000, 'con.dlp_months': 60, 'pro.tolerance_bp': 300, 'tax.tds_no_pan_bp': 2000, 'rera.cert_valid_days': 90, 'qa.cube_7day_pct_bp': 6500 };
       for (const [k, v] of Object.entries(DEFAULTS)) if (settings[k] == null || settings[k] === '') settings[k] = v;
       return json({ ok: true, data: { settings } });
     } catch (e) {
@@ -557,7 +558,7 @@ const EDITABLE_SETTINGS = ['po.pm_approval_limit_paise', 'access.allow_second_ow
   'brochure.price_list_default_audience', 'storage.warn_percent', 'sales.max_holds_per_user', 'sales.max_discount_bp', 'sales.pm_max_discount_bp',
   'interest.rate_bp', 'interest.grace_days', 'interest.enabled', 'security.require_mfa_roles', 'tax.stamp_duty_bp', 'tax.metro_cess_bp', 'tax.women_concession_bp', 'tax.registration_bp', 'tax.registration_cap_paise', 'tax.gst_bp',
   'con.enabled', 'con.pm_approval_limit_paise', 'con.gst_bp', 'con.tds_bp', 'budget.gst_basis', 'petty.low_balance_paise', 'ai.enabled', 'ai.daily_limit', 'ai.model', 'rera.designated_pct_bp', 'fea.review_days', 'red.member_doc_checklist', 'red.rent_due_day', 'bank.keep_days', 'drawing.ack_hours', 'sales.bulk_daily_limit', 'sales.bulk_chunk', 'sales.demand_link_days', 'sales.visit_objections', 'sales.visit_radius_m',
-  'sales.receipt_approval_limit_paise', 'sales.discount_pm_limit_paise', 'sales.handover_template', 'apr.designations', 'con.variation_owner_limit_paise', 'con.advance_recovery_bp', 'con.dlp_months', 'pro.tolerance_bp', 'tax.tds_no_pan_bp', 'rera.cert_valid_days'];
+  'sales.receipt_approval_limit_paise', 'sales.discount_pm_limit_paise', 'sales.handover_template', 'apr.designations', 'con.variation_owner_limit_paise', 'con.advance_recovery_bp', 'con.dlp_months', 'pro.tolerance_bp', 'tax.tds_no_pan_bp', 'rera.cert_valid_days', 'qa.pour_checklist', 'qa.cube_7day_pct_bp', 'dpr.activities'];
 
 router.post('/api/settings/:key', async (req, env) => {
   return withAuth(req, env, 'users_settings', 'E', async (req, env) => {
@@ -865,6 +866,11 @@ async function milestoneCertify(req, env) {
   let block = null;
   if (!anyCc) block = 'No Commencement Certificate is marked approved for this project in Approvals.';
   else if (ms.floor != null && (upto == null || ms.floor > upto)) block = `The approved CC covers work up to floor ${upto == null ? '(not recorded)' : upto}; this milestone is floor ${ms.floor}.`;
+  // An open NCR from a failed 28-day cube on this wing, at or below this floor, stops certification (no override: close the NCR first).
+  if (ms.floor != null) {
+    const ncr = await env.DB.prepare("SELECT title FROM qa_ncrs WHERE project_id = ? AND status = 'open' AND source = 'cube28' AND (wing IS NULL OR ? IS NULL OR wing = ?) AND (floor IS NULL OR floor <= ?) LIMIT 1").bind(ms.project_id, ms.wing || null, ms.wing || null, ms.floor).first();
+    if (ncr) return json({ ok: false, error: `An NCR is open: ${ncr.title}. Close it (with the correction) before certifying this floor.`, code: 'ncr' }, 409);
+  }
   const override = String(b.override_note || '').trim().slice(0, 300);
   if (block) {
     if (user.role !== 'owner') return json({ ok: false, error: block + ' Record the CC (with "up to floor") in Approvals first.', code: 'cc' }, 409);
@@ -939,9 +945,20 @@ router.post('/api/site/dprs', async (req, env) => {
     try {
       const user = req.user;
       const body = await req.json();
-      const { project_id, report_date, wing, work_summary, labour_count, weather, materials_used, issues, safety_incident, client_uuid } = body;
+      const { project_id, report_date, wing, labour_count, weather, materials_used, issues, safety_incident, client_uuid } = body;
+      // Work done, line by line: wing, floor, activity, quantity. A summary is written from the lines when none is typed.
+      const work = (Array.isArray(body.work) ? body.work : []).filter((w) => w && String(w.activity || '').trim()).slice(0, 30).map((w) => ({
+        wing: String(w.wing || '').trim().slice(0, 20) || null, floor: w.floor === '' || w.floor == null ? null : Math.round(Number(w.floor)), activity: String(w.activity).trim().slice(0, 60),
+        qty: w.qty === '' || w.qty == null ? null : Number(w.qty), unit: String(w.unit || '').slice(0, 20) || null }));
+      if (work.some((w) => (w.qty != null && !(w.qty >= 0 && w.qty < 1e6)) || (w.floor != null && !(w.floor >= -5 && w.floor <= 200)))) return json({ ok: false, error: 'Check the quantities and floors.' }, 400);
+      const hoursLost = body.hours_lost === '' || body.hours_lost == null ? null : Number(body.hours_lost);
+      if (hoursLost != null && !(hoursLost >= 0 && hoursLost <= 24)) return json({ ok: false, error: 'Hours lost must be between 0 and 24.' }, 400);
+      const LOST = ['rain', 'material', 'labour', 'power', 'approvals', 'other'];
+      const lostReason = LOST.includes(body.lost_reason) ? body.lost_reason : null;
+      if (!String(body.work_summary || '').trim() && work.length) body.work_summary = work.map((w) => `${w.activity}${w.wing ? ' ' + w.wing : ''}${w.floor != null ? ' fl ' + w.floor : ''}${w.qty != null ? ' ' + w.qty + (w.unit ? ' ' + w.unit : '') : ''}`).join('; ').slice(0, 1000);
+      const work_summary = body.work_summary;
       if (!project_id || !report_date || !work_summary) {
-        return json({ ok: false, error: 'Project, date, and work summary are required.' }, 400);
+        return json({ ok: false, error: 'Project, date, and the work done are required.' }, 400);
       }
       if (!isDate(report_date) || report_date > todayIST()) return json({ ok: false, error: 'The report date cannot be in the future.' }, 400);
       if (report_date < new Date(Date.now() + 19800000 - 2 * 86400000).toISOString().slice(0, 10) && !['owner', 'pm'].includes(user.role)) return json({ ok: false, error: 'Reports older than 2 days can only be added by the PM.' }, 400);
@@ -975,6 +992,8 @@ router.post('/api/site/dprs', async (req, env) => {
         env.DB.prepare(`INSERT INTO site_dprs (project_id, report_date, wing, work_summary, labour_count, weather, materials_used, issues, safety_incident, created_by, client_uuid, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
           .bind(project_id, report_date, wing || '', work_summary, labourTotal, weather || '', materials_used || '', issues || '', safety_incident || '', user.user_id, uuid, now),
         ...lines.map((l) => env.DB.prepare('INSERT INTO site_dpr_labour (dpr_id, contractor_id, trade, headcount, created_at) VALUES ((SELECT id FROM site_dprs WHERE client_uuid = ?), ?, ?, ?, ?)').bind(uuid, l.id, l.trade, l.head, now)),
+        ...work.map((w) => env.DB.prepare('INSERT INTO site_dpr_work (dpr_id, wing, floor, activity, qty, unit) VALUES ((SELECT id FROM site_dprs WHERE client_uuid = ?), ?, ?, ?, ?, ?)').bind(uuid, w.wing, w.floor, w.activity, w.qty, w.unit)),
+        env.DB.prepare('UPDATE site_dprs SET hours_lost = ?, lost_reason = ? WHERE client_uuid = ?').bind(hoursLost, lostReason, uuid),
         env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, 'create', 'site_dprs', (SELECT id FROM site_dprs WHERE client_uuid = ?), ?, ?)`).bind(user.user_id, uuid, `DPR filed for ${report_date}`, now),
       ]);
       const result = { meta: { last_row_id: res[0].meta.last_row_id } };
@@ -1613,7 +1632,7 @@ const EXPORT_TABLES = ['projects', 'apr_items', 'apr_events', 'drw_drawings', 'd
     'sal_leads', 'sal_activities', 'sal_visits', 'sal_inventory', 'sal_partners', 'sal_bookings', 'sal_plan_stages', 'sal_demands', 'sal_receipts', 'documents', 'audit_log',
     'pro_grn_items', 'pro_payments', 'ppl_staff', 'ppl_hiring', 'ppl_candidates', 'sal_brokerage_payments', 'sal_refunds', 'sal_interest_waivers', 'mkt_spend', 'brands', 'counters',
     'pro_indents', 'pro_indent_items', 'pro_rfq_items', 'pro_quote_items',
-    'site_dpr_labour', 'bud_heads', 'stk_items', 'stk_balance', 'stk_moves', 'pro_party_docs', 'pro_professionals', 'ai_log', 'sal_receipt_requests', 'sal_adjustments', 'sal_booking_parties', 'sal_cost_sheets', 'sal_cost_sheet_lines', 'sal_handover', 'sal_handover_items', 'sal_booking_loans', 'rera_account_entries', 'eng_kudos', 'fea_versions', 'sal_bulk_runs', 'sal_bulk_items', 'drw_acks', 'tally_export_log', 'brand_profiles', 'project_members', 'drive_folders', 'bank_profiles', 'bank_import_batches', 'bank_import_rows', 'red_societies', 'red_members', 'red_consent_events', 'red_member_docs', 'red_rehab_allotments', 'red_transit_terms', 'red_transit_schedule', 'red_transit_payments', 'red_corpus_entries', 'red_meetings', 'red_meeting_attendees', 'prj_autodcr_history', 'apr_steps', 'apr_deps', 'con_variations', 'con_measurements', 'rera_certificates', 'pty_funds', 'pty_entries', 'con_contractors', 'con_work_orders', 'con_wo_items', 'con_ra_bills', 'con_ra_lines', 'con_payments', 'con_ledger'];
+    'site_dpr_labour', 'bud_heads', 'stk_items', 'stk_balance', 'stk_moves', 'pro_party_docs', 'pro_professionals', 'ai_log', 'sal_receipt_requests', 'sal_adjustments', 'sal_booking_parties', 'sal_cost_sheets', 'sal_cost_sheet_lines', 'sal_handover', 'sal_handover_items', 'sal_booking_loans', 'rera_account_entries', 'eng_kudos', 'fea_versions', 'sal_bulk_runs', 'sal_bulk_items', 'drw_acks', 'tally_export_log', 'brand_profiles', 'project_members', 'drive_folders', 'bank_profiles', 'bank_import_batches', 'bank_import_rows', 'red_societies', 'red_members', 'red_consent_events', 'red_member_docs', 'red_rehab_allotments', 'red_transit_terms', 'red_transit_schedule', 'red_transit_payments', 'red_corpus_entries', 'red_meetings', 'red_meeting_attendees', 'prj_autodcr_history', 'apr_steps', 'apr_deps', 'con_variations', 'con_measurements', 'rera_certificates', 'qa_pours', 'qa_cubes', 'qa_ncrs', 'site_dpr_work', 'pty_funds', 'pty_entries', 'con_contractors', 'con_work_orders', 'con_wo_items', 'con_ra_bills', 'con_ra_lines', 'con_payments', 'con_ledger'];
 const EXPORT_PARTS = 3;
 
 async function buildExport(env, part = 1) {
@@ -2196,6 +2215,7 @@ registerProfile(router, { withAuth, json, serverError, visibleProjectIds, nowStr
 registerFeasibility(router, { withAuth, json, serverError, visibleProjectIds, nowStr });
 registerVisits(router, { withAuth, json, serverError, visibleProjectIds, getSetting, nowStr, leadAccess, csvBom });
 registerProjectPlus(router, { withAuth, json, serverError, visibleProjectIds, nowStr, getSetting });
+registerQuality(router, { withAuth, json, serverError, visibleProjectIds, nowStr, getSetting, userCan });
 registerRera(router, { withAuth, json, serverError, visibleProjectIds, nowStr, getSetting, csvBom });
 registerAi(router, { withAuth, json, serverError, visibleProjectIds, nowStr, getSetting, userCan, checkRateLimit });
 registerProfessionals(router, { withAuth, json, serverError, nowStr, encryptSetting, decryptSetting });
@@ -3293,6 +3313,7 @@ async function runCron(cron, env) {
     await bankSweep(env, getSetting);
     await drawingAckSweep(env, getSetting);
     await dashSnapshotSweep(env, getSetting);
+    await cubeSweep(env);
   } else if (cron === '30 2 * * *') {
     // 08:00 IST digest to every active Owner
     const owners = await env.DB.prepare("SELECT email FROM users WHERE role = 'owner' AND active = 1 AND deleted_at IS NULL").all();
