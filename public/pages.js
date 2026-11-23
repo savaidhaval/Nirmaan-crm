@@ -641,6 +641,7 @@ const SETTING_LABELS = {
   'con.dlp_months': ['Retention is held for this many months after the OC (defect liability period)', 'number'],
   'pro.tolerance_bp': ['Allowed extra over the PO for material received and vendor bills, in basis points (300 = 3%)', 'number'],
   'tax.tds_no_pan_bp': ['TDS when a vendor has no PAN, in basis points (2000 = 20%). Confirm with your CA', 'number'],
+  'rera.cert_valid_days': ['RERA withdrawal: certificates older than this many days are not accepted. Confirm with your CA', 'number'],
   'con.tds_bp': ['TDS on contractor bills, in basis points (100 = 1%). Confirm with your CA', 'number'],
   'access.allow_second_owner': ['Allow a second Owner', 'onoff'],
   'sales.share_all_leads': ['Sales team can see everyone’s leads', 'onoff'],

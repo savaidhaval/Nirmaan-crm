@@ -138,7 +138,7 @@ ok('variations are in the audit log', audits.some((a) => /Raft thickened/.test(a
 const v1 = (await pur.call('POST', '/api/procurement/vendors', { name: 'zc steel ' + run })).data.id;
 const v2 = (await pur.call('POST', '/api/procurement/vendors', { name: 'zc other ' + run })).data.id;
 const po = (await pur.call('POST', '/api/procurement/pos', { project_id: pid, vendor_id: v1, gst_bp: 1800, items: [{ description: 'TMT', qty: 10, unit: 'MT', rate_paise: 500 * L }] })).data;
-await pur.call('POST', `/api/procurement/pos/${po.id}/submit`); await pm.call('POST', `/api/procurement/pos/${po.id}/approve`);
+await pur.call('POST', `/api/procurement/pos/${po.id}/submit`); await o.call('POST', `/api/procurement/pos/${po.id}/approve`);
 const lines = (await pur.call('GET', `/api/procurement/pos/${po.id}/lines`)).data.items;
 ok('the note-only receipt is refused for a PO with items', (await site.call('POST', `/api/procurement/pos/${po.id}/grn`, { qty_note: 'came', full: true })).code === 'use_lines');
 const ex = await site.call('POST', `/api/procurement/pos/${po.id}/grn-lines`, { lines: [{ po_item_id: lines[0].id, qty_received: 10.5 }] });
