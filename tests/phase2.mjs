@@ -10,7 +10,7 @@ const run = Date.now().toString(36); const digits = String(Date.now()).slice(-8)
 const o = new C(); await o.call('POST', '/api/auth/login', { email: process.env.OWNER_EMAIL, password: process.env.OWNER_PASSWORD });
 let seq = 0;
 const mkUser = async (role, projects) => { const email = `zp-${role}-${++seq}-${run}@test.local`; const r = await o.call('POST', '/api/users', { name: 'zp ' + role, email, role, projects }); const pw = 'ZpStrongPass-' + run; const c = new C(); await c.call('POST', '/api/auth/login', { email, password: r.data.temporaryPassword }); await c.call('POST', '/api/auth/change-password', { currentPassword: r.data.temporaryPassword, newPassword: pw }); c.id = r.data.id; c.email = email; c.pw = pw; return c; };
-const pid = (await o.call('POST', '/api/projects', { name: 'zz-p2 ' + run, code: 'P2' + run.toUpperCase().slice(-6), budget_paise: 50000000 })).data.id;
+const pid = (await o.call('POST', '/api/projects', { rera_no: 'P518000TEST', name: 'zz-p2 ' + run, code: 'P2' + run.toUpperCase().slice(-6), budget_paise: 50000000 })).data.id;
 const pm = await mkUser('pm', []); const acc = await mkUser('accounts', []); const sales = await mkUser('sales', [pid]);
 const setSetting = (k, v) => o.call('POST', '/api/settings/' + k, { value: v });
 
@@ -20,7 +20,7 @@ const unit = (await o.call('POST', '/api/sales/inventory', { project_id: pid, wi
 const bk = (await o.call('POST', '/api/sales/bookings', { unit_id: unit, customer_name: 'zz interest', phone: '90' + digits, email: 'z@example.com', token_paise: 100000, pan: 'ABCDE1234F' })).data.id;
 await o.call('POST', '/api/site/milestones', { project_id: pid, name: 'Slab', milestone_key: 'in' + run });
 const ms = (await o.call('GET', `/api/site/milestones?project_id=${pid}`)).data.milestones.find((m) => m.milestone_key === 'in' + run);
-await o.call('POST', `/api/site/milestones/${ms.id}/done`, { actual_date: new Date(Date.now() - 100 * 86400000).toISOString().slice(0, 10) });
+await o.call('POST', `/api/site/milestones/${ms.id}/done`, { actual_date: new Date(Date.now() - 100 * 86400000).toISOString().slice(0, 10), cert_ref: 'ARCH/1 test', override_note: 'test project has no CC recorded' });
 let it = (await o.call('GET', `/api/sales/bookings/${bk}/interest`)).data;
 const total = 10000000 + 500000; const expect = (days, rate = 1100) => Math.round((total * rate * days) / (10000 * 365));
 const D = it.demands[0].days_late;

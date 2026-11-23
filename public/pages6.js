@@ -82,9 +82,15 @@ async function receiveMaterial(poId) {
   if (!v) return;
   const lines = d.items.filter((i) => Number(v['q' + i.id]) > 0).map((i) => ({ po_item_id: i.id, qty_received: Number(v['q' + i.id]), stock_item_id: Number(v['s' + i.id]) || undefined }));
   if (!lines.length) { toast('Enter a quantity for at least one item'); return; }
-  const over = d.items.find((i) => Number(v['q' + i.id]) > i.ordered - i.received);
-  if (over && !confirm(`More than ordered for "${over.description}". Save anyway?`)) return;
-  const r = await postOrQueue(`/api/procurement/pos/${poId}/grn-lines`, { received_on: v.received_on, challan_no: v.challan_no, qty_note: v.qty_note, lines }, 'Receipt recorded');
+  // More than ordered (beyond the small tolerance) needs the PM or the Owner, with a reason.
+  const over = d.items.find((i) => Number(v['q' + i.id]) > (i.ordered - i.received) * 1.03 + 1e-9);
+  let excess_note;
+  if (over) {
+    if (!['owner', 'pm'].includes(currentUser.role)) { toast(`More than ordered for "${over.description}". Receive what was ordered, and ask the PM to accept the extra.`, 8000); return; }
+    const x = await openForm({ title: 'More than ordered', intro: `"${over.description}": more than the PO quantity. Accept the extra?`, fields: [{ name: 'n', label: 'Why accept it?', type: 'textarea', required: true }] });
+    if (!x) return; excess_note = x.n;
+  }
+  const r = await postOrQueue(`/api/procurement/pos/${poId}/grn-lines`, { received_on: v.received_on, challan_no: v.challan_no, qty_note: v.qty_note, lines, excess_note }, 'Receipt recorded');
   if (r) loadProcurement();
 }
 

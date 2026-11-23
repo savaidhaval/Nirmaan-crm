@@ -7,7 +7,7 @@ class C { constructor() { this.cookie = ''; }
     const r = await fetch(BASE + p, { method: m, headers: h, body, redirect: 'manual' }); const sc = r.headers.get('set-cookie'); if (sc) this.cookie = sc.split(';')[0]; if (raw) return r; let d = null; try { d = await r.json(); } catch (e) { /* */ } return { status: r.status, data: d && d.data, err: d && d.error }; } }
 const run = Date.now().toString(36);
 const o = new C(); await o.call('POST', '/api/auth/login', { email: process.env.OWNER_EMAIL, password: process.env.OWNER_PASSWORD });
-const pid = (await o.call('POST', '/api/projects', { name: 'zz-feat ' + run, code: 'ZF' + run.toUpperCase().slice(-5) })).data.id;
+const pid = (await o.call('POST', '/api/projects', { rera_no: 'P518000TEST', name: 'zz-feat ' + run, code: 'ZF' + run.toUpperCase().slice(-5) })).data.id;
 const mk = async (role, projects) => { const email = `zf-${role}-${run}@test.local`; const r = await o.call('POST', '/api/users', { name: 'zf ' + role, email, role, projects }); const c = new C(); await c.call('POST', '/api/auth/login', { email, password: r.data.temporaryPassword }); await c.call('POST', '/api/auth/change-password', { currentPassword: r.data.temporaryPassword, newPassword: 'ZfStrongPass-' + run }); return c; };
 const site = await mk('site', [pid]); const sales = await mk('sales', [pid]); const hr = await mk('hr', []);
 const png = () => new Blob([Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=='), (c) => c.charCodeAt(0))], { type: 'image/png' });

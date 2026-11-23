@@ -13,8 +13,8 @@ import { execSync } from 'node:child_process';
 const persist = process.env.D1_PERSIST_TO ? `--persist-to ${process.env.D1_PERSIST_TO}` : '';
 const sql = (cmd) => execSync(`npx wrangler d1 execute nirmaan-db --local ${persist} --command "${cmd}"`, { stdio: 'pipe' }).toString();
 const code = 'S3' + run.toUpperCase().slice(-6);
-const pid = (await o.call('POST', '/api/projects', { name: 'zz-s3 ' + run, code, budget_paise: 50000000 })).data.id;
-const pid2 = (await o.call('POST', '/api/projects', { name: 'zz-s3b ' + run, code: 'T3' + run.toUpperCase().slice(-6), budget_paise: 50000000 })).data.id;
+const pid = (await o.call('POST', '/api/projects', { rera_no: 'P518000TEST', name: 'zz-s3 ' + run, code, budget_paise: 50000000 })).data.id;
+const pid2 = (await o.call('POST', '/api/projects', { rera_no: 'P518000TEST', name: 'zz-s3b ' + run, code: 'T3' + run.toUpperCase().slice(-6), budget_paise: 50000000 })).data.id;
 const pm = await mkUser('pm', []); const acc = await mkUser('accounts', []); const sales = await mkUser('sales', []); const sales2 = await mkUser('sales', []); const site = await mkUser('site', [pid]);
 const setSetting = (k, v) => o.call('POST', '/api/settings/' + k, { value: v });
 const iso = (d) => new Date(Date.now() + 19800000 + d * 86400000).toISOString().slice(0, 10);
@@ -194,10 +194,19 @@ const repH = (await sales.call('GET', '/api/sales/reports/handovers')).data.rows
 ok('pending handovers report: 1 of 5 ticked, 1 open snag', repH && repH.items === 5 && repH.items_done === 1 && repH.open_snags === 1, JSON.stringify(repH));
 const hcsv = await pm.call('GET', '/api/sales/reports/handovers?csv=1', null, true); ok('pending handovers CSV', hcsv.status === 200 && (await hcsv.text()).includes('Open snags'));
 // complete with warnings
-const done = await sales.call('POST', `/api/sales/bookings/${bkH}/handover/complete`, {});
-ok('handing over with open items warns but does not block', done.status === 200 && done.data.warnings.length === 2 && /4 checklist items/.test(done.data.warnings[0]) && /1 snag/.test(done.data.warnings[1]), JSON.stringify(done.data));
+ok('Sales cannot hand over possession (PM or Owner only)', (await sales.call('POST', `/api/sales/bookings/${bkH}/handover/complete`, {})).status === 403);
+const noOc = await pm.call('POST', `/api/sales/bookings/${bkH}/handover/complete`, {});
+ok('no possession before the OC is approved', noOc.status === 409 && /Occupancy Certificate/.test(noOc.err), JSON.stringify(noOc));
+const ocItem = (await o.call('POST', '/api/approvals', { project_id: pid, name: 'Occupancy Certificate (OC)', authority: 'MCGM' })).data.id;
+await o.call('POST', `/api/approvals/${ocItem}/event`, { event: 'applied' });
+ok('approving the OC needs the letter number and date', (await o.call('POST', `/api/approvals/${ocItem}/event`, { event: 'approved' })).status === 400);
+ok('the OC is approved with its letter', (await o.call('POST', `/api/approvals/${ocItem}/event`, { event: 'approved', letter_no: 'CHE/OC/123', letter_date: iso(-1) })).status === 200);
+const needWhy = await pm.call('POST', `/api/sales/bookings/${bkH}/handover/complete`, {});
+ok('open checklist items, a snag or dues stop possession until someone gives a reason', needWhy.status === 409 && needWhy.data === undefined && /checklist|snag|due/.test(needWhy.err), JSON.stringify(needWhy));
+const done = await o.call('POST', `/api/sales/bookings/${bkH}/handover/complete`, { override_note: 'Customer accepted; tile to be replaced within 7 days' });
+ok('the Owner hands over with a written reason; what was open is recorded', done.status === 200 && done.data.warnings.some((w) => /4 checklist items/.test(w)) && done.data.warnings.some((w) => /1 snag/.test(w)), JSON.stringify(done));
 ok('the flat becomes "possessed" and shows on the stacking plan', (await o.call('GET', `/api/sales/inventory?project_id=${pid}`)).data.inventory.find((u) => u.id === hoUnit).status === 'possessed' && (await pm.call('GET', `/api/reports/stacking?project_id=${pid}`)).data.units.find((u) => u.id === hoUnit).state === 'possessed');
-ok('handing over twice is refused', (await sales.call('POST', `/api/sales/bookings/${bkH}/handover/complete`, {})).status === 409);
+ok('handing over twice is refused', (await o.call('POST', `/api/sales/bookings/${bkH}/handover/complete`, { override_note: 'x' })).status === 409);
 ok('items are locked after handover', (await sales.call('POST', `/api/sales/handover-items/${hd.items[1].id}`, { done: true })).status === 409);
 ok('completed handover leaves the pending report', !(await sales.call('GET', '/api/sales/reports/handovers')).data.rows.some((r) => r.booking_id === bkH));
 // custom template

@@ -10,8 +10,8 @@ const o = new C(); await o.call('POST', '/api/auth/login', { email: process.env.
 let seq = 0;
 const mkUser = async (role, projects) => { const email = `zp-${role}-${++seq}-${run}@test.local`; const r = await o.call('POST', '/api/users', { name: 'zp ' + role, email, role, projects }); const pw = 'ZpStrongPass-' + run; const c = new C(); await c.call('POST', '/api/auth/login', { email, password: r.data.temporaryPassword }); await c.call('POST', '/api/auth/change-password', { currentPassword: r.data.temporaryPassword, newPassword: pw }); c.id = r.data.id; c.email = email; c.pw = pw; return c; };
 const iso = (d) => new Date(Date.now() + 19800000 + d * 86400000).toISOString().slice(0, 10);
-const redev = (await o.call('POST', '/api/projects', { name: 'zz-rd ' + run, code: 'RD' + run.toUpperCase().slice(-6), type: 'redevelopment', budget_paise: 50000000 })).data.id;
-const plain = (await o.call('POST', '/api/projects', { name: 'zz-nb ' + run, code: 'NB' + run.toUpperCase().slice(-6), type: 'new_build', budget_paise: 50000000 })).data.id;
+const redev = (await o.call('POST', '/api/projects', { rera_no: 'P518000TEST', name: 'zz-rd ' + run, code: 'RD' + run.toUpperCase().slice(-6), type: 'redevelopment', budget_paise: 50000000 })).data.id;
+const plain = (await o.call('POST', '/api/projects', { rera_no: 'P518000TEST', name: 'zz-nb ' + run, code: 'NB' + run.toUpperCase().slice(-6), type: 'new_build', budget_paise: 50000000 })).data.id;
 await o.call('POST', '/api/approvals/load-template', { project_id: redev, redevelopment: true });
 const pm = await mkUser('pm', []); const acc = await mkUser('accounts', []); const viewer = await mkUser('viewer', []); const sales = await mkUser('sales', []); const site = await mkUser('site', [redev]); const hr = await mkUser('hr', []);
 const notes = async (who) => JSON.stringify((await who.call('GET', '/api/notifications')).data);

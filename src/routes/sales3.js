@@ -5,6 +5,7 @@
 //   WP-14 handover / possession checklist, home-loan details
 // Money is integer paise. Tax and stamp-duty rates are inputs taken from Settings: nothing is hard-coded (confirm with your CA / advocate).
 import { emit } from '../core/events.js';
+import { saleBlock, approvalState } from '../core/gates.js';
 
 const rupees = (p) => '₹' + (Number(p) / 100).toLocaleString('en-IN');
 const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
@@ -336,6 +337,7 @@ export function registerSales3(router, h) {
       const unit = await env.DB.prepare('SELECT * FROM sal_inventory WHERE id = ? AND deleted_at IS NULL').bind(Number(b.unit_id)).first();
       if (!unit || !(await visibleProjectIds(env, req.user)).includes(unit.project_id)) return json({ ok: false, error: 'Pick a flat.' }, 400);
       if (unit.category === 'rehab') return json({ ok: false, error: 'Rehab flats are not sold.' }, 400);
+      { const blk = await saleBlock(env, unit.project_id); if (blk) return json({ ok: false, error: blk, code: 'rera' }, 409); }
       const leadId = b.lead_id ? Number(b.lead_id) : null;
       if (leadId) {
         const l = await env.DB.prepare('SELECT assigned_to FROM sal_leads WHERE id = ? AND deleted_at IS NULL').bind(leadId).first();
@@ -517,23 +519,36 @@ export function registerSales3(router, h) {
     } catch (e) { return serverError(e, 'ho-details'); }
   }));
 
-  // Handing over is never blocked by open items or snags: it warns, the person decides.
+  // Possession: never before the OC for the flat's wing. Unpaid dues need the Owner's written reason; open snags or checklist items need the PM's.
   router.post('/api/sales/bookings/:id/handover/complete', async (req, env) => withAuth(req, env, 'sales', 'E', async (req, env) => {
     try {
       const { booking, err } = await loadBooking(env, req, Number(req.params.id)); if (err) return err;
-      if (!['owner', 'pm', 'sales'].includes(req.user.role)) return json({ ok: false, error: 'Not allowed.' }, 403);
+      if (!['owner', 'pm'].includes(req.user.role)) return json({ ok: false, error: 'Only the PM or the Owner can hand over possession.' }, 403);
       const ho = await env.DB.prepare('SELECT * FROM sal_handover WHERE booking_id = ?').bind(booking.id).first();
       if (!ho) return json({ ok: false, error: 'Open the handover first.' }, 404);
+      const st = await approvalState(env, booking.project_id);
+      if (!st.approved('oc', booking.wing || null)) return json({ ok: false, error: `There is no Occupancy Certificate${booking.wing ? ' for wing ' + booking.wing : ''} marked approved in Approvals. Possession cannot be given before the OC.`, code: 'oc' }, 409);
       const open = (await env.DB.prepare('SELECT COUNT(*) AS n FROM sal_handover_items WHERE handover_id = ? AND done = 0').bind(ho.id).first()).n;
       const snags = (await env.DB.prepare("SELECT COUNT(*) AS n FROM site_snags WHERE unit_id = ? AND deleted_at IS NULL AND status NOT IN ('verified')").bind(booking.unit_id).first()).n;
+      const due = (await env.DB.prepare("SELECT COALESCE(SUM(amount_paise + COALESCE(gst_paise, 0) - settled_paise), 0) AS d FROM sal_demands WHERE booking_id = ? AND status NOT IN ('cancelled', 'scheduled')").bind(booking.id).first()).d;
+      const b = await req.json().catch(() => ({}));
+      const reason = String(b.override_note || '').trim().slice(0, 300);
+      const problems = [];
+      if (due > 0) problems.push(`${rupees(due)} is still due`);
+      if (snags) problems.push(`${snags} snag${snags === 1 ? ' is' : 's are'} not verified fixed`);
+      if (open) problems.push(`${open} checklist item${open === 1 ? ' is' : 's are'} not ticked`);
+      if (problems.length) {
+        if (due > 0 && req.user.role !== 'owner') return json({ ok: false, error: `${problems.join('; ')}. Only the Owner can give possession with dues unpaid.`, code: 'dues', problems }, 409);
+        if (!reason) return json({ ok: false, error: `${problems.join('; ')}. Give a written reason to go ahead.`, code: 'reason', problems }, 409);
+      }
       const res = await env.DB.batch([
-        env.DB.prepare("UPDATE sal_handover SET status = 'handed_over', possession_given_on = ? WHERE id = ? AND status = 'in_progress'").bind(todayIST(), ho.id),
+        env.DB.prepare("UPDATE sal_handover SET status = 'handed_over', possession_given_on = ?, override_note = ? WHERE id = ? AND status = 'in_progress'").bind(todayIST(), problems.length ? reason : null, ho.id),
         env.DB.prepare("UPDATE sal_inventory SET status = 'possessed' WHERE id = ? AND status = 'booked' AND changes() > 0").bind(booking.unit_id),
-        audit(env, req.user, 'handover', 'sal_handover', ho.id, `${booking.customer_name} took possession of ${booking.wing ? booking.wing + '-' : ''}${booking.unit_no}`),
+        audit(env, req.user, 'handover', 'sal_handover', ho.id, `${booking.customer_name} took possession of ${booking.wing ? booking.wing + '-' : ''}${booking.unit_no}${problems.length ? ' — went ahead with: ' + problems.join('; ') + '. Reason: ' + reason : ''}`),
       ]);
       if (!res[0].meta.changes) return json({ ok: false, error: 'This flat is already handed over.' }, 409);
       emit('handover.completed', { booking_id: booking.id, unit_id: booking.unit_id, project_id: booking.project_id });
-      const warnings = []; if (open) warnings.push(`${open} checklist item${open === 1 ? ' is' : 's are'} not ticked.`); if (snags) warnings.push(`${snags} snag${snags === 1 ? ' is' : 's are'} not yet verified fixed.`);
+      const warnings = problems;
       return json({ ok: true, data: { warnings } });
     } catch (e) { return serverError(e, 'ho-complete'); }
   }));

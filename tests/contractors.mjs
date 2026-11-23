@@ -9,8 +9,8 @@ const run = Date.now().toString(36); const digits = String(Date.now()).slice(-8)
 const o = new C(); await o.call('POST', '/api/auth/login', { email: process.env.OWNER_EMAIL, password: process.env.OWNER_PASSWORD });
 let seq = 0;
 const mkUser = async (role, projects) => { const email = `zp-${role}-${++seq}-${run}@test.local`; const r = await o.call('POST', '/api/users', { name: 'zp ' + role, email, role, projects }); const pw = 'ZpStrongPass-' + run; const c = new C(); await c.call('POST', '/api/auth/login', { email, password: r.data.temporaryPassword }); await c.call('POST', '/api/auth/change-password', { currentPassword: r.data.temporaryPassword, newPassword: pw }); c.id = r.data.id; c.email = email; c.pw = pw; return c; };
-const pid = (await o.call('POST', '/api/projects', { name: 'zz-wp5 ' + run, code: 'W5' + run.toUpperCase().slice(-6), budget_paise: 50000000 })).data.id;
-const site = await mkUser('site', [pid]); const pm = await mkUser('pm', []); const pur = await mkUser('purchase', []); const acc = await mkUser('accounts', []);
+const pid = (await o.call('POST', '/api/projects', { rera_no: 'P518000TEST', name: 'zz-wp5 ' + run, code: 'W5' + run.toUpperCase().slice(-6), budget_paise: 50000000 })).data.id;
+const site = await mkUser('site', [pid]); const pm = await mkUser('pm', []); const pm2 = await mkUser('pm', []); const pur = await mkUser('purchase', []); const acc = await mkUser('accounts', []);
 const setSetting = (k, v) => o.call('POST', '/api/settings/' + k, { value: v });
 const L = 100000; // Rs 1,000 in paise
 
@@ -58,10 +58,11 @@ ok('RA 1: retention 10,000, net 1,40,000 to the paisa', ra1.retention_paise === 
 ok('unchecked bill cannot be approved', (await pm.call('POST', `/api/contractors/ra-bills/${ra1.id}/approve`, {})).status === 409);
 ok('creator cannot check own bill', (await pur.call('POST', `/api/contractors/ra-bills/${ra1.id}/check`, {})).status === 403);
 ok('PM checks', (await pm.call('POST', `/api/contractors/ra-bills/${ra1.id}/check`, {})).status === 200);
-ok('PM approves within limit', (await pm.call('POST', `/api/contractors/ra-bills/${ra1.id}/approve`, {})).status === 200);
+ok('the PM who checked cannot also approve', (await pm.call('POST', `/api/contractors/ra-bills/${ra1.id}/approve`, {})).status === 403);
+ok('a second PM approves within limit', (await pm2.call('POST', `/api/contractors/ra-bills/${ra1.id}/approve`, {})).status === 200);
 const led = (await acc.call('GET', `/api/contractors/contractors/${c1}/ledger`)).data.totals;
 ok('ledger: advance outstanding 50,000, retention held 10,000, payable 1,40,000', led.advance_outstanding === 50 * L && led.retention_held === 10 * L && led.payable === 140 * L, JSON.stringify(led));
-ok('approval is not repeated into the ledger', (await pm.call('POST', `/api/contractors/ra-bills/${ra1.id}/approve`, {})).status === 409 && (await acc.call('GET', `/api/contractors/contractors/${c1}/ledger`)).data.totals.retention_held === 10 * L);
+ok('approval is not repeated into the ledger', (await pm2.call('POST', `/api/contractors/ra-bills/${ra1.id}/approve`, {})).status === 409 && (await acc.call('GET', `/api/contractors/contractors/${c1}/ledger`)).data.totals.retention_held === 10 * L);
 
 // ---------- payments in parts ----------
 ok('site cannot pay', (await site.call('POST', `/api/contractors/ra-bills/${ra1.id}/payments`, { amount_paise: L })).status === 403);
@@ -81,19 +82,25 @@ await acc.call('POST', `/api/contractors/ra-bills/${ra1.id}/payments`, { amount_
 
 // ---------- RA bill 2: over the work order value, routes to the Owner ----------
 const over = await pur.call('POST', `/api/contractors/work-orders/${wo.id}/ra-bills`, { gross_paise: 900 * L });
-ok('billing beyond the WO value needs confirmation', over.status === 409 && /beyond/.test(over.err));
-const ra2 = (await pur.call('POST', `/api/contractors/work-orders/${wo.id}/ra-bills`, { gross_paise: 900 * L, confirm_over: true })).data;
-ok('RA 2 net is above the PM limit', ra2.net_paise === 855 * L, JSON.stringify(ra2));
+ok('billing beyond the WO value is refused (no "save anyway")', over.status === 409 && over.err && /variation/.test(over.err));
+ok('confirm_over no longer gets round it', (await pur.call('POST', `/api/contractors/work-orders/${wo.id}/ra-bills`, { gross_paise: 900 * L, confirm_over: true })).status === 409);
+const vr = await pur.call('POST', `/api/contractors/work-orders/${wo.id}/variations`, { description: 'Extra RCC for revised staircase', amount_paise: 100 * L, reason: 'Drawing R3 changed the staircase', drawing_ref: 'S-201 R3' });
+ok('a variation needs a reason', (await pur.call('POST', `/api/contractors/work-orders/${wo.id}/variations`, { description: 'x', amount_paise: L })).status === 400);
+ok('the maker cannot approve their own variation', (await pur.call('POST', `/api/contractors/variations/${vr.data.id}/approve`, {})).status === 403);
+ok('the PM approves a variation of Rs 1,00,000 (under the Rs 5 lakh Owner limit)', (await pm.call('POST', `/api/contractors/variations/${vr.data.id}/approve`, {})).status === 200);
+const ra2 = (await pur.call('POST', `/api/contractors/work-orders/${wo.id}/ra-bills`, { gross_paise: 900 * L })).data;
+ok('RA 2 fits after the variation; the rest of the advance (50,000) is recovered by itself', ra2.advance_recovery_paise === 50 * L && ra2.net_paise === 805 * L, JSON.stringify(ra2));
 await pm.call('POST', `/api/contractors/ra-bills/${ra2.id}/check`, {});
 ok('PM cannot approve a bill above the limit', (await pm.call('POST', `/api/contractors/ra-bills/${ra2.id}/approve`, {})).status === 403);
 ok('Owner approves the bigger bill', (await o.call('POST', `/api/contractors/ra-bills/${ra2.id}/approve`, {})).status === 200);
 ok('cannot close with an unpaid RA bill', (await o.call('POST', `/api/contractors/work-orders/${wo.id}/close`, {})).status === 409);
-await acc.call('POST', `/api/contractors/ra-bills/${ra2.id}/payments`, { amount_paise: 855 * L });
+await acc.call('POST', `/api/contractors/ra-bills/${ra2.id}/payments`, { amount_paise: 805 * L });
 
 // ---------- retention release and close ----------
 ok('cannot close while retention is held', (await o.call('POST', `/api/contractors/work-orders/${wo.id}/close`, {})).status === 409);
-ok('cannot release more than held (55,000)', (await acc.call('POST', `/api/contractors/work-orders/${wo.id}/release-retention`, { amount_paise: 56 * L })).status === 400);
-ok('Accounts releases 55,000 retention', (await acc.call('POST', `/api/contractors/work-orders/${wo.id}/release-retention`, { amount_paise: 55 * L })).status === 200);
+ok('cannot release more than held (55,000)', (await o.call('POST', `/api/contractors/work-orders/${wo.id}/release-retention`, { amount_paise: 56 * L, note: 'x' })).status === 400);
+ok('retention is not released before the OC (defect liability period)', (await acc.call('POST', `/api/contractors/work-orders/${wo.id}/release-retention`, { amount_paise: 55 * L })).status === 409);
+ok('the Owner can release it early only with a reason', (await o.call('POST', `/api/contractors/work-orders/${wo.id}/release-retention`, { amount_paise: 55 * L })).status === 400 && (await o.call('POST', `/api/contractors/work-orders/${wo.id}/release-retention`, { amount_paise: 55 * L, note: 'Contractor exit agreed; bank guarantee taken instead' })).status === 200);
 ok('Owner closes the work order', (await o.call('POST', `/api/contractors/work-orders/${wo.id}/close`, {})).status === 200);
 ok('closed WO takes no new RA bill', (await pur.call('POST', `/api/contractors/work-orders/${wo.id}/ra-bills`, { gross_paise: L })).status === 409);
 const fin = (await acc.call('GET', `/api/contractors/contractors/${c1}/ledger`)).data.totals;
@@ -104,9 +111,15 @@ const wo2 = (await pur.call('POST', '/api/contractors/work-orders', { project_id
 ok('item WO value = qty x rate', wo2.value_paise === 100 * (10 * L / 100), JSON.stringify(wo2));
 await pur.call('POST', `/api/contractors/work-orders/${wo2.id}/submit`, {}); await pm.call('POST', `/api/contractors/work-orders/${wo2.id}/approve`, {});
 const det = (await o.call('GET', `/api/contractors/work-orders/${wo2.id}`)).data; const item = det.items[0];
+ok('no measurement, no bill', (await pur.call('POST', `/api/contractors/work-orders/${wo2.id}/ra-bills`, { lines: [{ wo_item_id: item.id, qty: 60 }] })).status === 409);
+const me = await site.call('POST', `/api/contractors/work-orders/${wo2.id}/measurements`, { wo_item_id: item.id, location: 'A wing 3rd floor', nos: 1, length_m: 20, width_m: 5, contractor_rep: 'Ramesh (supervisor)' });
+ok('site records a joint measurement: 20 x 5 = 100 sqm', me.status === 200 && me.data.qty === 100, JSON.stringify(me));
+ok('a measurement needs the contractor\'s person', (await site.call('POST', `/api/contractors/work-orders/${wo2.id}/measurements`, { wo_item_id: item.id, location: 'x', qty: 5 })).status === 400);
+ok('a pending measurement cannot be billed', (await pur.call('POST', `/api/contractors/work-orders/${wo2.id}/ra-bills`, { lines: [{ wo_item_id: item.id, qty: 60 }] })).status === 409);
+ok('the PM approves the measurement', (await pm.call('POST', `/api/contractors/measurements/${me.data.id}/approve`, {})).status === 200);
 const r1 = await pur.call('POST', `/api/contractors/work-orders/${wo2.id}/ra-bills`, { lines: [{ wo_item_id: item.id, qty: 60 }] });
 ok('RA lines priced from the work order rate', r1.data.gross_paise === 60 * item.rate_paise);
-ok('second bill beyond the item quantity warns', (await pur.call('POST', `/api/contractors/work-orders/${wo2.id}/ra-bills`, { lines: [{ wo_item_id: item.id, qty: 60 }] })).status === 409);
+ok('second bill beyond the item quantity is refused', (await pur.call('POST', `/api/contractors/work-orders/${wo2.id}/ra-bills`, { lines: [{ wo_item_id: item.id, qty: 60 }] })).status === 409);
 ok('an item from another WO is refused', (await pur.call('POST', `/api/contractors/work-orders/${wo2.id}/ra-bills`, { lines: [{ wo_item_id: 99999999, qty: 1 }] })).status === 400);
 ok('cancelled bill stops counting towards quantity', (await pm.call('POST', `/api/contractors/ra-bills/${r1.data.id}/cancel`, { reason: 'wrong' })).status === 200
   && (await pur.call('POST', `/api/contractors/work-orders/${wo2.id}/ra-bills`, { lines: [{ wo_item_id: item.id, qty: 100 }] })).status === 200);

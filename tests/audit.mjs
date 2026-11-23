@@ -10,7 +10,7 @@ const run = Date.now().toString(36); const digits = String(Date.now()).slice(-8)
 const o = new C(); await o.call('POST', '/api/auth/login', { email: process.env.OWNER_EMAIL, password: process.env.OWNER_PASSWORD });
 let seq = 0;
 const mk = async (role, projects) => { const email = `za-${role}-${++seq}-${run}@test.local`; const r = await o.call('POST', '/api/users', { name: 'za ' + role + seq, email, role, projects }); const c = new C(); await c.call('POST', '/api/auth/login', { email, password: r.data.temporaryPassword }); await c.call('POST', '/api/auth/change-password', { currentPassword: r.data.temporaryPassword, newPassword: 'ZaStrongPass-' + run }); c.id = r.data.id; return c; };
-const pid = (await o.call('POST', '/api/projects', { name: 'zz-a ' + run, code: 'A' + run.toUpperCase().slice(-6) })).data.id;
+const pid = (await o.call('POST', '/api/projects', { rera_no: 'P518000TEST', name: 'zz-a ' + run, code: 'A' + run.toUpperCase().slice(-6) })).data.id;
 const s1 = await mk('sales', [pid]); const s2 = await mk('sales', [pid]); const pm = await mk('pm', []); const acc = await mk('accounts', []); const site = await mk('site', [pid]);
 await o.call('POST', '/api/sales/plan-stages', { project_id: pid, stages: [{ stage_name: 'Booking', pct_bp: 1000 }, { stage_name: 'Rest', pct_bp: 9000 }] });
 const mkUnit = async (n, extra = {}) => (await o.call('POST', '/api/sales/inventory', { project_id: pid, wing: 'A', floor: 3, unit_no: n + run.slice(-3), price_paise: 10000000, rera_carpet_sqft: 500, ...extra })).data.id;

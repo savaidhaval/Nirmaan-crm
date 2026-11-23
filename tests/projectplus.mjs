@@ -12,8 +12,8 @@ let seq = 0;
 const mkUser = async (role, projects) => { const email = `zq-${role}-${++seq}-${run}@test.local`; const r = await o.call('POST', '/api/users', { name: 'zq ' + role + seq, email, role, projects }); const pw = 'ZqStrongPass-' + run; const c = new C(); await c.call('POST', '/api/auth/login', { email, password: r.data.temporaryPassword }); await c.call('POST', '/api/auth/change-password', { currentPassword: r.data.temporaryPassword, newPassword: pw }); c.id = r.data.id; return c; };
 const iso = (d) => new Date(Date.now() + 19800000 + d * 86400000).toISOString().slice(0, 10);
 
-const pid = (await o.call('POST', '/api/projects', { name: 'zz-pp ' + run, code: 'PP' + run.toUpperCase().slice(-6), type: 'redevelopment' })).data.id;
-const pid2 = (await o.call('POST', '/api/projects', { name: 'zz-pq ' + run, code: 'PQ' + run.toUpperCase().slice(-6), type: 'new_build' })).data.id;
+const pid = (await o.call('POST', '/api/projects', { rera_no: 'P518000TEST', name: 'zz-pp ' + run, code: 'PP' + run.toUpperCase().slice(-6), type: 'redevelopment' })).data.id;
+const pid2 = (await o.call('POST', '/api/projects', { rera_no: 'P518000TEST', name: 'zz-pq ' + run, code: 'PQ' + run.toUpperCase().slice(-6), type: 'new_build' })).data.id;
 const pm = await mkUser('pm', []); const site = await mkUser('site', [pid]); const pur = await mkUser('purchase', [pid, pid2]); const acc = await mkUser('accounts', []);
 
 // ============ 2 + 4: project details and the Google Maps link ============

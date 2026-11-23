@@ -47,7 +47,7 @@ function openForm({ title, fields, submit = 'Save', intro = '' }) {
         input = `<label class="check"><input type="checkbox" id="${id}"${f.value ? ' checked' : ''}> ${esc(f.checkLabel || f.label)}</label>`;
       } else {
         const t = f.type === 'money' ? 'text' : (f.type || 'text');
-        input = `<input id="${id}" type="${t}" inputmode="${f.type === 'money' || f.type === 'number' ? 'decimal' : 'text'}" value="${esc(f.value == null ? '' : f.value)}" placeholder="${esc(f.placeholder || '')}">`;
+        input = `<input id="${id}" type="${t}"${t === 'number' ? ' step="any"' : ''} inputmode="${f.type === 'money' || f.type === 'number' ? 'decimal' : 'text'}" value="${esc(f.value == null ? '' : f.value)}" placeholder="${esc(f.placeholder || '')}">`;
       }
       return `<div class="field">${f.type === 'checkbox' ? '' : `<label for="${id}">${esc(f.label)}${f.required ? ' *' : ''}</label>`}${input}${f.help ? `<p class="help">${esc(f.help)}</p>` : ''}</div>`;
     }).join('');
@@ -636,6 +636,11 @@ const SETTING_LABELS = {
   'con.enabled': ['Contractors module (work orders, RA bills)', 'onoff'],
   'con.pm_approval_limit_paise': ['PM approval limit for work orders and RA bills (₹)', 'money'],
   'con.gst_bp': ['GST on contractor bills, in basis points (1800 = 18%). Confirm with your CA', 'number'],
+  'con.variation_owner_limit_paise': ['Variations (extra work) above this need the Owner (₹)', 'money'],
+  'con.advance_recovery_bp': ['Default advance recovery from each contractor bill, in basis points (1000 = 10%)', 'number'],
+  'con.dlp_months': ['Retention is held for this many months after the OC (defect liability period)', 'number'],
+  'pro.tolerance_bp': ['Allowed extra over the PO for material received and vendor bills, in basis points (300 = 3%)', 'number'],
+  'tax.tds_no_pan_bp': ['TDS when a vendor has no PAN, in basis points (2000 = 20%). Confirm with your CA', 'number'],
   'con.tds_bp': ['TDS on contractor bills, in basis points (100 = 1%). Confirm with your CA', 'number'],
   'access.allow_second_owner': ['Allow a second Owner', 'onoff'],
   'sales.share_all_leads': ['Sales team can see everyone’s leads', 'onoff'],
@@ -731,6 +736,9 @@ async function loadApprovals() {
   } catch (e) { $('approvals-list').innerHTML = `<div class="error">${esc(e.message)}</div>`; }
 }
 
+// The buttons offered follow the allowed order (the server enforces it too).
+const APR_NEXT = { not_started: [['applied', 'Mark applied'], ['na', 'Not needed']], applied: [['query', 'Query received'], ['approved', 'Approved'], ['rejected', 'Rejected']], query: [['applied', 'Reply sent'], ['approved', 'Approved'], ['rejected', 'Rejected']],
+  rejected: [['applied', 'Applied again']], expired: [['applied', 'Applied to renew']], na: [['reopen', 'Needed after all']], approved: [['expired', 'Expired']] };
 async function approvalDetail(id) {
   const d = (await api('/api/approvals/' + id)).data;
   const a = d.item;
@@ -740,7 +748,8 @@ async function approvalDetail(id) {
   ov.innerHTML = `<div class="modal"><h2>${esc(a.name)}</h2><p class="muted">${esc(a.authority || '')} · ${statusChip(a.status)}</p>
     <p>Applied: ${esc(a.applied_on || '—')} · Approved: ${esc(a.approved_on || '—')} · Valid till: ${esc(a.valid_till || '—')}</p>
     ${a.notes ? `<p class="muted">Documents needed: ${esc(a.notes)}</p>` : ''}
-    ${canE ? `<div class="row-btns">${[['applied', 'Mark applied'], ['query', 'Query received'], ['approved', 'Approved'], ['rejected', 'Rejected'], ['expired', 'Expired']].map(([e, l]) => `<button class="btn small" data-ev="${e}">${l}</button>`).join('')}</div>` : ''}
+    ${a.letter_no ? `<p>Letter: <b>${esc(a.letter_no)}</b> dated ${esc(a.letter_date || '')}${a.cc_upto_floor != null ? ` · work allowed up to floor ${esc(a.cc_upto_floor)}` : ''}${a.letter_doc_id ? ` <a class="btn small" href="/api/files/download/${a.letter_doc_id}">View letter</a>` : ''}</p>` : ''}
+    ${canE ? `<div class="row-btns">${(APR_NEXT[a.status || 'not_started'] || []).map(([e, l]) => `<button class="btn small${e === 'approved' ? ' btn-primary' : ''}" data-ev="${e}">${l}</button>`).join('')}${a.status === 'approved' && currentUser.role === 'owner' ? '<button class="btn small" data-ev="reopen">Undo approval</button>' : ''}</div>` : ''}
     <h3 style="margin-top:16px">Timeline</h3>${d.events.map((e) => `<p>• <b>${esc(e.event)}</b> ${e.note ? '— ' + esc(e.note) : ''} <span class="muted">${esc(dateIST(e.created_at))}</span></p>`).join('') || '<p class="muted">No activity yet.</p>'}
     <div class="modal-actions"><button class="btn btn-primary" id="ad-close">Close</button></div></div>`;
   document.body.appendChild(ov);
@@ -749,10 +758,21 @@ async function approvalDetail(id) {
     b.onclick = async () => {
       const ev = b.dataset.ev;
       const needDate = ev === 'applied' || ev === 'approved';
-      const v = await openForm({ title: b.textContent, fields: [...(needDate ? [{ name: 'date', label: 'Date', type: 'date', value: today() }] : []), ...(ev === 'approved' ? [{ name: 'valid_till', label: 'Valid till (if it expires)', type: 'date' }] : []), { name: 'note', label: 'Note', type: 'textarea' }] });
+      const isCc = /commencement|\bcc\b|plinth/i.test(a.name || '') || ['cc', 'plinth_cc', 'further_cc'].includes(a.gate_key);
+      const v = await openForm({ title: b.textContent, intro: ev === 'approved' ? 'Enter the approval letter. Approvals that must come first are checked.' : '', fields: [
+        ...(ev === 'approved' ? [{ name: 'letter_no', label: 'Letter / approval number', required: true }] : []),
+        ...(needDate ? [{ name: 'date', label: ev === 'approved' ? 'Letter date' : 'Date applied', type: 'date', value: today(), required: true }] : []),
+        ...(ev === 'approved' && isCc ? [{ name: 'cc_upto_floor', label: 'Work allowed up to floor (0 = up to plinth)', type: 'number', required: true }] : []),
+        ...(ev === 'approved' ? [{ name: 'valid_till', label: 'Valid till (if it expires)', type: 'date' }, { name: 'file', label: 'Letter (photo or PDF)', type: 'file' }] : []),
+        { name: 'note', label: ev === 'reopen' ? 'Why?' : 'Note', type: 'textarea', required: a.status === 'approved' && ev !== 'expired' }] });
       if (!v) return;
       const body = { event: ev, note: v.note };
-      if (ev === 'applied') body.applied_on = v.date; if (ev === 'approved') body.approved_on = v.date;
+      if (ev === 'applied') body.applied_on = v.date;
+      if (ev === 'approved') {
+        Object.assign(body, { letter_no: v.letter_no, letter_date: v.date, valid_till: v.valid_till || undefined, cc_upto_floor: v.cc_upto_floor === '' ? undefined : v.cc_upto_floor });
+        if (v.file) { const fd = new FormData(); fd.append('file', typeof compressFile === 'function' ? await compressFile(v.file) : v.file, v.file.name); fd.append('title', `${a.name} letter ${v.letter_no}`); fd.append('category', 'approval'); fd.append('module', 'approvals'); fd.append('project_id', String(a.project_id)); fd.append('audience', 'internal');
+          const up = await act(api('/api/files/upload', { method: 'POST', body: fd })); if (!up) return; body.letter_doc_id = up.data.id; }
+      }
       if (await act(api(`/api/approvals/${id}/event`, { method: 'POST', body }), 'Saved')) { ov.remove(); loadApprovals(); }
     };
   });
@@ -940,7 +960,7 @@ async function loadProcurement() {
       <div class="row-btns">${['draft', 'rejected'].includes(p.status) && canE ? `<button class="btn small" data-poterms="${p.id}">Charges &amp; terms</button>` : ''}${p.status === 'draft' && canE ? `<button class="btn small" data-po="submit" data-id="${p.id}">Send for approval</button>` : ''}${p.status === 'pending_approval' && canA ? `<button class="btn small btn-primary" data-po="approve" data-id="${p.id}">Approve</button><button class="btn small" data-po="reject" data-id="${p.id}">Reject</button>` : ''}
       ${['approved', 'part_received'].includes(p.status) ? `<button class="btn small btn-primary" data-grn="${p.id}">Material received</button>` : ''}${!noBills && canE && ['approved', 'part_received', 'received'].includes(p.status) ? `<button class="btn small" data-bill="${p.id}" data-vendor="${p.vendor_id}">Add bill</button>` : ''}
       ${!noBills ? `<button class="btn small" data-print="${p.id}">Print</button>` : ''}</div></div>`).join('') || '<p class="muted">No purchase orders yet.</p>');
-    if (!noBills) html += '<h3>Bills</h3>' + (bills.data.bills.map((b) => `<div class="card"><div class="row"><div><b>${esc(b.vendor)}</b> · ${esc(b.bill_no || '')}<p class="muted">${moneyP(b.amount_paise)}${b.due_date ? ' · due ' + esc(b.due_date) : ''}${b.po_no ? ' · ' + esc(b.po_no) : ''}</p>${b.paid_paise && b.balance_paise ? `<p class="muted">Paid ${moneyP(b.paid_paise)} · <b>Still due ${moneyP(b.balance_paise)}</b></p>` : ''}</div>${statusChip(b.status === 'received' ? 'open' : b.status)}</div>${b.balance_paise > 0 && canE && ['owner', 'accounts'].includes(currentUser.role) ? `<button class="btn small" data-pay="${b.id}" data-bal="${b.balance_paise}">Record payment</button>` : ''}</div>`).join('') || '<p class="muted">No bills yet.</p>');
+    if (!noBills) html += '<h3>Bills</h3>' + (bills.data.bills.map((b) => `<div class="card"><div class="row"><div><b>${esc(b.vendor)}</b> · ${esc(b.bill_no || '')}<p class="muted">${moneyP(b.amount_paise)}${b.due_date ? ' · due ' + esc(b.due_date) : ''}${b.po_no ? ' · ' + esc(b.po_no) : ''}</p>${b.paid_paise && b.balance_paise ? `<p class="muted">Paid ${moneyP(b.paid_paise)} · <b>Still due ${moneyP(b.balance_paise)}</b></p>` : ''}</div>${b.hold_reason && !b.released_at ? chip('On hold', 'bad') : statusChip(b.status === 'received' ? 'open' : b.status)}</div>${b.hold_reason && !b.released_at ? `<p class="muted">${esc(b.hold_reason)}</p>${['owner', 'pm'].includes(currentUser.role) ? `<button class="btn small btn-primary" data-billrel="${b.id}">Check and release</button>` : ''}` : ''}${!(b.hold_reason && !b.released_at) && b.balance_paise > 0 && canE && ['owner', 'accounts'].includes(currentUser.role) ? `<button class="btn small" data-pay="${b.id}" data-bal="${b.balance_paise}">Record payment</button>` : ''}</div>`).join('') || '<p class="muted">No bills yet.</p>');
     html += '<h3>RFQs</h3>' + (rfqs.data.rfqs.map((r) => `<div class="card clickable" data-rfq="${r.id}"><div class="row"><b>${esc(r.title)}</b>${statusChip(r.status)}</div></div>`).join('') || '<p class="muted">No RFQs.</p>');
     html += '<h3>Vendors</h3>' + (vendors.data.vendors.map((v) => `<div class="card ${noBills ? '' : 'clickable'}" data-vendor-led="${v.id}"><b>${esc(v.name)}</b><p class="muted">${esc(v.category || '')}${v.phone ? ' · ' : ''}${v.phone ? `<a href="tel:${esc(v.phone)}">${esc(v.phone)}</a>` : ''}</p></div>`).join('') || '<p class="muted">No vendors yet.</p>');
     const el = $('procurement-list'); el.innerHTML = html;

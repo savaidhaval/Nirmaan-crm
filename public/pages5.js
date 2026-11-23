@@ -194,6 +194,7 @@ addBill = async function (poId, vendorId) {
   const body = { po_id: Number(poId), vendor_id: Number(vendorId), bill_no: v.bill_no, amount_paise: v.amount_paise, gst_paise: v.gst_paise || 0, due_date: v.due_date || undefined };
   if (v.tds_section) { body.tds_section = v.tds_section; body.tds_bp = Math.round((v.tds_pct || 0) * 100); }
   const r = await act(api('/api/procurement/bills', { method: 'POST', body }), 'Bill recorded');
+  if (r && r.data && r.data.on_hold) toast(`Saved but ON HOLD: ${r.data.hold_reason} The PM must check and release it before payment.`, 9000);
   if (r) { if (r.data.note) toast(r.data.note, 7000); if (typeof loadProcurement === 'function') loadProcurement(); else navigate('procurement'); }
 };
 

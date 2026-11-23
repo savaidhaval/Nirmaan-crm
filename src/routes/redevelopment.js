@@ -21,7 +21,7 @@ const checklistOf = (v) => String(v || '').split(/[\n;]+/).map((x) => x.trim()).
 const YEAR_RENT = (nExpr) => `NULLIF(CAST(ROUND((CASE (${nExpr}) / 12 WHEN 0 THEN rm.rent_y1_paise WHEN 1 THEN rm.rent_y2_paise WHEN 2 THEN rm.rent_y3_paise WHEN 3 THEN rm.rent_y4_paise ELSE rm.rent_y5_paise END)
   * (CASE WHEN rm.rent_basis = 'per_sqft' THEN COALESCE(rm.carpet_sqft, 0) ELSE 1 END)) AS INTEGER), 0)`;
 const FILL_SQL = (one) => `INSERT OR IGNORE INTO red_transit_schedule (member_id, period, due_paise, due_on)
-  WITH RECURSIVE m(n) AS (SELECT 0 UNION ALL SELECT n + 1 FROM m WHERE n < 47)
+  WITH RECURSIVE m(n) AS (SELECT 0 UNION ALL SELECT n + 1 FROM m WHERE n < 119)
   SELECT t.member_id, strftime('%Y-%m', date(t.start_date, 'start of month', '+' || m.n || ' months')), COALESCE(${YEAR_RENT('m.n')}, t.monthly_rent_paise),
     date(t.start_date, 'start of month', '+' || m.n || ' months', '+' || (?1 - 1) || ' days')
   FROM red_transit_terms t JOIN m LEFT JOIN red_members rm ON rm.id = t.member_id

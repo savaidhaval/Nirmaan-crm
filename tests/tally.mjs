@@ -11,7 +11,7 @@ let seq = 0;
 const mkUser = async (role, projects) => { const email = `zp-${role}-${++seq}-${run}@test.local`; const r = await o.call('POST', '/api/users', { name: 'zp ' + role, email, role, projects }); const pw = 'ZpStrongPass-' + run; const c = new C(); await c.call('POST', '/api/auth/login', { email, password: r.data.temporaryPassword }); await c.call('POST', '/api/auth/change-password', { currentPassword: r.data.temporaryPassword, newPassword: pw }); c.id = r.data.id; c.email = email; c.pw = pw; return c; };
 const L = 100000, iso = (d) => new Date(Date.now() + 19800000 + d * 86400000).toISOString().slice(0, 10);
 const from = iso(-3), to = iso(1);
-const pid = (await o.call('POST', '/api/projects', { name: 'zz-ty ' + run, code: 'TY' + run.toUpperCase().slice(-6), budget_paise: 500000000 })).data.id;
+const pid = (await o.call('POST', '/api/projects', { rera_no: 'P518000TEST', name: 'zz-ty ' + run, code: 'TY' + run.toUpperCase().slice(-6), budget_paise: 500000000 })).data.id;
 const acc = await mkUser('accounts', []); const viewer = await mkUser('viewer', []); const pm = await mkUser('pm', []); const sales = await mkUser('sales', []); const site = await mkUser('site', [pid]); const hr = await mkUser('hr', []); const pur = await mkUser('purchase', []);
 await o.call('POST', '/api/settings/sales.receipt_approval_limit_paise', { value: 0 });
 await o.call('POST', '/api/settings/con.enabled', { value: 'on' }); await o.call('POST', '/api/settings/con.pm_approval_limit_paise', { value: 50000000 });

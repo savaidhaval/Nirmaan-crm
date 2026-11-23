@@ -9,7 +9,7 @@ const run = Date.now().toString(36); const digits = String(Date.now()).slice(-8)
 const o = new C(); await o.call('POST', '/api/auth/login', { email: process.env.OWNER_EMAIL, password: process.env.OWNER_PASSWORD });
 let seq = 0;
 const mk = async (role, projects) => { const email = `zr-${role}-${++seq}-${run}@test.local`; const r = await o.call('POST', '/api/users', { name: 'zr ' + role, email, role, projects }); const c = new C(); await c.call('POST', '/api/auth/login', { email, password: r.data.temporaryPassword }); await c.call('POST', '/api/auth/change-password', { currentPassword: r.data.temporaryPassword, newPassword: 'ZrStrongPass-' + run }); return c; };
-const pid = (await o.call('POST', '/api/projects', { name: 'zz-r ' + run, code: 'R' + run.toUpperCase().slice(-6) })).data.id;
+const pid = (await o.call('POST', '/api/projects', { rera_no: 'P518000TEST', name: 'zz-r ' + run, code: 'R' + run.toUpperCase().slice(-6) })).data.id;
 const site = await mk('site', [pid]); const acc = await mk('accounts', []); const sales = await mk('sales', [pid]);
 await o.call('POST', '/api/sales/plan-stages', { project_id: pid, stages: [{ stage_name: 'Booking', pct_bp: 3000, milestone_key: 'k' + run }, { stage_name: 'Rest', pct_bp: 7000, milestone_key: 'z' + run }] });
 const mkUnit = async (wing, floor, n, type, extra = {}) => (await o.call('POST', '/api/sales/inventory', { project_id: pid, wing, floor, unit_no: n, type, price_paise: 10000000, rera_carpet_sqft: 500, ...extra })).data.id;
@@ -40,7 +40,7 @@ ok('sales cannot read cash flow', (await sales.call('GET', `/api/reports/cashflo
 // aging: mark the milestone done 100 days ago -> demand due 93 days ago
 await o.call('POST', '/api/site/milestones', { project_id: pid, name: 'Plinth', milestone_key: 'k' + run });
 const ms = (await o.call('GET', `/api/site/milestones?project_id=${pid}`)).data.milestones.find((m) => m.milestone_key === 'k' + run);
-await o.call('POST', `/api/site/milestones/${ms.id}/done`, { actual_date: new Date(Date.now() - 100 * 86400000).toISOString().slice(0, 10) });
+await o.call('POST', `/api/site/milestones/${ms.id}/done`, { actual_date: new Date(Date.now() - 100 * 86400000).toISOString().slice(0, 10), cert_ref: 'ARCH/1 test', override_note: 'test project has no CC recorded' });
 const ag = (await o.call('GET', `/api/reports/aging?project_id=${pid}`)).data;
 ok('aging puts the old demand in 90+ days', ag.buckets[4].count >= 1 && ag.top.some((t) => t.days > 90), JSON.stringify(ag.buckets));
 ok('future milestone money reported as scheduled', ag.scheduled_count >= 1);

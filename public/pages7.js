@@ -87,7 +87,8 @@ async function woDetail(id) {
   ov.innerHTML = `<div class="modal"><h2>${esc(w.wo_no)}</h2><p>${esc(w.contractor)}${w.trade ? ' · ' + esc(w.trade) : ''} ${statusChip(w.status)}</p><p class="muted">${esc(w.scope || '')}</p>
     ${site ? '' : `<p><b>Value ${moneyP(w.value_paise)}</b> · retention ${(w.retention_bp / 100).toFixed(1)}% · advance agreed ${moneyP(w.advance_paise)}</p>
     <p class="muted">Advance paid ${moneyP(b.advance_paid || 0)}, recovered ${moneyP(b.advance_recovered || 0)} → <b>outstanding ${moneyP(b.advance_outstanding || 0)}</b><br>Retention held: <b>${moneyP(b.retention_held || 0)}</b></p>`}
-    ${(d.items || []).length ? '<h3>Items</h3>' + d.items.map((i) => `<p>${esc(i.description)} — ${esc(i.qty)} ${esc(i.unit || '')} @ ${moneyP(i.rate_paise)} <span class="muted">(billed ${esc(i.billed_qty)})</span></p>`).join('') : ''}
+    ${(d.items || []).length ? '<h3>Items</h3>' + d.items.map((i) => `<p>${esc(i.description)} — ${esc(i.qty)} ${esc(i.unit || '')} @ ${moneyP(i.rate_paise)}${i.variation_id ? ' ' + chip('variation', 'info') : ''}<br><span class="muted">allowed ${esc(+(i.allowed_qty ?? i.qty).toFixed(3))}${i.variation_qty ? ` (incl. ${esc(i.variation_qty)} by variation)` : ''} · measured ${esc(i.measured_qty || 0)} · billed ${esc(i.billed_qty)}</span></p>`).join('') : ''}
+    ${w.status === 'approved' ? `<div class="row-btns"><button class="btn" id="wo-meas">Measurements${d.pending_measurements ? ` (${d.pending_measurements} to approve)` : ''}</button>${site ? '' : `<button class="btn" id="wo-var">Variations${d.pending_variations ? ` (${d.pending_variations} to approve)` : ''}</button>`}</div>` : ''}
     ${site ? '' : '<h3>RA bills</h3>' + (raHtml || '<p class="muted">No RA bills yet.</p>')}
     <div class="row-btns">${!site && ['draft', 'rejected'].includes(w.status) && canC ? '<button class="btn" id="wo-submit">Send for approval</button>' : ''}${w.status === 'pending_approval' && canA ? '<button class="btn btn-primary" id="wo-approve">Approve</button><button class="btn" id="wo-reject">Reject</button>' : ''}
     ${w.status === 'approved' && canC ? '<button class="btn btn-primary" id="wo-ra">+ New RA bill</button>' : ''}${w.status === 'approved' && money ? '<button class="btn" id="wo-adv">Pay advance</button><button class="btn" id="wo-ret">Release retention</button>' : ''}${w.status === 'approved' && canA ? '<button class="btn" id="wo-close">Close work order</button>' : ''}${!site ? '<button class="btn" id="wo-print">Print</button>' : ''}</div>
@@ -103,10 +104,18 @@ async function woDetail(id) {
   on('wo-reject', async () => { const v = await openForm({ title: 'Reject work order', fields: [{ name: 'note', label: 'Why?', type: 'textarea', required: true }] }); if (v) post(`/api/contractors/work-orders/${id}/reject`, v, 'Rejected'); });
   on('wo-close', () => { if (confirm('Close this work order? No more bills can be raised.')) post(`/api/contractors/work-orders/${id}/close`, {}, 'Closed'); });
   on('wo-ra', () => { ov.remove(); newRaBill(id, d); });
+  on('wo-meas', () => { ov.remove(); woMeasurements(id, w); });
+  on('wo-var', () => { ov.remove(); woVariations(id, w, d); });
   const payForm = async (title, path, dflt) => {
     const v = await openForm({ title, fields: [{ name: 'amount_paise', label: 'Amount (₹)', type: 'money', required: true, value: dflt ? (dflt / 100).toFixed(2) : '' }, { name: 'paid_on', label: 'Paid on', type: 'date', value: today() },
       { name: 'mode', label: 'How', type: 'select', options: [['neft', 'NEFT / RTGS'], ['upi', 'UPI'], ['cheque', 'Cheque'], ['cash', 'Cash']] }, { name: 'ref_no', label: 'Reference / cheque no.' }] });
-    if (v) post(path, v, 'Recorded');
+    if (!v) return;
+    try { const r = await api(path, { method: 'POST', body: v }); if (r) { toast('Recorded'); again(); } }
+    catch (e) {
+      // retention before the defect liability period ends: the Owner may go ahead with a reason
+      if (e.data && e.data.code === 'dlp' && currentUser.role === 'owner') { const n = await openForm({ title: 'Release retention early?', intro: e.message, fields: [{ name: 'note', label: 'Why release it now?', type: 'textarea', required: true }] }); if (n && await act(api(path, { method: 'POST', body: { ...v, note: n.note } }), 'Recorded')) again(); }
+      else toast(e.message, 7000);
+    }
   };
   on('wo-adv', () => payForm('Pay advance', `/api/contractors/work-orders/${id}/advance`, Math.max(0, w.advance_paise - (b.advance_paid || 0))));
   on('wo-ret', () => payForm('Release retention', `/api/contractors/work-orders/${id}/release-retention`, b.retention_held || 0));
@@ -124,21 +133,22 @@ async function newRaBill(woId, d) {
   const ov = document.createElement('div'); ov.className = 'modal-overlay';
   ov.innerHTML = `<div class="modal"><h2>New RA bill · ${esc(w.wo_no)}</h2><p class="help">Enter the work done up to this bill. Retention is held back automatically (${(w.retention_bp / 100).toFixed(1)}%).</p>
     <div class="field"><label>From</label><input id="ra-from" type="date"></div><div class="field"><label>To</label><input id="ra-to" type="date" value="${today()}"></div>
-    ${items.length ? items.map((i) => `<div class="field"><label>${esc(i.description)} — quantity done this bill (${esc(i.unit || 'units')}); ordered ${esc(i.qty)}, billed so far ${esc(i.billed_qty)}</label><input data-line="${i.id}" inputmode="decimal"></div>`).join('')
+    ${items.length ? items.map((i) => `<div class="field"><label>${esc(i.description)} — quantity this bill (${esc(i.unit || 'units')}); allowed ${esc(+(i.allowed_qty ?? i.qty).toFixed(3))}, measured ${esc(i.measured_qty || 0)}, billed so far ${esc(i.billed_qty)} → <b>can bill ${esc(Math.max(0, +(Math.min(i.allowed_qty ?? i.qty, i.measured_qty || 0) - i.billed_qty).toFixed(3)))}</b></label><input data-line="${i.id}" inputmode="decimal"></div>`).join('')
       : '<div class="field"><label>Value of work done this bill (₹)</label><input id="ra-gross" inputmode="decimal"></div>'}
-    <div class="field"><label>Advance to recover (₹) — outstanding ${moneyP((d.balances || {}).advance_outstanding || 0)}</label><input id="ra-rec" inputmode="decimal"></div>
+    <div class="field"><label>Advance to recover (₹) — outstanding ${moneyP((d.balances || {}).advance_outstanding || 0)}</label><input id="ra-rec" inputmode="decimal" placeholder="Leave empty: ${((w.advance_recovery_bp || 1000) / 100)}% of this bill is recovered"></div>
     <div class="field"><label>Other deductions (₹)</label><input id="ra-oth" inputmode="decimal"></div><div class="field"><label>Payment due on</label><input id="ra-due" type="date"></div>
     <div class="error" id="ra-err" style="display:none"></div><div class="modal-actions"><button class="btn" id="ra-cancel" type="button">Cancel</button><button class="btn btn-primary" id="ra-ok" type="button">Save RA bill</button></div></div>`;
   document.body.appendChild(ov);
   $('ra-cancel').onclick = () => { ov.remove(); woDetail(w.id); };
   $('ra-ok').onclick = async () => {
-    const body = { period_from: $('ra-from').value || null, period_to: $('ra-to').value || null, due_date: $('ra-due').value || null, advance_recovery_paise: rupeesToPaise($('ra-rec').value) || 0, other_deductions_paise: rupeesToPaise($('ra-oth').value) || 0 };
+    const body = { period_from: $('ra-from').value || null, period_to: $('ra-to').value || null, due_date: $('ra-due').value || null, advance_recovery_paise: $('ra-rec').value.trim() === '' ? undefined : rupeesToPaise($('ra-rec').value), other_deductions_paise: rupeesToPaise($('ra-oth').value) || 0 };
     if (items.length) body.lines = [...ov.querySelectorAll('[data-line]')].filter((x) => Number(x.value) > 0).map((x) => ({ wo_item_id: Number(x.dataset.line), qty: Number(x.value) }));
     else body.gross_paise = rupeesToPaise($('ra-gross').value) || 0;
     const send = async () => {
       try { return await api(`/api/contractors/work-orders/${w.id}/ra-bills`, { method: 'POST', body }); }
       catch (e) {
-        if (e.data && e.data.code === 'over_limit' && confirm(`${e.data.warnings.join('\n')}\n\nSave anyway?`)) { body.confirm_over = true; return send(); }
+        if (e.data && e.data.code === 'recovery') { const n = await openForm({ title: 'Less advance recovery', intro: e.message, fields: [{ name: 'r', label: 'Why recover less on this bill?', type: 'textarea', required: true }] }); if (n) { body.advance_recovery_reason = n.r; return send(); } return null; }
+        if (e.data && e.data.code === 'over_limit') { const er = $('ra-err'); er.textContent = e.data.warnings.join(' '); er.style.display = 'block'; return null; }
         const er = $('ra-err'); er.textContent = e.message; er.style.display = 'block'; return null;
       }
     };

@@ -39,15 +39,15 @@ if (l.data.data.must_change_password) { console.error('Owner must change passwor
   ok('anon /api/sales/leads -> 401', (await anon.call('GET', '/api/sales/leads')).status === 401);
   ok('anon /api/print/asset/signature -> 401', (await anon.call('GET', '/api/print/asset/signature')).status === 401);
   ok('anon /brand/signature.png not served', (await anon.call('GET', '/brand/signature.png', null, { raw: true })).status === 404);
-  ok('POST without X-NirmaanCRM -> 403', (await owner.call('POST', '/api/projects', { name: 'x', code: 'x' }, { csrf: false })).status === 403);
+  ok('POST without X-NirmaanCRM -> 403', (await owner.call('POST', '/api/projects', { rera_no: 'P518000TEST', name: 'x', code: 'x' }, { csrf: false })).status === 403);
   const bad = await anon.login(OWNER.email, 'definitely-wrong');
   ok('wrong password -> 401 (not 500)', bad.status === 401 || bad.status === 429, String(bad.status));
 }
 
 // --- fixtures
-const pr = await owner.call('POST', '/api/projects', { name: 'zz-test ' + run, code: 'ZZ' + run.toUpperCase().slice(-5) });
+const pr = await owner.call('POST', '/api/projects', { rera_no: 'P518000TEST', name: 'zz-test ' + run, code: 'ZZ' + run.toUpperCase().slice(-5) });
 const pid = pr.data.data.id;
-const other = await owner.call('POST', '/api/projects', { name: 'zz-test other ' + run, code: 'ZO' + run.toUpperCase().slice(-5) });
+const other = await owner.call('POST', '/api/projects', { rera_no: 'P518000TEST', name: 'zz-test other ' + run, code: 'ZO' + run.toUpperCase().slice(-5) });
 const otherPid = other.data.data.id;
 const mk = async (role, projects) => {
   const email = `zz-${role}-${run}@test.local`;

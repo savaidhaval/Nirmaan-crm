@@ -13,7 +13,7 @@ import { execSync } from 'node:child_process';
 const persist = process.env.D1_PERSIST_TO ? `--persist-to ${process.env.D1_PERSIST_TO}` : '';
 const sql = (cmd) => execSync(`npx wrangler d1 execute nirmaan-db --local ${persist} --command "${cmd}"`, { stdio: 'pipe' }).toString();
 const code = 'R5' + run.toUpperCase().slice(-6);
-const pid = (await o.call('POST', '/api/projects', { name: 'zz-r5 ' + run, code, budget_paise: 50000000 })).data.id;
+const pid = (await o.call('POST', '/api/projects', { rera_no: 'P518000TEST', name: 'zz-r5 ' + run, code, budget_paise: 50000000 })).data.id;
 const acc = await mkUser('accounts', []); const pm = await mkUser('pm', []); const viewer = await mkUser('viewer', []); const sales = await mkUser('sales', []); const sales2 = await mkUser('sales', []); const site = await mkUser('site', [pid]);
 const setSetting = (k, v) => o.call('POST', '/api/settings/' + k, { value: v });
 const clean = () => sql("DELETE FROM settings WHERE key IN ('rera.designated_pct_bp', 'sales.visit_radius_m', 'sales.visit_objections')");

@@ -179,25 +179,65 @@ export function registerFinance(router, h) {
       const vendor = await env.DB.prepare('SELECT * FROM pro_vendors WHERE id = ? AND deleted_at IS NULL').bind(Number(b.vendor_id)).first();
       if (!vendor) return json({ ok: false, error: 'Vendor not found.' }, 404);
       let projectId = b.project_id ? Number(b.project_id) : null;
+      let po = null;
       if (b.po_id) {
-        const po = await env.DB.prepare('SELECT project_id, vendor_id FROM pro_pos WHERE id = ?').bind(Number(b.po_id)).first();
+        po = await env.DB.prepare('SELECT * FROM pro_pos WHERE id = ? AND deleted_at IS NULL').bind(Number(b.po_id)).first();
         if (!po) return json({ ok: false, error: 'PO not found.' }, 404);
+        if (po.vendor_id !== vendor.id) return json({ ok: false, error: 'This bill is from a different vendor than the PO.' }, 400);
         projectId = po.project_id;
       }
+      const billNo = String(b.bill_no || '').trim().slice(0, 40);
+      if (billNo && await env.DB.prepare('SELECT 1 AS x FROM pro_bills WHERE vendor_id = ? AND lower(trim(bill_no)) = lower(?) LIMIT 1').bind(vendor.id, billNo).first()) return json({ ok: false, error: `Bill ${billNo} from ${vendor.name} is already recorded.`, code: 'duplicate' }, 409);
       if (!projectId || !(await visibleProjectIds(env, req.user)).includes(projectId)) return json({ ok: false, error: 'Pick the project this bill belongs to.' }, 400);
       const gst = Math.max(0, Math.round(Number(b.gst_paise) || 0));
       if (gst >= amount) return json({ ok: false, error: 'GST cannot be the whole bill.' }, 400);
       const taxable = b.taxable_paise ? Math.round(Number(b.taxable_paise)) : amount - gst;
       let bp = Math.max(0, Math.round(Number(b.tds_bp) || 0)); let note = null;
-      if (bp > 0 && !vendor.pan) { if (bp < 2000) { bp = 2000; note = 'No PAN on file for this vendor: TDS raised to 20% (s.206AA). Add the PAN to use the normal rate.'; } }
+      const noPan = Math.round(Number(await getSetting(env, 'tax.tds_no_pan_bp'))) || 2000;
+      if (bp > 0 && !vendor.pan) { if (bp < noPan) { bp = noPan; note = `No PAN on file for this vendor: TDS raised to ${noPan / 100}% (s.206AA, confirm with your CA). Add the PAN to use the normal rate.`; } }
+      // Match against the PO and what was received: material received x PO rate (+ the PO's charges), less what is already billed, plus the tolerance.
+      let hold = null;
+      if (po) {
+        const tol = Math.max(0, Math.round(Number(await getSetting(env, 'pro.tolerance_bp')) || 300));
+        const [rcv, lines, prev] = await env.DB.batch([
+          env.DB.prepare('SELECT COALESCE(SUM(gi.qty_received * i.rate_paise), 0) AS v FROM pro_grn_items gi JOIN pro_grns g ON g.id = gi.grn_id AND g.deleted_at IS NULL JOIN pro_po_items i ON i.id = gi.po_item_id WHERE i.po_id = ?').bind(po.id),
+          env.DB.prepare('SELECT COUNT(*) AS n FROM pro_po_items WHERE po_id = ?').bind(po.id),
+          env.DB.prepare('SELECT COALESCE(SUM(COALESCE(taxable_paise, amount_paise - COALESCE(gst_paise, 0))), 0) AS v FROM pro_bills WHERE po_id = ?').bind(po.id),
+        ]);
+        const charges = ['transport_paise', 'loading_paise', 'packing_paise', 'insurance_paise', 'other_charges_paise'].reduce((t, k) => t + (po[k] || 0), 0);
+        const goodsCap = lines.results[0].n ? rcv.results[0].v : po.amount_paise - charges;
+        const allowed = Math.round(goodsCap * (10000 + tol) / 10000) + (lines.results[0].n && !rcv.results[0].v ? 0 : charges) - prev.results[0].v;
+        if (taxable > allowed) hold = lines.results[0].n && !rcv.results[0].v ? 'Nothing has been received against this PO yet.' : `Billed ${rupees(taxable)} (before GST) but only ${rupees(Math.max(0, allowed))} is supported by material received at PO rates (with ${tol / 100}% tolerance).`;
+      }
       if (bp > 3000) return json({ ok: false, error: 'TDS rate looks wrong.' }, 400);
       const tds = Math.round((taxable * bp) / 10000);
       const section = bp > 0 ? String(b.tds_section || '194C').slice(0, 8) : null;
-      const r = await env.DB.prepare('INSERT INTO pro_bills (po_id, vendor_id, project_id, bill_no, amount_paise, taxable_paise, gst_paise, tds_section, tds_bp, tds_paise, due_date, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-        .bind(b.po_id ? Number(b.po_id) : null, vendor.id, projectId, String(b.bill_no || '').slice(0, 40), amount, taxable, gst, section, bp, tds, b.due_date || null, nowStr()).run();
+      const r = await env.DB.prepare('INSERT INTO pro_bills (po_id, vendor_id, project_id, bill_no, amount_paise, taxable_paise, gst_paise, tds_section, tds_bp, tds_paise, due_date, created_at, hold_reason, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+        .bind(b.po_id ? Number(b.po_id) : null, vendor.id, projectId, billNo, amount, taxable, gst, section, bp, tds, b.due_date || null, nowStr(), hold, req.user.user_id).run();
       await audit(env, req.user, 'create', 'pro_bills', r.meta.last_row_id, `Bill ${b.bill_no || ''} ${rupees(amount)} from ${vendor.name}${tds ? `, TDS ${rupees(tds)} (${section} @ ${bp / 100}%)` : ''}`);
-      return json({ ok: true, data: { id: r.meta.last_row_id, tds_paise: tds, net_payable_paise: amount - tds, note } });
+      if (hold) {
+        const now = nowStr();
+        await env.DB.prepare("INSERT INTO notifications (user_id, title, body, link, created_at) SELECT id, ?, ?, 'procurement', ? FROM users WHERE role IN ('pm', 'owner') AND active = 1 AND deleted_at IS NULL LIMIT 20").bind(`Bill on hold: ${vendor.name} ${billNo}`, hold, now).run();
+      }
+      return json({ ok: true, data: { id: r.meta.last_row_id, tds_paise: tds, net_payable_paise: amount - tds, note, on_hold: !!hold, hold_reason: hold } });
     } catch (e) { return serverError(e, 'bill'); }
+  }));
+
+  // A bill held because it did not match the PO / receipts: the PM or the Owner checks it and releases it with a note.
+  router.post('/api/procurement/bills/:id/release', async (req, env) => withAuth(req, env, 'procurement', 'A', async (req, env) => {
+    try {
+      const bill = await env.DB.prepare('SELECT * FROM pro_bills WHERE id = ?').bind(Number(req.params.id)).first();
+      if (!bill || !bill.project_id || !(await visibleProjectIds(env, req.user)).includes(bill.project_id)) return json({ ok: false, error: 'Bill not found.' }, 404);
+      if (!bill.hold_reason || bill.released_at) return json({ ok: false, error: 'This bill is not on hold.' }, 409);
+      if (bill.created_by === req.user.user_id && req.user.role !== 'owner') return json({ ok: false, error: 'Someone else must release a bill you entered.' }, 403);
+      const b = await req.json().catch(() => ({}));
+      const note = String(b.note || '').trim().slice(0, 300);
+      if (!note) return json({ ok: false, error: 'Say why the bill is right (e.g. extra quantity agreed, short receipt entered late).' }, 400);
+      const r = await env.DB.prepare('UPDATE pro_bills SET released_by = ?, released_at = ?, release_note = ? WHERE id = ? AND released_at IS NULL').bind(req.user.user_id, nowStr(), note, bill.id).run();
+      if (!r.meta.changes) return json({ ok: false, error: 'Already released.' }, 409);
+      await audit(env, req.user, 'release', 'pro_bills', bill.id, `Bill ${bill.bill_no || bill.id} released from hold: ${note}`);
+      return json({ ok: true });
+    } catch (e) { return serverError(e, 'bill-release'); }
   }));
 
   router.post('/api/procurement/bills/:id/tds-deposit', async (req, env) => withAuth(req, env, 'procurement', 'E', async (req, env) => {
