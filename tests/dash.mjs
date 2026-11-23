@@ -23,7 +23,7 @@ const find = (r, text) => lines(r).find((l) => l.label.includes(text));
 const soc = (await pm.call('POST', '/api/redev/societies', { project_id: pid, name: 'Dash Society ' + run, consent_threshold_pct: 51 })).data.id;
 await pm.call('POST', `/api/redev/societies/${soc}/members/import`, { rows: [1, 2, 3, 4].map((i) => ({ wing: 'A', unit_label: String(i), member_name: 'M' + i, carpet_sqft: 400 })) });
 const mem = (await pm.call('GET', `/api/redev/societies/${soc}/members`)).data.members; await pm.call('POST', `/api/redev/members/${mem[0].id}/consent`, { status: 'consented' });
-await o.call('PUT', `/api/redev/members/${mem[1].id}/vacate`, { paaa_reg_no: 'PAAA-T', paaa_reg_date: '2020-01-01', vacated_on: '2020-01-01' });
+await o.call('PUT', `/api/redev/members/${mem[1].id}/vacate`, { paaa_reg_no: 'PAAA-T', paaa_reg_date: '2020-01-01', vacated_on: '2020-01-01', override_note: 'test fixture, no photo' });
 await acc.call('POST', `/api/redev/members/${mem[1].id}/transit-term`, { monthly_rent_paise: 2500000, start_date: new Date(Date.now() + 19800000 - 100 * 86400000).toISOString().slice(0, 7) + '-01', bg_ref: 'BG1', bg_amount_paise: 100000, bg_expiry: iso(10) });
 // ============ a receipt waiting for approval and a RERA gap ============
 await o.call('POST', '/api/sales/plan-stages', { project_id: pid, stages: [{ stage_name: 'All', pct_bp: 10000 }] });

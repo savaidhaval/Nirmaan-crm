@@ -88,6 +88,8 @@ export function registerProjectPlus(router, h) {
       const members = numOrNull(b.members_count), plot = numOrNull(b.plot_area_sqm);
       if (members !== null && (members < 0 || members > 100000 || !Number.isInteger(members))) return json({ ok: false, error: 'Number of members looks wrong.' }, 400);
       if (plot !== null && (plot <= 0 || plot > 10000000)) return json({ ok: false, error: 'Plot area looks wrong.' }, 400);
+      const fsiVals = {};
+      for (const k of ['sanctioned_fsi', 'fungible_fsi', 'tdr_purchased']) { const v = numOrNull(b[k]); if (v !== null && !(v >= 0 && v <= 100000000)) return json({ ok: false, error: 'Check the FSI / TDR figures.' }, 400); fsiVals[k] = v; }
       const others = (Array.isArray(b.other_authorities) ? b.other_authorities : String(b.other_authorities || '').split(',')).map((x) => str(x, 60)).filter(Boolean).slice(0, 20);
       for (const k of ['property_card_doc_id', 'conveyance_doc_id']) {
         const d = numOrNull(b[k]);
@@ -101,7 +103,8 @@ export function registerProjectPlus(router, h) {
       }
       const set = { members_count: members, plot_area_sqm: plot, planning_authority: str(b.planning_authority, 60) || null, other_authorities: others.length ? JSON.stringify(others) : null,
         cts_no: str(b.cts_no, 120) || null, village: str(b.village, 120) || null, ward: str(b.ward, 40) || null, property_card_details: str(b.property_card_details, 1000) || null,
-        property_card_doc_id: numOrNull(b.property_card_doc_id), conveyance_details: str(b.conveyance_details, 1000) || null, conveyance_doc_id: numOrNull(b.conveyance_doc_id), extra_info: str(b.extra_info, 2000) || null };
+        property_card_doc_id: numOrNull(b.property_card_doc_id), conveyance_details: str(b.conveyance_details, 1000) || null, conveyance_doc_id: numOrNull(b.conveyance_doc_id), extra_info: str(b.extra_info, 2000) || null,
+        dcpr_regulation: str(b.dcpr_regulation, 60) || null, ...fsiVals };
       const keys = Object.keys(set).filter((k) => b[k] !== undefined);
       const cols = keys.map((k) => `${k} = ?`); const vals = keys.map((k) => set[k]);
       if (maps) { cols.push('maps_url = ?', 'lat = ?', 'lng = ?'); vals.push(maps, coords ? coords.lat : null, coords ? coords.lng : null); }

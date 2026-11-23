@@ -99,7 +99,7 @@ ok('Sales cannot book a rehab flat', (await (async () => { const sc = await mkUs
 const first = iso(0).slice(0, 7) + '-01';
 const threeBack = (() => { const d = new Date(Date.now() + 19800000); d.setUTCMonth(d.getUTCMonth() - 3); return d.toISOString().slice(0, 7) + '-01'; })();
 ok('transit rent cannot start before the member has vacated', (await acc.call('POST', `/api/redev/members/${ids[0]}/transit-term`, { monthly_rent_paise: 2500000, start_date: first })).status === 409);
-for (const id of ids) await o.call('PUT', `/api/redev/members/${id}/vacate`, { paaa_reg_no: 'PAAA-' + id, paaa_reg_date: '2020-01-01', vacated_on: '2020-01-01' });
+for (const id of ids) await o.call('PUT', `/api/redev/members/${id}/vacate`, { paaa_reg_no: 'PAAA-' + id, paaa_reg_date: '2020-01-01', vacated_on: '2020-01-01', override_note: 'test fixture, no photo' });
 ok('only Owner and Accounts record rent terms', (await pm.call('POST', `/api/redev/members/${ids[0]}/transit-term`, { monthly_rent_paise: 2500000, start_date: first })).status === 403 && (await sales.call('GET', `/api/redev/societies/${soc}/transit`)).status === 403);
 ok('rent and the first month are required', (await acc.call('POST', `/api/redev/members/${ids[0]}/transit-term`, { start_date: first })).status === 400 && (await acc.call('POST', `/api/redev/members/${ids[0]}/transit-term`, { monthly_rent_paise: 2500000 })).status === 400);
 const t1 = await acc.call('POST', `/api/redev/members/${ids[0]}/transit-term`, { monthly_rent_paise: 2500000, start_date: first, deposit_paise: 10000000, bg_ref: 'BG-77', bg_amount_paise: 5000000, bg_expiry: iso(20) });
@@ -125,7 +125,10 @@ ok('reversing needs a reason', (await acc.call('POST', `/api/redev/transit-payme
 ok('reverse with a reason: the month is partly due again', (await acc.call('POST', `/api/redev/transit-payments/${payId}/reverse`, { reason: 'Cheque bounced' })).status === 200 && (await pm.call('GET', `/api/redev/members/${ids[0]}/transit`)).data.months[0].paid_paise === 1500000);
 ok('reversing twice is refused; the payment row is kept with its reason', (await acc.call('POST', `/api/redev/transit-payments/${payId}/reverse`, { reason: 'again' })).status === 409 && (await pm.call('GET', `/api/redev/members/${ids[0]}/transit`)).data.payments.find((p) => p.id === payId).reversal_note === 'Cheque bounced');
 ok('the start month cannot be moved once scheduled', (await acc.call('POST', `/api/redev/members/${ids[0]}/transit-term`, { monthly_rent_paise: 2500000, start_date: iso(-100) })).status === 409);
-ok('a rent change reaches unpaid months only', (await acc.call('POST', `/api/redev/members/${ids[0]}/transit-term`, { monthly_rent_paise: 2600000, start_date: first, bg_expiry: iso(20), bg_ref: 'BG-77', bg_amount_paise: 5000000, deposit_paise: 10000000 })).status === 200 && (await pm.call('GET', `/api/redev/members/${ids[0]}/transit`)).data.months.slice(1).every((m) => m.due_paise === 2600000) && (await pm.call('GET', `/api/redev/members/${ids[0]}/transit`)).data.months[0].due_paise === 2500000);
+await o.call('POST', '/api/redev/approval-pin', { password: process.env.OWNER_PASSWORD, pin: '482913' });
+const rentChg = await acc.call('POST', `/api/redev/members/${ids[0]}/transit-term`, { monthly_rent_paise: 2600000, start_date: first, bg_expiry: iso(20), bg_ref: 'BG-77', bg_amount_paise: 5000000, deposit_paise: 10000000 });
+const rentOk = rentChg.status === 200 && rentChg.data.pending === true && (await o.call('POST', `/api/redev/rent-changes/${rentChg.data.id}/approve`, { pin: '482913' })).status === 200;
+ok('a rent change reaches unpaid months only', rentOk && (await pm.call('GET', `/api/redev/members/${ids[0]}/transit`)).data.months.slice(1).every((m) => m.due_paise === 2600000) && (await pm.call('GET', `/api/redev/members/${ids[0]}/transit`)).data.months[0].due_paise === 2500000);
 
 // ============ WP-2: corpus ============
 const c1 = await acc.call('POST', `/api/redev/members/${ids[0]}/corpus`, { label: 'Corpus share', amount_paise: 50000000, due_on: iso(30) });

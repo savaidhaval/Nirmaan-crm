@@ -171,7 +171,8 @@ async function rdTerm(memberId, pane, month) {
     { name: 'bg_ref', label: 'Bank guarantee number', value: t.bg_ref || '' }, { name: 'bg_amount_paise', label: 'Guarantee amount (₹)', type: 'money', value: t.bg_amount_paise ? t.bg_amount_paise / 100 : '' }, { name: 'bg_expiry', label: 'Guarantee expires on', type: 'date', value: t.bg_expiry || '' }] });
   if (!v) return;
   ['end_date', 'bg_expiry', 'bg_ref', 'bg_amount_paise', 'deposit_paise'].forEach((k) => { if (v[k] === '') delete v[k]; });
-  const r = await act(api(`/api/redev/members/${memberId}/transit-term`, { method: 'POST', body: v }), 'Saved');
+  const r = await m1RentSave('POST', `/api/redev/members/${memberId}/transit-term`, v);
+  if (r && r.data.pending) { toast(r.data.message, 7000); rdRent(pane, month); return; }
   if (r) { toast(`${r.data.months_scheduled} months scheduled`); rdRent(pane, month); }
 }
 
@@ -206,6 +207,7 @@ async function rdTerms(memberId, pane) {
   const rs = (p) => (p == null ? '' : p / 100);
   const v = await openForm({ title: `${t.member_name} · ${(t.wing ? t.wing + '-' : '') + t.unit_label}`, intro: 'Rent for each year can differ. The new RERA carpet area is worked out for you.', fields: [
     { name: 'carpet_sqft', label: 'Current flat area (carpet, sq ft)', type: 'number', value: t.carpet_sqft ?? '' },
+    { name: 'certified_area_sqft', label: 'Certified area from the architect\'s Annexure-II list (sq ft)', type: 'number', value: t.certified_area_sqft ?? '', help: t.certified_area_sqft ? 'Locked. Rent per sq ft uses this figure only.' : 'Enter it once, from the architect\'s certified list. It cannot be changed later. Needed for rent per sq ft.' },
     { name: 'extra_area_pct', label: 'Proposed extra area on RERA carpet (%)', type: 'number', value: t.extra_area_bp == null ? '' : t.extra_area_bp / 100, help: t.new_rera_sqft ? `New RERA carpet now: ${t.new_rera_sqft} sq ft` : 'e.g. 35 for 35% more' },
     { name: 'rent_basis', label: 'Rent is', type: 'select', value: t.rent_basis || 'monthly', options: [['monthly', 'A monthly amount (₹ per month)'], ['per_sqft', '₹ per sq ft per month']] },
     ...[1, 2, 3, 4, 5].map((y) => ({ name: 'y' + y, label: `Year ${y} rent`, type: 'money', value: rs(t['rent_y' + y + '_paise']), placeholder: y > 1 ? 'Leave empty if not agreed' : '' })),
@@ -215,9 +217,10 @@ async function rdTerms(memberId, pane) {
     { name: 'buys_extra', type: 'checkbox', checkLabel: 'Member is buying extra area', value: !!t.buys_extra },
     { name: 'buys_extra_sqft', label: 'Extra area being bought (sq ft)', type: 'number', value: t.buys_extra_sqft ?? '' }] });
   if (!v) return;
-  const body = { carpet_sqft: v.carpet_sqft, extra_area_pct: v.extra_area_pct, rent_basis: v.rent_basis, corpus_paise: v.corpus || '', shifting_paise: v.shifting || '', car_parks: v.car_parks, buys_extra: v.buys_extra, buys_extra_sqft: v.buys_extra_sqft };
+  const body = { carpet_sqft: v.carpet_sqft, certified_area_sqft: v.certified_area_sqft, extra_area_pct: v.extra_area_pct, rent_basis: v.rent_basis, corpus_paise: v.corpus || '', shifting_paise: v.shifting || '', car_parks: v.car_parks, buys_extra: v.buys_extra, buys_extra_sqft: v.buys_extra_sqft };
   [1, 2, 3, 4, 5].forEach((y) => { body['rent_y' + y + '_paise'] = v['y' + y] || ''; });
-  const r = await act(api(`/api/redev/members/${memberId}/terms`, { method: 'PUT', body }));
+  const r = await m1RentSave('PUT', `/api/redev/members/${memberId}/terms`, body);
+  if (r && r.data.pending) { toast(r.data.message, 7000); rdMembers(pane); return; }
   if (r) { toast(r.data.new_rera_sqft ? `Saved. New RERA carpet: ${r.data.new_rera_sqft} sq ft` : 'Saved', 5000); rdMembers(pane); }
 }
 

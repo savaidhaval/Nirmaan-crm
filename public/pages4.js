@@ -60,7 +60,7 @@ function shortMoney(p) { const r = Number(p) / 100; if (r >= 1e7) return (r / 1e
 const emptyIllus = (msg) => `<div class="empty-state">${SV.building()}<p>${esc(msg)}</p></div>`;
 
 // ---------- Stacking plan ----------
-const STACK = { available: ['Available', '#dcfce7', '#166534'], token_locked: ['Token locked', '#fef3c7', '#92400e'], booked: ['Booked', '#dbeafe', '#1e40af'], registered: ['Registered', '#e9d5ff', '#6b21a8'], possessed: ['Handed over', '#ccfbf1', '#115e59'], rehab: ['Rehab', '#e5e7eb', '#374151'] };
+const STACK = { available: ['Available', '#dcfce7', '#166534'], token_locked: ['Token locked', '#fef3c7', '#92400e'], booked: ['Booked', '#dbeafe', '#1e40af'], registered: ['Registered', '#e9d5ff', '#6b21a8'], possessed: ['Handed over', '#ccfbf1', '#115e59'], rehab: ['Rehab', '#e5e7eb', '#374151'], landowner: ['Landowner', '#e0e7ff', '#3730a3'] };
 let stackProject = 0;
 
 async function renderStacking(main) {
@@ -82,7 +82,7 @@ async function loadStacking() {
     if (!d.units.length) { out.innerHTML = emptyIllus('No flats yet. Add flats to see the stacking plan.'); return; }
     const wings = [...new Set(d.units.map((u) => u.wing))].sort();
     const legend = Object.entries(STACK).map(([k, [l, bg, fg]]) => `<span class="chip" style="background:${bg};color:${fg};text-transform:none">${l}: <b>${d.counts[k] || 0}</b></span>`).join(' ');
-    const sold = (d.counts.booked || 0) + (d.counts.registered || 0); const forSale = d.units.filter((u) => u.state !== 'rehab').length;
+    const sold = (d.counts.booked || 0) + (d.counts.registered || 0); const forSale = d.units.filter((u) => u.state !== 'rehab' && u.state !== 'landowner').length;
     let html = `<div class="card stk-top"><div>${SV.donut(Object.entries(STACK).map(([k, [l, , fg]]) => ({ label: l, value: d.counts[k] || 0, color: fg })), { label: 'flats' })}</div>
       <div><div class="row-btns" style="margin:0 0 8px">${legend}</div><p style="margin:4px 0"><b>${forSale ? Math.round((sold / forSale) * 100) : 0}%</b> of saleable flats sold · list value ${moneyP(d.total_list_value_paise)}${['owner', 'pm', 'accounts', 'sales'].includes(currentUser.role) ? ` · sold ${moneyP(d.sold_value_paise)}` : ''}</p><p class="muted">Tap a flat for details, hold or book.</p></div></div>`;
     for (const w of wings) {
@@ -106,7 +106,7 @@ async function unitDrill(u) {
       ${u.state === 'available' && canSell ? '<button class="btn small btn-primary" id="ud-hold">Hold 48h for a lead</button><button class="btn small" id="ud-book">Book</button>' : ''}
       ${u.state === 'token_locked' && canSell ? '<button class="btn small btn-primary" id="ud-book">Convert to booking</button><button class="btn small" id="ud-rel">Release</button>' : ''}${u.state === 'token_locked' && mgr ? '<button class="btn small" id="ud-ext">Extend 24h</button>' : ''}
       ${u.booking_id ? '<button class="btn small btn-primary" id="ud-bk">Open booking</button>' : ''}
-      <button class="btn small" id="ud-cs">Cost sheet</button>${mgr && !u.booking_id && u.state !== 'rehab' ? '<button class="btn small" id="ud-price">Change price</button>' : ''}</div>
+      <button class="btn small" id="ud-cs">Cost sheet</button>${mgr && !u.booking_id && u.state !== 'rehab' && u.state !== 'landowner' ? '<button class="btn small" id="ud-price">Change price</button>' : ''}</div>
     <div class="modal-actions"><button class="btn btn-primary" id="ud-close">Close</button></div></div>`;
   document.body.appendChild(ov);
   const done = () => { ov.remove(); loadStacking(); };
@@ -216,7 +216,7 @@ bookingDetail = async function (id) {
       if (k === 'cost') costSheet(b.list_price_paise || b.agreed_price_paise);
       else if (k === 'reg') { const v = await openForm({ title: 'Agreement / registration', fields: [{ name: 'agreement_date', label: 'Agreement for sale signed on', type: 'date' }, { name: 'registration_date', label: 'Registered on', type: 'date' }] }); if (v) { if (!v.agreement_date) delete v.agreement_date; if (!v.registration_date) delete v.registration_date; if (await act(api(`/api/sales/bookings/${id}/registration`, { method: 'POST', body: v }), 'Saved')) again(); } }
       else if (k === 'transfer') {
-        const inv = (await api('/api/sales/inventory?project_id=' + b.project_id)).data.inventory.filter((u) => u.status === 'available' && u.category !== 'rehab');
+        const inv = (await api('/api/sales/inventory?project_id=' + b.project_id)).data.inventory.filter((u) => u.status === 'available' && u.category === 'sale');
         if (!inv.length) { toast('No available flats to move to.'); return; }
         const v = await openForm({ title: 'Transfer booking', intro: 'Price and payment demands stay as they are.', fields: [{ name: 'to_unit_id', label: 'New flat', type: 'select', options: inv.map((u) => [u.id, `${u.wing ? u.wing + '-' : ''}${u.unit_no} · ${moneyP(u.price_paise)}`]) }, { name: 'reason', label: 'Reason', required: true }] });
         if (v && await act(api(`/api/sales/bookings/${id}/transfer`, { method: 'POST', body: { to_unit_id: Number(v.to_unit_id), reason: v.reason } }), 'Transferred')) again();
@@ -248,7 +248,7 @@ newUnit = async function () {
   const v = await openForm({ title: 'Add flat to inventory', fields: [
     { name: 'project_id', label: 'Project', type: 'select', options: await projectOptions() },
     { name: 'wing', label: 'Wing / tower' }, { name: 'floor', label: 'Floor', type: 'number' }, { name: 'unit_no', label: 'Flat number', required: true },
-    { name: 'type', label: 'Type (1BHK, 2BHK, Jodi…)' }, { name: 'category', label: 'Kind', type: 'select', options: [['sale', 'Free sale'], ['rehab', 'Rehab (existing members)']] },
+    { name: 'type', label: 'Type (1BHK, 2BHK, Jodi…)' }, { name: 'category', label: 'Kind', type: 'select', options: [['sale', 'Free sale'], ['rehab', 'Rehab (existing members)'], ['landowner', 'Landowner / partner share']] },
     { name: 'carpet_sqft', label: 'Carpet area (sq ft)', type: 'number' }, { name: 'rera_carpet_sqft', label: 'RERA carpet area (sq ft)', type: 'number', help: 'Sale is priced on RERA carpet area.' },
     { name: 'price_paise', label: 'Rate-card price (₹)', type: 'money' }, { name: 'floor_rise_paise', label: 'Floor-rise / PLC (₹)', type: 'money' }] });
   if (!v) return;

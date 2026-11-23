@@ -141,6 +141,10 @@ function profileFields(ch, p = {}) {
     { name: 'planning_authority', label: 'Planning authority', type: 'select', value: p.planning_authority || '', options: [['', 'Pick'], ...ch.planning_authorities.map((x) => [x, x])] },
     { name: 'other_authorities', label: 'Other approval authorities involved', type: 'multi', value: others.map(oIdx).filter((i) => i >= 0), options: ch.other_authorities.map((x, i) => [i, x]) },
     { name: 'cts_no', label: 'CTS / survey / plot number', value: p.cts_no || '' },
+    { name: 'dcpr_regulation', label: 'DCPR 2034 regulation of the scheme', value: p.dcpr_regulation || '', placeholder: 'e.g. 33(7)', help: 'Type it as it appears on your approvals. Confirm with your architect.' },
+    { name: 'sanctioned_fsi', label: 'Sanctioned FSI', type: 'number', value: p.sanctioned_fsi ?? '', help: 'From the approved plans.' },
+    { name: 'fungible_fsi', label: 'Fungible FSI taken', type: 'number', value: p.fungible_fsi ?? '' },
+    { name: 'tdr_purchased', label: 'TDR purchased', type: 'number', value: p.tdr_purchased ?? '', help: 'Use the same unit as the FSI figures above.' },
     { name: 'village', label: 'Village', value: p.village || '' },
     { name: 'property_card_details', label: 'Property card: what it says', type: 'textarea', value: p.property_card_details || '', placeholder: 'Holder, area, tenure, any remarks' },
     { name: 'property_card_file', label: 'Property card copy (optional)', type: 'file' },
@@ -157,7 +161,7 @@ async function saveProfile(pid, v, ch) {
     const r = await act(api('/api/files/upload', { method: 'POST', body: fd })); return r ? r.data.id : undefined;
   };
   const body = { members_count: v.members_count, plot_area_sqm: v.plot_area_sqm, ward: v.ward, planning_authority: v.planning_authority, other_authorities: (v.other_authorities || []).map((i) => ch.other_authorities[i]).filter(Boolean),
-    cts_no: v.cts_no, village: v.village, property_card_details: v.property_card_details, conveyance_details: v.conveyance_details, extra_info: v.extra_info };
+    cts_no: v.cts_no, dcpr_regulation: v.dcpr_regulation, sanctioned_fsi: v.sanctioned_fsi, fungible_fsi: v.fungible_fsi, tdr_purchased: v.tdr_purchased, village: v.village, property_card_details: v.property_card_details, conveyance_details: v.conveyance_details, extra_info: v.extra_info };
   if (v.maps_url) body.maps_url = v.maps_url;
   const pc = await up(v.property_card_file, 'Property card'); if (pc) body.property_card_doc_id = pc;
   const cd = await up(v.conveyance_file, 'Conveyance deed'); if (cd) body.conveyance_doc_id = cd;
@@ -232,7 +236,7 @@ async function projectQuick(id) {
       <h3>Project details</h3><div class="card facts">
         ${fact('Number of members', p.members_count)}${fact('Plot area', p.plot_area_sqm ? `${p.plot_area_sqm} sq m (${sqmToSqft(p.plot_area_sqm).toLocaleString('en-IN')} sq ft)` : '')}
         ${fact('Ward', esc(p.ward || ''))}${fact('Planning authority', esc(p.planning_authority || ''))}${fact('Other authorities', esc(others.join(', ')))}
-        ${fact('CTS / survey no.', esc(p.cts_no || ''))}${fact('Village', esc(p.village || ''))}${fact('MahaRERA no.', esc(p.rera_no || ''))}
+        ${fact('DCPR 2034 regulation', esc(p.dcpr_regulation || ''))}${fact('Sanctioned / fungible FSI, TDR', p.sanctioned_fsi != null || p.fungible_fsi != null || p.tdr_purchased != null ? `${p.sanctioned_fsi ?? '—'} / ${p.fungible_fsi ?? '—'}, TDR ${p.tdr_purchased ?? '—'}` : '')}${fact('CTS / survey no.', esc(p.cts_no || ''))}${fact('Village', esc(p.village || ''))}${fact('MahaRERA no.', esc(p.rera_no || ''))}
         ${fact('Property card', p.property_card_details || p.property_card_doc_id ? `${esc(p.property_card_details || '')}${p.property_card_doc_id ? ` <a class="btn small" href="/api/files/download/${p.property_card_doc_id}">View copy</a>` : ''}` : '')}
         ${fact('Conveyance deed', p.conveyance_details || p.conveyance_doc_id ? `${esc(p.conveyance_details || '')}${p.conveyance_doc_id ? ` <a class="btn small" href="/api/files/download/${p.conveyance_doc_id}">View copy</a>` : ''}` : '')}
         ${fact('Other information', esc(p.extra_info || ''))}

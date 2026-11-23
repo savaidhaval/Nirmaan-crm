@@ -426,3 +426,27 @@ id TEXT PK, source TEXT, seen_at TEXT
 - documents.module = 'bd': deal papers (feasibility reports, 79A papers, signed DA); only roles with Business Development view can open them.
 - Settings: bd.vacate_to_plinth_months (default 7), bd.completion_months (default 36), bd.steps_79a (blank = built-in list).
 
+## Module 1 gaps, step 1 (migration 0040)
+- projects: dcpr_regulation (text, as typed on the approvals; confirm with the architect), sanctioned_fsi, fungible_fsi, tdr_purchased (numbers, same unit).
+- red_members: certified_area_sqft (architect-certified Annexure-II area; set once, then locked; per-sq-ft rent uses it, with carpet_sqft only as a fallback for rows priced before this existed), certified_by, certified_at.
+- sal_inventory.category now takes sale | rehab | landowner (no schema change). A landowner flat has status 'landowner', is never priced or sold, and its bucket cannot be changed once set.
+- Settings: red.oc_grace_days (days after the OC date when transit rent stops, default 30), apr.alert_days (expiry alert steps, default 30,15,7).
+- Rules: transit-rent escalation years count from red_members.vacated_on (month granularity; vacated after the 1st = one month later); red_transit_schedule rows with no payment row beyond the OC date + grace days are removed by the hourly sweep. Notifications for approval expiry use link approvals#<id>@<valid_till>:T<step>, once per step.
+
+## Module 1 gaps, step 2 (migration 0041)
+- users: approval_pin_hash, approval_pin_salt, approval_pin_set_at. The Owner's 6-digit approval PIN, kept only as a salted PBKDF2 hash. Never returned, never exported. 5 wrong tries lock it for 15 minutes (rate_limits key pin:<user>).
+- red_members vacating proof: vacate_photo_doc_id (photo of the empty flat, documents.id), vacate_lat, vacate_lng (phone location, must be inside India's bounds), vacate_proof_at, vacate_proof_by, meter_electricity, meter_water (final readings as text), final_bills_doc_id (zero-due utility bills), vacate_override_note (Owner only: why vacating was recorded without photo or location).
+- red_members identity: pan_enc (encrypted PAN), pan_hash (keyed HMAC of the PAN, for the one-PAN-one-member rule), pan_last4, aadhaar_last4 (the last 4 digits only; a full Aadhaar is refused). Unique index uq_red_mem_pan on (society_id, pan_hash) for live members. The member list shows pan_masked / aadhaar_masked to Owner, PM and Accounts, and "on file" to others.
+- red_rent_changes (member_id, kind terms|transit_term, payload JSON, summary, status pending|approved|rejected, requested_by, created_at, decided_by, decided_at, decision_note). A change to a rent that is already set waits here until the Owner approves it with the PIN (applied then) or rejects it with a reason. In the backup list.
+- red_site_proofs (project_id, kind electricity|water|gas|tree_noc|barricade, status provided|not_applicable, document_id, ref_no, on_date, note, created_by, created_at; unique project + kind). In the backup list.
+- con_work_orders.is_demolition (0/1): a demolition work order is approved only when the IOD is approved and every proof in the setting red.demolition_proofs (default all five) is provided or marked not applicable.
+- Settings: red.demolition_proofs.
+
+## Module 1 gaps, step 3 (migration 0042)
+- pro_indents and con_ra_bills: wing, floor (highest floor the request or bill is for; NULL = not floor work), cc_override_note (the Owner's written reason when the floor was above the approved CC). Rule: floor must be covered by an approved cc, plinth_cc or further_cc (apr_items.cc_upto_floor); the Owner may override with a reason of at least 10 letters.
+- red_members bank: bank_holder, bank_acct_enc (account number, encrypted like PANs), bank_acct_last4, bank_ifsc. Only Owner and Accounts can read or change them; the full number appears only inside a generated bank file.
+- red_payout_batches (society_id, period YYYY-MM, status generated|paid|cancelled, line_count, total_paise, bank_ref, paid_on, mode, note, created_by/at, decided_by/at). One row per bank file. In the backup list.
+- red_transit_schedule.batch_id: the bank file a month is in. A month in a generated (unpaid) batch cannot be paid on its own; cancelling the batch clears it. Batch payments are red_transit_payments rows with client_uuid batch<id>-<schedule id> (so marking paid twice cannot pay twice).
+- Settings: red.rtgs_min_paise (default 20000000 = Rs 2,00,000: lines at or above it are marked RTGS, below it NEFT; confirm with your bank).
+- Site board: nothing stored. Readiness = average of checks that apply (IOD approved, CC or plinth CC approved, site proofs on file, PAAA registered, flats vacated, utilities disconnected). Monday note link: siteboard#monday:<date>, once per day.
+
