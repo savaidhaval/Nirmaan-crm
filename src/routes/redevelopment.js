@@ -90,7 +90,7 @@ export function societyForProject(env, projectId, name, address, userId, now) {
 }
 
 export function registerRedevelopment(router, h) {
-  const { withAuth, json, serverError, visibleProjectIds, nowStr, getSetting, csvBom, onConsent, encryptSetting } = h;
+  const { withAuth, json, serverError, visibleProjectIds, nowStr, getSetting, csvBom, onConsent, encryptSetting, decryptSetting } = h;
   const audit = (env, user, action, entity, id, summary) => env.DB.prepare('INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, ?, ?, ?, ?, ?)').bind(user.user_id, action, entity, id || 0, String(summary).slice(0, 300), nowStr());
   const csvResponse = (name, rows) => new Response(csvBom(rows), { headers: { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="${name}"`, 'Cache-Control': 'no-store' } });
   const canPhone = (u) => ['owner', 'pm'].includes(u.role);
@@ -659,6 +659,146 @@ export function registerRedevelopment(router, h) {
     } catch (e) { return serverError(e, 'red-change-reject'); }
   }));
 
+  // ======================= bank details and the monthly bank file =======================
+  const IFSC_RE = /^[A-Z]{4}0[A-Z0-9]{6}$/;
+  const PAY_ROLES = ['owner', 'accounts'];
+  router.put('/api/redev/members/:id/bank', async (req, env) => withAuth(req, env, 'transit', 'E', async (req, env) => {
+    try {
+      if (!PAY_ROLES.includes(req.user.role)) return bad('Only the Owner and Accounts handle bank details.', 403);
+      const { mem, err } = await loadMember(env, req, Number(req.params.id)); if (err) return err;
+      const b = await req.json().catch(() => ({}));
+      const holder = txt(b.holder, 100) || mem.bank_holder; if (!holder) return bad('Enter the account holder name.');
+      const ifsc = (txt(b.ifsc, 20).toUpperCase().replace(/\s/g, '')) || mem.bank_ifsc; if (!ifsc || !IFSC_RE.test(ifsc)) return bad('The IFSC code looks wrong (for example HDFC0001234).');
+      const acct = String(b.account == null ? '' : b.account).replace(/\s/g, '');
+      if (acct && !/^\d{6,20}$/.test(acct)) return bad('The account number must be 6 to 20 digits.');
+      if (!acct && !mem.bank_acct_enc) return bad('Enter the account number.');
+      await env.DB.batch([
+        env.DB.prepare('UPDATE red_members SET bank_holder = ?1, bank_ifsc = ?2, bank_acct_enc = CASE WHEN ?3 IS NULL THEN bank_acct_enc ELSE ?3 END, bank_acct_last4 = CASE WHEN ?4 IS NULL THEN bank_acct_last4 ELSE ?4 END WHERE id = ?5').bind(holder, ifsc, acct ? await encryptSetting(env, acct) : null, acct ? acct.slice(-4) : null, mem.id),
+        audit(env, req.user, 'update', 'red_members', mem.id, `Bank details for ${mem.member_name} (${mem.unit_label}): ${holder}, ${ifsc}${acct ? ', account ending ' + acct.slice(-4) : ''}`),
+      ]);
+      return json({ ok: true });
+    } catch (e) { return serverError(e, 'red-bank'); }
+  }));
+  // Which members have bank details (never the account number)
+  router.get('/api/redev/societies/:id/bank-status', async (req, env) => withAuth(req, env, 'transit', 'V', async (req, env) => {
+    try {
+      const { soc, err } = await loadSociety(env, req, Number(req.params.id)); if (err) return err;
+      const rows = (await env.DB.prepare('SELECT id, bank_holder, bank_ifsc, bank_acct_last4 FROM red_members WHERE society_id = ? AND deleted_at IS NULL AND bank_acct_enc IS NOT NULL').bind(soc.id).all()).results;
+      return json({ ok: true, data: { members: PAY_ROLES.includes(req.user.role) ? rows : rows.map((r) => ({ id: r.id })) } });
+    } catch (e) { return serverError(e, 'red-bank-status'); }
+  }));
+  const BATCH_MAX_MEMBERS = 80;   // account numbers are decrypted one by one: keep a request inside the free-plan CPU limit
+  const rtgsMin = async (env) => { const v = Number(await getSetting(env, 'red.rtgs_min_paise')); return Number.isFinite(v) && v > 0 ? Math.round(v) : 20000000; };
+  // The lines of a batch (one per member), with the account number decrypted for the bank file. Shown only to Owner and Accounts.
+  async function batchLines(env, batch) {
+    const rows = (await env.DB.prepare(`SELECT r.id AS sid, r.period, r.due_paise - COALESCE((SELECT SUM(p.amount_paise) FROM red_transit_payments p WHERE p.schedule_id = r.id AND p.reversed_at IS NULL), 0) AS open_paise,
+      m.id AS member_id, m.member_name, m.unit_label, m.wing, m.bank_holder, m.bank_acct_enc, m.bank_ifsc, m.bank_acct_last4
+      FROM red_transit_schedule r JOIN red_members m ON m.id = r.member_id WHERE r.batch_id = ? ORDER BY m.wing, m.unit_label, r.period`).bind(batch.id).all()).results;
+    const min = await rtgsMin(env); const by = new Map();
+    for (const r of rows) {
+      let l = by.get(r.member_id);
+      if (!l) { l = { member_id: r.member_id, member_name: r.member_name, unit: (r.wing ? r.wing + '-' : '') + r.unit_label, holder: r.bank_holder, ifsc: r.bank_ifsc, last4: r.bank_acct_last4, enc: r.bank_acct_enc, amount_paise: 0, periods: [] }; by.set(r.member_id, l); }
+      if (r.open_paise > 0) { l.amount_paise += r.open_paise; l.periods.push(r.period); }
+    }
+    const lines = [];
+    for (const l of by.values()) {
+      if (!(l.amount_paise > 0)) continue;
+      let account = ''; try { account = await decryptSetting(env, l.enc); } catch (e) { account = ''; }
+      lines.push({ n: lines.length + 1, member_id: l.member_id, member_name: l.member_name, unit: l.unit, holder: l.holder, account, ifsc: l.ifsc, last4: l.last4, amount_paise: l.amount_paise, mode: l.amount_paise >= min ? 'RTGS' : 'NEFT', narration: `Transit rent ${l.periods[0]}${l.periods.length > 1 ? ' to ' + l.periods[l.periods.length - 1] : ''} ${l.unit}`.slice(0, 60) });
+    }
+    return lines;
+  }
+  router.get('/api/redev/societies/:id/payout-batches', async (req, env) => withAuth(req, env, 'transit', 'V', async (req, env) => {
+    try {
+      const { soc, err } = await loadSociety(env, req, Number(req.params.id)); if (err) return err;
+      const rows = (await env.DB.prepare('SELECT b.id, b.period, b.status, b.line_count, b.total_paise, b.bank_ref, b.paid_on, b.mode, b.note, b.created_at, u.name AS created_by_name FROM red_payout_batches b LEFT JOIN users u ON u.id = b.created_by WHERE b.society_id = ? ORDER BY b.id DESC LIMIT 12').bind(soc.id).all()).results;
+      return json({ ok: true, data: { batches: rows } });
+    } catch (e) { return serverError(e, 'red-batches'); }
+  }));
+  router.post('/api/redev/societies/:id/payout-batches', async (req, env) => withAuth(req, env, 'transit', 'C', async (req, env) => {
+    try {
+      if (!PAY_ROLES.includes(req.user.role)) return bad('Only the Owner and Accounts make the bank file.', 403);
+      const { soc, err } = await loadSociety(env, req, Number(req.params.id)); if (err) return err;
+      const b = await req.json().catch(() => ({}));
+      const month = /^\d{4}-(0[1-9]|1[0-2])$/.test(String(b.month || '')) ? b.month : today().slice(0, 7);
+      // everything unpaid up to and including that month, for members who have bank details; months already in an open batch are left out
+      const rows = (await env.DB.prepare(`SELECT r.id AS sid, r.member_id, m.member_name, m.unit_label, m.wing, (m.bank_acct_enc IS NOT NULL) AS has_bank,
+          r.due_paise - COALESCE((SELECT SUM(p.amount_paise) FROM red_transit_payments p WHERE p.schedule_id = r.id AND p.reversed_at IS NULL), 0) AS open_paise
+        FROM red_transit_schedule r JOIN red_members m ON m.id = r.member_id AND m.deleted_at IS NULL
+        WHERE m.society_id = ? AND r.period <= ? AND (r.batch_id IS NULL OR r.batch_id IN (SELECT id FROM red_payout_batches WHERE status <> 'generated'))
+        ORDER BY m.wing, m.unit_label, r.period LIMIT 1000`).bind(soc.id, month).all()).results.filter((r) => r.open_paise > 0);
+      const skipped = [...new Map(rows.filter((r) => !r.has_bank).map((r) => [r.member_id, `${r.member_name} (${(r.wing ? r.wing + '-' : '') + r.unit_label})`])).values()];
+      const ready = rows.filter((r) => r.has_bank);
+      const memberIds = [...new Set(ready.map((r) => r.member_id))];
+      const take = new Set(memberIds.slice(0, BATCH_MAX_MEMBERS));
+      const use = ready.filter((r) => take.has(r.member_id));
+      if (!use.length) return bad(skipped.length ? `Nothing can go in the bank file yet. Add bank details for: ${skipped.slice(0, 5).join(', ')}.` : 'There is no unpaid rent up to that month.', 409);
+      const total = use.reduce((t, r) => t + r.open_paise, 0);
+      const ins = await env.DB.prepare("INSERT INTO red_payout_batches (society_id, period, status, line_count, total_paise, created_by, created_at) VALUES (?, ?, 'generated', ?, ?, ?, ?)").bind(soc.id, month, take.size, total, req.user.user_id, nowStr()).run();
+      const bid = ins.meta.last_row_id;
+      const lock = await env.DB.prepare("UPDATE red_transit_schedule SET batch_id = ?1 WHERE id IN (SELECT value FROM json_each(?2)) AND (batch_id IS NULL OR batch_id IN (SELECT id FROM red_payout_batches WHERE status <> 'generated'))").bind(bid, JSON.stringify(use.map((r) => r.sid))).run();
+      if (lock.meta.changes !== use.length) {   // someone else made a batch at the same moment: undo ours
+        await env.DB.batch([env.DB.prepare('UPDATE red_transit_schedule SET batch_id = NULL WHERE batch_id = ?').bind(bid), env.DB.prepare("UPDATE red_payout_batches SET status = 'cancelled', note = 'clash' WHERE id = ?").bind(bid)]);
+        return bad('Another bank file was made at the same moment. Please try again.', 409);
+      }
+      await audit(env, req.user, 'create', 'red_payout_batches', bid, `Bank file for ${soc.name}, up to ${month}: ${take.size} member(s), ${rupees(total)}`).run();
+      const batch = { id: bid, period: month, status: 'generated', line_count: take.size, total_paise: total };
+      return json({ ok: true, data: { batch, lines: await batchLines(env, batch), skipped, more_members: Math.max(0, memberIds.length - take.size), society: soc.name, note: 'Bank file layouts differ. If your bank wants a different layout, send this file to your bank contact once and confirm what they accept.' } });
+    } catch (e) { return serverError(e, 'red-batch-make'); }
+  }));
+  async function loadBatch(env, req) {
+    const bt = await env.DB.prepare('SELECT b.*, s.project_id, s.name AS society_name FROM red_payout_batches b JOIN red_societies s ON s.id = b.society_id WHERE b.id = ?').bind(Number(req.params.id)).first();
+    if (!bt) return { err: bad('Bank file not found.', 404) };
+    if (!(await visibleProjectIds(env, req.user)).includes(bt.project_id)) return { err: bad('Not allowed.', 403) };
+    return { bt };
+  }
+  router.get('/api/redev/payout-batches/:id', async (req, env) => withAuth(req, env, 'transit', 'V', async (req, env) => {
+    try {
+      if (!PAY_ROLES.includes(req.user.role)) return bad('Only the Owner and Accounts can open the bank file.', 403);
+      const { bt, err } = await loadBatch(env, req); if (err) return err;
+      if (bt.status !== 'generated') return json({ ok: true, data: { batch: bt, lines: [], society: bt.society_name } });
+      return json({ ok: true, data: { batch: bt, lines: await batchLines(env, bt), society: bt.society_name } });
+    } catch (e) { return serverError(e, 'red-batch-get'); }
+  }));
+  router.post('/api/redev/payout-batches/:id/paid', async (req, env) => withAuth(req, env, 'transit', 'C', async (req, env) => {
+    try {
+      if (!PAY_ROLES.includes(req.user.role)) return bad('Only the Owner and Accounts can mark a bank file paid.', 403);
+      const { bt, err } = await loadBatch(env, req); if (err) return err;
+      if (bt.status !== 'generated') return bad('This bank file is already ' + bt.status + '.', 409);
+      const b = await req.json().catch(() => ({}));
+      const on = dateOk(b.paid_on) ? b.paid_on : today(); if (on > today()) return bad('The payment date cannot be in the future.');
+      const mode = ['neft', 'rtgs', 'cheque', 'upi'].includes(b.mode) ? b.mode : 'neft'; const ref = txt(b.bank_ref, 60);
+      if (!ref) return bad('Enter the bank\'s batch or reference number.');
+      const OPEN = 'r.due_paise - COALESCE((SELECT SUM(p.amount_paise) FROM red_transit_payments p WHERE p.schedule_id = r.id AND p.reversed_at IS NULL), 0)';
+      const [ins] = await env.DB.batch([
+        env.DB.prepare(`INSERT OR IGNORE INTO red_transit_payments (schedule_id, member_id, amount_paise, paid_on, mode, ref_no, client_uuid, created_by, created_at)
+          SELECT r.id, r.member_id, ${OPEN}, ?2, ?3, ?4, 'batch' || CAST(?1 AS INTEGER) || '-' || r.id, ?5, ?6 FROM red_transit_schedule r
+          WHERE r.batch_id = ?1 AND ${OPEN} > 0 AND EXISTS (SELECT 1 FROM red_payout_batches WHERE id = ?1 AND status = 'generated')`).bind(bt.id, on, mode, ref, req.user.user_id, nowStr()),
+        env.DB.prepare("UPDATE red_payout_batches SET status = 'paid', paid_on = ?, mode = ?, bank_ref = ?, decided_by = ?, decided_at = ? WHERE id = ? AND status = 'generated'").bind(on, mode, ref, req.user.user_id, nowStr(), bt.id),
+        audit(env, req.user, 'pay', 'red_payout_batches', bt.id, `Bank file ${bt.id} for ${bt.society_name} marked paid on ${on} (${mode}, ref ${ref}): ${rupees(bt.total_paise)}`),
+      ]);
+      // plain WhatsApp messages the sender can open and send (no phone number is read here)
+      const rc = (await env.DB.prepare(`SELECT m.member_name, m.unit_label, m.wing, m.bank_acct_last4, SUM(p.amount_paise) AS amt, MIN(r.period) AS p1, MAX(r.period) AS p2 FROM red_transit_payments p JOIN red_transit_schedule r ON r.id = p.schedule_id JOIN red_members m ON m.id = p.member_id
+        WHERE r.batch_id = ? AND p.client_uuid LIKE ? AND p.reversed_at IS NULL GROUP BY m.id ORDER BY m.wing, m.unit_label`).bind(bt.id, 'batch' + bt.id + '-%').all()).results;
+      const receipts = rc.map((x) => ({ member_name: x.member_name, unit: (x.wing ? x.wing + '-' : '') + x.unit_label, text: `Dear ${x.member_name}, your transit rent of ${rupees(x.amt)} for ${x.p1}${x.p2 !== x.p1 ? ' to ' + x.p2 : ''} was sent to your bank account${x.bank_acct_last4 ? ' ending ' + x.bank_acct_last4 : ''} on ${on} (${mode.toUpperCase()}, ref ${ref}). Please tell us if you do not receive it.` }));
+      return json({ ok: true, data: { paid_lines: ins.meta.changes, receipts } });
+    } catch (e) { return serverError(e, 'red-batch-paid'); }
+  }));
+  router.post('/api/redev/payout-batches/:id/cancel', async (req, env) => withAuth(req, env, 'transit', 'C', async (req, env) => {
+    try {
+      if (!PAY_ROLES.includes(req.user.role)) return bad('Only the Owner and Accounts can cancel a bank file.', 403);
+      const { bt, err } = await loadBatch(env, req); if (err) return err;
+      if (bt.status !== 'generated') return bad('Only a bank file that is not yet paid can be cancelled.', 409);
+      const note = txt((await req.json().catch(() => ({}))).note, 200); if (!note) return bad('Say why it is cancelled.');
+      await env.DB.batch([
+        env.DB.prepare('UPDATE red_transit_schedule SET batch_id = NULL WHERE batch_id = ?').bind(bt.id),
+        env.DB.prepare("UPDATE red_payout_batches SET status = 'cancelled', note = ?, decided_by = ?, decided_at = ? WHERE id = ? AND status = 'generated'").bind(note, req.user.user_id, nowStr(), bt.id),
+        audit(env, req.user, 'cancel', 'red_payout_batches', bt.id, `Bank file ${bt.id} cancelled: ${note}`),
+      ]);
+      return json({ ok: true });
+    } catch (e) { return serverError(e, 'red-batch-cancel'); }
+  }));
+
   // ======================= pre-demolition gate: meter-removal receipts and NOCs =======================
   router.get('/api/redev/projects/:id/site-proofs', async (req, env) => withAuth(req, env, 'redevelopment', 'V', async (req, env) => {
     try {
@@ -719,6 +859,7 @@ export function registerRedevelopment(router, h) {
     try {
       const r = await env.DB.prepare('SELECT r.*, m.society_id, m.member_name, s.project_id FROM red_transit_schedule r JOIN red_members m ON m.id = r.member_id AND m.deleted_at IS NULL JOIN red_societies s ON s.id = m.society_id WHERE r.id = ?').bind(Number(req.params.id)).first();
       if (!r) return bad('That month was not found.', 404); if (!(await visibleProjectIds(env, req.user)).includes(r.project_id)) return bad('Not allowed.', 403);
+      if (r.batch_id && (await env.DB.prepare("SELECT 1 AS x FROM red_payout_batches WHERE id = ? AND status = 'generated'").bind(r.batch_id).first())) return bad('This month is in a bank file that has not been marked paid yet. Mark that batch paid or cancel it first.', 409);
       const b = await req.json().catch(() => ({})); const paid = (await env.DB.prepare('SELECT COALESCE(SUM(amount_paise), 0) AS p FROM red_transit_payments WHERE schedule_id = ? AND reversed_at IS NULL').bind(r.id).first()).p;
       const amount = Math.round(num(b.amount_paise) ?? (r.due_paise - paid)); if (!(amount > 0)) return bad('Enter the amount received.');
       const on = dateOk(b.paid_on) ? b.paid_on : today(); if (on > today()) return bad('The payment date cannot be in the future.');

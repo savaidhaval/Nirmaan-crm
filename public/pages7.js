@@ -141,17 +141,19 @@ async function newRaBill(woId, d) {
       : '<div class="field"><label>Value of work done this bill (₹)</label><input id="ra-gross" inputmode="decimal"></div>'}
     <div class="field"><label>Advance to recover (₹) — outstanding ${moneyP((d.balances || {}).advance_outstanding || 0)}</label><input id="ra-rec" inputmode="decimal" placeholder="Leave empty: ${((w.advance_recovery_bp || 1000) / 100)}% of this bill is recovered"></div>
     <div class="field"><label>Other deductions (₹)</label><input id="ra-oth" inputmode="decimal"></div><div class="field"><label>Payment due on</label><input id="ra-due" type="date"></div>
+    <div class="field"><label>Wing (if the work is for one wing)</label><input id="ra-wing"></div><div class="field"><label>Highest floor this bill reaches (0 = plinth; empty if not floor work)</label><input id="ra-floor" type="number" inputmode="numeric"><p class="help">The bill is refused if the approved CC does not cover that floor.</p></div>
     <div class="error" id="ra-err" style="display:none"></div><div class="modal-actions"><button class="btn" id="ra-cancel" type="button">Cancel</button><button class="btn btn-primary" id="ra-ok" type="button">Save RA bill</button></div></div>`;
   document.body.appendChild(ov);
   $('ra-cancel').onclick = () => { ov.remove(); woDetail(w.id); };
   $('ra-ok').onclick = async () => {
-    const body = { period_from: $('ra-from').value || null, period_to: $('ra-to').value || null, due_date: $('ra-due').value || null, advance_recovery_paise: $('ra-rec').value.trim() === '' ? undefined : rupeesToPaise($('ra-rec').value), other_deductions_paise: rupeesToPaise($('ra-oth').value) || 0 };
+    const body = { wing: $('ra-wing').value.trim() || null, floor: $('ra-floor').value === '' ? null : Number($('ra-floor').value), period_from: $('ra-from').value || null, period_to: $('ra-to').value || null, due_date: $('ra-due').value || null, advance_recovery_paise: $('ra-rec').value.trim() === '' ? undefined : rupeesToPaise($('ra-rec').value), other_deductions_paise: rupeesToPaise($('ra-oth').value) || 0 };
     if (items.length) body.lines = [...ov.querySelectorAll('[data-line]')].filter((x) => Number(x.value) > 0).map((x) => ({ wo_item_id: Number(x.dataset.line), qty: Number(x.value) }));
     else body.gross_paise = rupeesToPaise($('ra-gross').value) || 0;
     const send = async () => {
       try { return await api(`/api/contractors/work-orders/${w.id}/ra-bills`, { method: 'POST', body }); }
       catch (e) {
         if (e.data && e.data.code === 'recovery') { const n = await openForm({ title: 'Less advance recovery', intro: e.message, fields: [{ name: 'r', label: 'Why recover less on this bill?', type: 'textarea', required: true }] }); if (n) { body.advance_recovery_reason = n.r; return send(); } return null; }
+        if (e.data && e.data.code === 'cc' && currentUser.role === 'owner') { const n = await openForm({ title: 'Above the approved CC', intro: e.message, fields: [{ name: 'r', label: 'Why go ahead? (at least 10 letters)', type: 'textarea', required: true }] }); if (n) { body.override_note = n.r; return send(); } return null; }
         if (e.data && e.data.code === 'over_limit') { const er = $('ra-err'); er.textContent = e.data.warnings.join(' '); er.style.display = 'block'; return null; }
         const er = $('ra-err'); er.textContent = e.message; er.style.display = 'block'; return null;
       }

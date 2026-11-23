@@ -1,3 +1,5 @@
+import { ccFloorBlock } from '../core/gates.js';
+
 // routes/procurement2.js — WP-4 procurement addendum: indents, multi-line RFQ + per-line quotes,
 // GRN by PO line, bill part-payments (reversed, never deleted), and procurement reports.
 
@@ -132,13 +134,24 @@ export function registerProcurement2(router, h) {
         const dup = await env.DB.prepare('SELECT id, indent_no FROM pro_indents WHERE client_uuid = ?').bind(String(b.client_uuid)).first();
         if (dup) return json({ ok: true, data: { id: dup.id, indent_no: dup.indent_no, duplicate: true } });
       }
+      // CC-floor lock: a request for a floor above the approved CC is refused (the Owner may go ahead with a written reason).
+      const wing = String(b.wing || '').trim().slice(0, 20) || null;
+      const floor = b.floor === '' || b.floor == null ? null : Math.round(Number(b.floor));
+      if (floor != null && !(floor >= 0 && floor <= 200)) return json({ ok: false, error: 'Check the floor number (0 is the plinth).' }, 400);
+      let ccOverride = null;
+      const blk = await ccFloorBlock(env, pid, wing, floor);
+      if (blk) {
+        const why = String(b.override_note || '').trim().slice(0, 300);
+        if (req.user.role !== 'owner' || why.length < 10) return json({ ok: false, error: blk + (req.user.role === 'owner' ? ' As the Owner you can go ahead only with a written reason.' : ' Material for this floor cannot be requested yet.'), code: 'cc' }, 409);
+        ccOverride = why;
+      }
       // Atomic counter: one statement, no read-then-write race.
       const c = await env.DB.prepare('INSERT INTO counters (key, value) VALUES (?, 1) ON CONFLICT(key) DO UPDATE SET value = value + 1 RETURNING value').bind(`ind:${pid}`).first();
       const proj = await env.DB.prepare('SELECT code FROM projects WHERE id = ?').bind(pid).first();
       const no = `IND-${proj ? proj.code : pid}-${String(c.value).padStart(4, '0')}`;
       const now = nowStr();
-      const r = await env.DB.prepare("INSERT INTO pro_indents (project_id, indent_no, needed_by, note, status, requested_by, client_uuid, created_at) VALUES (?, ?, ?, ?, 'submitted', ?, ?, ?)")
-        .bind(pid, no, b.needed_by || null, String(b.note || '').slice(0, 500), req.user.user_id, b.client_uuid || null, now).run();
+      const r = await env.DB.prepare("INSERT INTO pro_indents (project_id, indent_no, needed_by, note, status, requested_by, client_uuid, created_at, wing, floor, cc_override_note) VALUES (?, ?, ?, ?, 'submitted', ?, ?, ?, ?, ?, ?)")
+        .bind(pid, no, b.needed_by || null, String(b.note || '').slice(0, 500), req.user.user_id, b.client_uuid || null, now, wing, floor, ccOverride).run();
       const id = r.meta.last_row_id;
       await env.DB.batch([
         ...items.map((i) => env.DB.prepare('INSERT INTO pro_indent_items (indent_id, description, qty, unit) VALUES (?, ?, ?, ?)').bind(id, String(i.description).trim().slice(0, 200), num(i.qty), String(i.unit || '').slice(0, 20))),

@@ -442,3 +442,11 @@ id TEXT PK, source TEXT, seen_at TEXT
 - con_work_orders.is_demolition (0/1): a demolition work order is approved only when the IOD is approved and every proof in the setting red.demolition_proofs (default all five) is provided or marked not applicable.
 - Settings: red.demolition_proofs.
 
+## Module 1 gaps, step 3 (migration 0042)
+- pro_indents and con_ra_bills: wing, floor (highest floor the request or bill is for; NULL = not floor work), cc_override_note (the Owner's written reason when the floor was above the approved CC). Rule: floor must be covered by an approved cc, plinth_cc or further_cc (apr_items.cc_upto_floor); the Owner may override with a reason of at least 10 letters.
+- red_members bank: bank_holder, bank_acct_enc (account number, encrypted like PANs), bank_acct_last4, bank_ifsc. Only Owner and Accounts can read or change them; the full number appears only inside a generated bank file.
+- red_payout_batches (society_id, period YYYY-MM, status generated|paid|cancelled, line_count, total_paise, bank_ref, paid_on, mode, note, created_by/at, decided_by/at). One row per bank file. In the backup list.
+- red_transit_schedule.batch_id: the bank file a month is in. A month in a generated (unpaid) batch cannot be paid on its own; cancelling the batch clears it. Batch payments are red_transit_payments rows with client_uuid batch<id>-<schedule id> (so marking paid twice cannot pay twice).
+- Settings: red.rtgs_min_paise (default 20000000 = Rs 2,00,000: lines at or above it are marked RTGS, below it NEFT; confirm with your bank).
+- Site board: nothing stored. Readiness = average of checks that apply (IOD approved, CC or plinth CC approved, site proofs on file, PAAA registered, flats vacated, utilities disconnected). Monday note link: siteboard#monday:<date>, once per day.
+

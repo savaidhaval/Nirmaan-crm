@@ -1,7 +1,7 @@
 // routes/contractors.js — WP-5: contractors, work orders, running-account (RA) bills, advance and retention ledger.
 // Labour is paid through contractors, so there is no payroll. All money is integer paise; rates for GST/TDS are settings.
 import { emit } from '../core/events.js';
-import { approvalState, isDate, demolitionBlock } from '../core/gates.js';
+import { approvalState, isDate, demolitionBlock, ccFloorBlock } from '../core/gates.js';
 
 const rupees = (p) => '₹' + (Number(p) / 100).toLocaleString('en-IN');
 const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
@@ -577,6 +577,17 @@ export function registerContractors(router, h) {
       const { wo, err } = await loadWo(env, req); if (err) return err;
       if (wo.status !== 'approved') return json({ ok: false, error: 'RA bills can only be raised on an approved work order.' }, 409);
       const b = await req.json();
+      // CC-floor lock: a bill for work above the approved CC floor is refused (the Owner may go ahead with a written reason).
+      const raWing = String(b.wing || '').trim().slice(0, 20) || null;
+      const raFloor = b.floor === '' || b.floor == null ? null : Math.round(num(b.floor));
+      if (raFloor != null && !(raFloor >= 0 && raFloor <= 200)) return json({ ok: false, error: 'Check the floor number (0 is the plinth).' }, 400);
+      let raOverride = null;
+      { const blk = await ccFloorBlock(env, wo.project_id, raWing, raFloor);
+        if (blk) {
+          const why = String(b.override_note || '').trim().slice(0, 300);
+          if (req.user.role !== 'owner' || why.length < 10) return json({ ok: false, error: blk + (req.user.role === 'owner' ? ' As the Owner you can go ahead only with a written reason.' : ' This work is not covered by the approved CC yet.'), code: 'cc' }, 409);
+          raOverride = why;
+        } }
       const [itemsR, usedR, varR, measR] = await env.DB.batch([
         env.DB.prepare('SELECT id, description, qty, unit, rate_paise FROM con_wo_items WHERE wo_id = ?').bind(wo.id),
         env.DB.prepare("SELECT l.wo_item_id, SUM(l.qty_this_bill) AS q FROM con_ra_lines l JOIN con_ra_bills r ON r.id = l.ra_id WHERE r.wo_id = ? AND r.status != 'cancelled' GROUP BY l.wo_item_id").bind(wo.id),
@@ -637,9 +648,9 @@ export function registerContractors(router, h) {
       // one batch: number, bill, lines and audit together (all or nothing)
       const res = await env.DB.batch([
         env.DB.prepare('INSERT INTO counters (key, value) VALUES (?, 1) ON CONFLICT(key) DO UPDATE SET value = value + 1').bind(key),
-        env.DB.prepare(`INSERT INTO con_ra_bills (wo_id, ra_no, period_from, period_to, due_date, gross_paise, retention_paise, advance_recovery_paise, other_deductions_paise, gst_bp, gst_paise, tds_bp, tds_paise, net_paise, status, note, created_by, created_at)
-          VALUES (?, (SELECT value FROM counters WHERE key = ?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?)`)
-          .bind(wo.id, key, b.period_from || null, b.period_to || null, b.due_date || null, gross, retention, rec, other, gstBp, gst, tdsBp, tds, net, note, req.user.user_id, now),
+        env.DB.prepare(`INSERT INTO con_ra_bills (wo_id, ra_no, period_from, period_to, due_date, gross_paise, retention_paise, advance_recovery_paise, other_deductions_paise, gst_bp, gst_paise, tds_bp, tds_paise, net_paise, status, note, created_by, created_at, wing, floor, cc_override_note)
+          VALUES (?, (SELECT value FROM counters WHERE key = ?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?)`)
+          .bind(wo.id, key, b.period_from || null, b.period_to || null, b.due_date || null, gross, retention, rec, other, gstBp, gst, tdsBp, tds, net, note, req.user.user_id, now, raWing, raFloor, raOverride),
         ...lines.map((l) => env.DB.prepare(`INSERT INTO con_ra_lines (ra_id, wo_item_id, qty_this_bill, rate_paise, amount_paise) VALUES (${RA}, ?, ?, ?, ?)`).bind(wo.id, key, l.item.id, l.q, l.item.rate_paise, l.amt)),
         env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) SELECT ?, 'create', 'con_ra_bills', id, ?, ? FROM con_ra_bills WHERE id = ${RA}`)
           .bind(req.user.user_id, `RA bill on ${wo.wo_no}: gross ${rupees(gross)}, net ${rupees(net)}`, now, wo.id, key),

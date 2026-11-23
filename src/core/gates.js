@@ -57,13 +57,28 @@ export async function holdFor(env, projectId, wing) {
 // (meter-removal receipts for electricity, water and gas, and the tree and barricade NOCs; each may be marked "not applicable" with a note).
 // The required list is the setting red.demolition_proofs (items separated by ; ). Returns a plain message, or null when clear.
 export const PROOF_LABEL = { electricity: 'electricity meter removal receipt', water: 'water disconnection receipt', gas: 'PNG gas disconnection receipt', tree_noc: 'tree NOC', barricade: 'barricading permission' };
-export async function demolitionBlock(env, projectId, getSetting) {
+export async function demolitionStatus(env, projectId, getSetting) {
   const raw = String((await getSetting(env, 'red.demolition_proofs')) || '').trim();
   const need = (raw ? raw.split(/[;,\n]+/) : ['electricity', 'water', 'gas', 'tree_noc', 'barricade']).map((x) => x.trim()).filter((x) => PROOF_LABEL[x]);
   const st = await approvalState(env, projectId);
-  const missing = [];
-  if (!st.approved('iod')) missing.push('IOD approval');
   const have = new Set((await env.DB.prepare("SELECT kind FROM red_site_proofs WHERE project_id = ? AND (status = 'not_applicable' OR document_id IS NOT NULL)").bind(projectId).all()).results.map((r) => r.kind));
-  for (const k of need) if (!have.has(k)) missing.push(PROOF_LABEL[k]);
+  return { need, have, iodOk: st.approved('iod'), st };
+}
+export async function demolitionBlock(env, projectId, getSetting) {
+  const d = await demolitionStatus(env, projectId, getSetting);
+  const missing = [];
+  if (!d.iodOk) missing.push('IOD approval');
+  for (const k of d.need) if (!d.have.has(k)) missing.push(PROOF_LABEL[k]);
   return missing.length ? `Demolition cannot be released yet. Still missing: ${missing.join(', ')}.` : null;
+}
+
+// CC-floor lock for anything that names a floor (indents, RA bills): the floor must be covered by an approved CC / plinth CC / further CC.
+// No floor given = not floor work = no check. Returns a plain message, or null when it is covered.
+export async function ccFloorBlock(env, projectId, wing, floor) {
+  if (floor == null) return null;
+  const st = await approvalState(env, projectId);
+  if (!(st.approved('cc', wing) || st.approved('plinth_cc', wing) || st.approved('further_cc', wing))) return 'No Commencement Certificate is marked approved for this project in Approvals.';
+  const upto = st.ccUpto(wing);
+  if (upto == null || floor > upto) return `The approved CC covers work up to floor ${upto == null ? '(not recorded)' : upto}; this is for floor ${floor}.`;
+  return null;
 }

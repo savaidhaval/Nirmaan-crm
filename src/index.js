@@ -20,6 +20,7 @@ import { csvBom } from './core/util.js';
 import { registerPetty } from './routes/petty.js';
 import { registerProfile } from './routes/profile.js';
 import { registerFeasibility, feasibilitySweep, feasibilityFromStudy } from './routes/feasibility.js';
+import { registerSiteBoard } from './routes/siteboard.js';
 import { registerRedevelopment, redevSweep, societyForProject } from './routes/redevelopment.js';
 import { registerBank, bankSweep } from './routes/bank.js';
 import { registerTally } from './routes/tally.js';
@@ -559,7 +560,7 @@ const EDITABLE_SETTINGS = ['po.pm_approval_limit_paise', 'access.allow_second_ow
   'demand.due_days_after_milestone', 'share.default_expiry_days', 'share.default_max_views', 'files.brochure_max_mb', 'branding.apply_colours_to_app',
   'brochure.price_list_default_audience', 'storage.warn_percent', 'sales.max_holds_per_user', 'sales.max_discount_bp', 'sales.pm_max_discount_bp',
   'interest.rate_bp', 'interest.grace_days', 'interest.enabled', 'security.require_mfa_roles', 'tax.stamp_duty_bp', 'tax.metro_cess_bp', 'tax.women_concession_bp', 'tax.registration_bp', 'tax.registration_cap_paise', 'tax.gst_bp',
-  'con.enabled', 'con.pm_approval_limit_paise', 'con.gst_bp', 'con.tds_bp', 'budget.gst_basis', 'petty.low_balance_paise', 'ai.enabled', 'ai.daily_limit', 'ai.model', 'rera.designated_pct_bp', 'fea.review_days', 'red.member_doc_checklist', 'red.rent_due_day', 'red.oc_grace_days', 'red.demolition_proofs', 'apr.alert_days', 'bank.keep_days', 'drawing.ack_hours', 'sales.bulk_daily_limit', 'sales.bulk_chunk', 'sales.demand_link_days', 'sales.visit_objections', 'sales.visit_radius_m',
+  'con.enabled', 'con.pm_approval_limit_paise', 'con.gst_bp', 'con.tds_bp', 'budget.gst_basis', 'petty.low_balance_paise', 'ai.enabled', 'ai.daily_limit', 'ai.model', 'rera.designated_pct_bp', 'fea.review_days', 'red.member_doc_checklist', 'red.rent_due_day', 'red.oc_grace_days', 'red.demolition_proofs', 'red.rtgs_min_paise', 'apr.alert_days', 'bank.keep_days', 'drawing.ack_hours', 'sales.bulk_daily_limit', 'sales.bulk_chunk', 'sales.demand_link_days', 'sales.visit_objections', 'sales.visit_radius_m',
   'sales.receipt_approval_limit_paise', 'sales.discount_pm_limit_paise', 'sales.handover_template', 'apr.designations', 'con.variation_owner_limit_paise', 'con.advance_recovery_bp', 'con.dlp_months', 'pro.tolerance_bp', 'tax.tds_no_pan_bp', 'rera.cert_valid_days', 'qa.pour_checklist', 'qa.cube_7day_pct_bp', 'dpr.activities', 'dpr.safety_checks', 'bd.vacate_to_plinth_months', 'bd.completion_months', 'bd.steps_79a'];
 
 router.post('/api/settings/:key', async (req, env) => {
@@ -1692,7 +1693,7 @@ const EXPORT_TABLES = ['projects', 'apr_items', 'apr_events', 'drw_drawings', 'd
     'sal_leads', 'sal_activities', 'sal_visits', 'sal_inventory', 'sal_partners', 'sal_bookings', 'sal_plan_stages', 'sal_demands', 'sal_receipts', 'documents', 'audit_log',
     'pro_grn_items', 'pro_payments', 'ppl_staff', 'ppl_hiring', 'ppl_candidates', 'sal_brokerage_payments', 'sal_refunds', 'sal_interest_waivers', 'mkt_spend', 'brands', 'counters',
     'pro_indents', 'pro_indent_items', 'pro_rfq_items', 'pro_quote_items',
-    'site_dpr_labour', 'bud_heads', 'stk_items', 'stk_balance', 'stk_moves', 'pro_party_docs', 'pro_professionals', 'ai_log', 'sal_receipt_requests', 'sal_adjustments', 'sal_booking_parties', 'sal_cost_sheets', 'sal_cost_sheet_lines', 'sal_handover', 'sal_handover_items', 'sal_booking_loans', 'rera_account_entries', 'eng_kudos', 'fea_versions', 'sal_bulk_runs', 'sal_bulk_items', 'drw_acks', 'tally_export_log', 'brand_profiles', 'project_members', 'drive_folders', 'bank_profiles', 'bank_import_batches', 'bank_import_rows', 'red_societies', 'red_members', 'red_consent_events', 'red_member_docs', 'red_rehab_allotments', 'red_transit_terms', 'red_transit_schedule', 'red_transit_payments', 'red_corpus_entries', 'red_meetings', 'red_meeting_attendees', 'red_rent_changes', 'red_site_proofs', 'prj_autodcr_history', 'apr_steps', 'apr_deps', 'con_variations', 'con_measurements', 'rera_certificates', 'qa_pours', 'qa_cubes', 'qa_ncrs', 'site_dpr_work', 'site_ms_changes', 'prj_holds', 'con_debit_notes', 'bud_items', 'bd_opportunities', 'bd_followups', 'bd_studies', 'bd_steps', 'prj_lifecycle', 'pty_funds', 'pty_entries', 'con_contractors', 'con_work_orders', 'con_wo_items', 'con_ra_bills', 'con_ra_lines', 'con_payments', 'con_ledger'];
+    'site_dpr_labour', 'bud_heads', 'stk_items', 'stk_balance', 'stk_moves', 'pro_party_docs', 'pro_professionals', 'ai_log', 'sal_receipt_requests', 'sal_adjustments', 'sal_booking_parties', 'sal_cost_sheets', 'sal_cost_sheet_lines', 'sal_handover', 'sal_handover_items', 'sal_booking_loans', 'rera_account_entries', 'eng_kudos', 'fea_versions', 'sal_bulk_runs', 'sal_bulk_items', 'drw_acks', 'tally_export_log', 'brand_profiles', 'project_members', 'drive_folders', 'bank_profiles', 'bank_import_batches', 'bank_import_rows', 'red_societies', 'red_members', 'red_consent_events', 'red_member_docs', 'red_rehab_allotments', 'red_transit_terms', 'red_transit_schedule', 'red_transit_payments', 'red_corpus_entries', 'red_meetings', 'red_meeting_attendees', 'red_rent_changes', 'red_site_proofs', 'red_payout_batches', 'prj_autodcr_history', 'apr_steps', 'apr_deps', 'con_variations', 'con_measurements', 'rera_certificates', 'qa_pours', 'qa_cubes', 'qa_ncrs', 'site_dpr_work', 'site_ms_changes', 'prj_holds', 'con_debit_notes', 'bud_items', 'bd_opportunities', 'bd_followups', 'bd_studies', 'bd_steps', 'prj_lifecycle', 'pty_funds', 'pty_entries', 'con_contractors', 'con_work_orders', 'con_wo_items', 'con_ra_bills', 'con_ra_lines', 'con_payments', 'con_ledger'];
 const EXPORT_PARTS = 3;
 
 async function buildExport(env, part = 1) {
@@ -2285,7 +2286,8 @@ registerContractors(router, { withAuth, json, serverError, visibleProjectIds, no
   onWoApproved: (env, wo) => checkHeadOver(env, getSetting, nowStr, wo.project_id, [wo.budget_head_id]), boqItemInProject, drawingInProject, stockItemExists, issuedForWo });
 registerBudget(router, { withAuth, json, serverError, visibleProjectIds, nowStr, getSetting, csvBom, boqProgressCon, boqProgressPo });
 registerSalesOps(router, { withAuth, json, serverError, visibleProjectIds, userCan, getSetting, nowStr, encryptSetting, clientIp, checkRateLimit });
-registerRedevelopment(router, { withAuth, json, serverError, visibleProjectIds, nowStr, getSetting, csvBom, encryptSetting,
+registerSiteBoard(router, { withAuth, json, serverError, visibleProjectIds, getSetting });
+registerRedevelopment(router, { withAuth, json, serverError, visibleProjectIds, nowStr, getSetting, csvBom, encryptSetting, decryptSetting,
   // when the consent threshold is crossed, leave a note on the project's "Society consent" approval row (approvals stays in this file, not in the module)
   onConsent: (env, p) => env.DB.prepare("UPDATE apr_items SET notes = ?1 WHERE project_id = ?2 AND deleted_at IS NULL AND name LIKE 'Society consent%'")
     .bind(`${p.reached ? 'Threshold reached' : 'Dropped below the threshold'} (${p.text}) on ${new Date(Date.now() + 19800000).toISOString().substring(0, 10)}. Confirm the required majority with your advocate.`, p.society.project_id).run() });
@@ -3330,6 +3332,8 @@ async function approvalReminders(env) {
     if (step) note(`Expiring in ${days} days: ${r.name}`, `${r.project} — valid till ${r.valid_till}. Confirm renewal dates with your CA/architect.`, `approvals#${r.id}@${String(r.valid_till).slice(0, 10)}:T${step}`, r.owner_user_id, true);
   }
   for (const r of stale.results) note(`Query unanswered 5+ days: ${r.name}`, r.project, `approvals#q${r.id}`, null, false);
+  // Mondays: the consultant follow-up messages are ready to send (nothing is sent automatically)
+  if (new Date(Date.now() + 19800000).getUTCDay() === 1) note('Monday: consultant follow-ups are ready', 'Open Site board and tap WhatsApp next to each consultant to send the list of pending items.', `siteboard#monday:${today}`, null, true);
   if (out.length) await env.DB.prepare(`INSERT INTO notifications (user_id, title, body, link, created_at)
     SELECT u.id, json_extract(c.value, '$.t'), json_extract(c.value, '$.b'), json_extract(c.value, '$.k'), ?1 FROM json_each(?2) c
     JOIN users u ON u.active = 1 AND u.deleted_at IS NULL AND (u.role IN ('owner', 'pm') OR u.id = json_extract(c.value, '$.x'))

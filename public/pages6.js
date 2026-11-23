@@ -32,7 +32,7 @@ function itemsEditor({ title, intro, extra = [], first = 3, submit = 'Save' }) {
 async function newIndent() {
   const projects = await projectOptions();
   const v = await itemsEditor({ title: 'Ask for material', intro: 'List what the site needs. The project manager approves, then Purchase gets quotes.', submit: 'Send request',
-    extra: [{ name: 'project_id', label: 'Project', type: 'select', options: projects }, { name: 'needed_by', label: 'Needed by', type: 'date' }, { name: 'note', label: 'Note (optional)' }] });
+    extra: [{ name: 'project_id', label: 'Project', type: 'select', options: projects }, { name: 'needed_by', label: 'Needed by', type: 'date' }, { name: 'wing', label: 'Wing (if it is for one floor)' }, { name: 'floor', label: 'Highest floor this is for (0 = plinth; leave empty if not floor work)', type: 'number' }, { name: 'note', label: 'Note (optional)' }] });
   if (!v) return;
   v.project_id = Number(v.project_id);
   if (await postOrQueue('/api/procurement/indents', v, 'Request sent')) loadProcurement();
