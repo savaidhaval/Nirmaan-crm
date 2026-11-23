@@ -750,7 +750,7 @@ router.get('/api/drawings', async (req, env) => {
       const user = req.user;
       const ids = await visibleProjectIds(env, user);
       if (ids.length === 0) return json({ ok: true, data: { drawings: [] } });
-      const sql = `SELECT d.*, (SELECT rev_no FROM drw_revisions WHERE drawing_id = d.id AND status = 'ifc' LIMIT 1) AS current_ifc_rev FROM drw_drawings d WHERE d.deleted_at IS NULL AND d.project_id IN (${ids.map(() => '?').join(',')})${user.role === 'site' ? " AND EXISTS (SELECT 1 FROM drw_revisions r WHERE r.drawing_id = d.id AND r.status = 'ifc')" : ''} ORDER BY d.discipline, d.code`;
+      const sql = `SELECT d.*, (SELECT rev_no FROM drw_revisions WHERE drawing_id = d.id AND status = 'ifc' LIMIT 1) AS current_ifc_rev, (SELECT document_id FROM drw_revisions WHERE drawing_id = d.id AND status = 'ifc' LIMIT 1) AS current_ifc_doc FROM drw_drawings d WHERE d.deleted_at IS NULL AND d.project_id IN (${ids.map(() => '?').join(',')})${user.role === 'site' ? " AND EXISTS (SELECT 1 FROM drw_revisions r WHERE r.drawing_id = d.id AND r.status = 'ifc')" : ''} ORDER BY d.discipline, d.code`;
       const rows = await query(env.DB, sql, ids);
       return json({ ok: true, data: { drawings: rows.results } });
     } catch (e) {
@@ -1345,10 +1345,13 @@ router.post('/api/drawings/:id/revisions', async (req, env) => {
       const n = last ? (parseInt(String(last.rev_no).replace(/\D/g, ''), 10) || 0) + 1 : 0;
       const revNo = 'R' + n;
       const now = nowStr();
+      const docId = Number(body.document_id) || null;
+      if (docId && !(await env.DB.prepare('SELECT 1 AS x FROM documents WHERE id = ? AND deleted_at IS NULL AND project_id = ?').bind(docId, drawing.project_id).first())) return json({ ok: false, error: 'That file was not found in this project.' }, 400);
       const stmts = [];
       if (status === 'ifc') stmts.push(env.DB.prepare("UPDATE drw_revisions SET status = 'superseded' WHERE drawing_id = ? AND status = 'ifc'").bind(drawingId));
       stmts.push(env.DB.prepare('INSERT INTO drw_revisions (drawing_id, rev_no, status, issued_on, received_from, note, document_id, issued_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
-        .bind(drawingId, revNo, status, status === 'ifc' ? (body.issued_on || now.substring(0, 10)) : null, body.received_from || '', body.note || '', body.document_id || null, req.user.user_id, now));
+        .bind(drawingId, revNo, status, status === 'ifc' ? (body.issued_on || now.substring(0, 10)) : null, body.received_from || '', body.note || '', docId, req.user.user_id, now));
+      if (docId) stmts.push(env.DB.prepare("UPDATE documents SET entity = 'drw_revisions', entity_id = (SELECT id FROM drw_revisions WHERE drawing_id = ? AND rev_no = ?), category = 'drawing' WHERE id = ?").bind(drawingId, revNo, docId));
       stmts.push(env.DB.prepare('UPDATE drw_drawings SET waiting_consultant = 0 WHERE id = ?').bind(drawingId));
       await env.DB.batch(stmts);
       await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, 'create', 'drw_revisions', ?, ?, ?)`).bind(req.user.user_id, drawingId, `${drawing.code} ${revNo} issued as ${status === 'ifc' ? 'Issued For Construction' : 'Draft'}`, now).run();
@@ -1373,6 +1376,24 @@ router.post('/api/drawings/:id/revisions', async (req, env) => {
     }
   });
 });
+
+// ---------- Drawings: attach the sheet to a revision that has no file yet ----------
+router.post('/api/drawings/revisions/:id/file', async (req, env) => withAuth(req, env, 'drawings', 'C', async (req, env) => {
+  try {
+    const r = await env.DB.prepare('SELECT r.*, d.project_id, d.code FROM drw_revisions r JOIN drw_drawings d ON d.id = r.drawing_id WHERE r.id = ? AND d.deleted_at IS NULL').bind(Number(req.params.id)).first();
+    if (!r || !(await visibleProjectIds(env, req.user)).includes(r.project_id)) return json({ ok: false, error: 'Revision not found.' }, 404);
+    if (r.document_id) return json({ ok: false, error: 'This revision already has its file. Issue a new revision for a changed drawing.' }, 409);
+    const b = await req.json(); const docId = Number(b.document_id) || 0;
+    if (!docId || !(await env.DB.prepare('SELECT 1 AS x FROM documents WHERE id = ? AND deleted_at IS NULL AND project_id = ?').bind(docId, r.project_id).first())) return json({ ok: false, error: 'Upload the drawing file first.' }, 400);
+    const res = await env.DB.batch([
+      env.DB.prepare('UPDATE drw_revisions SET document_id = ? WHERE id = ? AND document_id IS NULL').bind(docId, r.id),
+      env.DB.prepare("UPDATE documents SET entity = 'drw_revisions', entity_id = ?, category = 'drawing' WHERE id = ? AND changes() > 0").bind(r.id, docId),
+      env.DB.prepare("INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, 'file', 'drw_revisions', ?, ?, ?)").bind(req.user.user_id, r.id, `${r.code} ${r.rev_no}: drawing file attached`, nowStr()),
+    ]);
+    if (!res[0].meta.changes) return json({ ok: false, error: 'This revision already has its file.' }, 409);
+    return json({ ok: true });
+  } catch (e) { return serverError(e, 'drw-file'); }
+}));
 
 // ---------- Site: create milestone ----------
 router.post('/api/site/milestones', async (req, env) => {
@@ -2549,7 +2570,7 @@ router.post('/api/files/upload', async (req, env) => {
       const user = req.user;
       const formData = await req.formData();
       const modForPerm = formData.get('module');
-      const mayUpload = userCan(user, 'projects', 'C') || (['site', 'procurement', 'petty', 'rera'].includes(modForPerm) && userCan(user, modForPerm, 'C') && !formData.get('series_key')) || (modForPerm === 'statement' && ['owner', 'accounts'].includes(user.role) && formData.get('category') === 'statement' && !formData.get('series_key'));
+      const mayUpload = userCan(user, 'projects', 'C') || (['site', 'procurement', 'petty', 'rera', 'drawings'].includes(modForPerm) && userCan(user, modForPerm, 'C') && !formData.get('series_key')) || (modForPerm === 'statement' && ['owner', 'accounts'].includes(user.role) && formData.get('category') === 'statement' && !formData.get('series_key'));
       if (!mayUpload) return json({ ok: false, error: 'Not allowed.' }, 403);
       const file = formData.get('file');
       const projectId = formData.get('project_id');
@@ -2647,6 +2668,8 @@ router.get('/api/files/download/:docId', async (req, env) => {
 
       if (doc.module === 'brochure' && doc.audience !== 'customer' && !['owner', 'pm'].includes(req.user.role)) return json({ ok: false, error: 'Not allowed.' }, 403); // internal brochures stay internal
       if (!docVisible(req.user, doc)) return json({ ok: false, error: 'Not allowed.' }, 403);
+      // Site works only from the current issued-for-construction sheet: superseded and draft drawing files stay with the office.
+      if (doc.entity === 'drw_revisions' && req.user.role === 'site' && !(await env.DB.prepare("SELECT 1 AS x FROM drw_revisions WHERE id = ? AND status = 'ifc'").bind(doc.entity_id).first())) return json({ ok: false, error: 'This drawing revision is not the current one for construction.' }, 403);
       // View in the app without downloading: only pictures, PDFs and plain text are shown inline; anything else still downloads.
       const sp = new URL(req.url).searchParams;
       const viewable = INLINE_MIME.test(String(doc.mime || '').toLowerCase());
