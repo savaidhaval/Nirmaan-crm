@@ -89,7 +89,7 @@ export function poTermsStatement(env, po, goods, b) {
 }
 
 export function registerProcurement2(router, h) {
-  const { withAuth, json, serverError, visibleProjectIds, nowStr, csvBom, getCurrentUser, userCan, grnStockStatements, stockItemExists } = h;
+  const { withAuth, json, serverError, visibleProjectIds, nowStr, csvBom, getCurrentUser, userCan, grnStockStatements, stockItemExists, getSetting } = h;
 
   // Site engineers hold Create (not View) on procurement. Screens they need to fill in must still be readable by them.
   const viewOrCreate = async (req, env, fn) => {
@@ -331,6 +331,13 @@ export function registerProcurement2(router, h) {
       const lines = (Array.isArray(b.lines) ? b.lines : []).map((l) => ({ id: Number(l.po_item_id), qty: num(l.qty_received), link: Number(l.stock_item_id) || 0 })).filter((l) => l.qty > 0);
       if (!lines.length) return json({ ok: false, error: 'Enter a quantity for at least one item.' }, 400);
       if (lines.some((l) => !valid.has(l.id))) return json({ ok: false, error: 'An item does not belong to this PO.' }, 400);
+      // Never more than ordered (plus the tolerance) unless the PM or the Owner accepts the excess with a reason.
+      const tol = Math.max(0, Math.round(num(await getSetting(env, 'pro.tolerance_bp')) || 300));
+      const ord = Object.fromEntries((await env.DB.prepare(`SELECT i.id, i.description, i.qty, COALESCE((SELECT SUM(gi.qty_received) FROM pro_grn_items gi JOIN pro_grns g ON g.id = gi.grn_id WHERE gi.po_item_id = i.id AND g.deleted_at IS NULL), 0) AS got
+        FROM pro_po_items i WHERE i.po_id = ?`).bind(po.id).all()).results.map((r) => [r.id, r]));
+      const over = lines.filter((l) => ord[l.id] && ord[l.id].qty > 0 && ord[l.id].got + l.qty > ord[l.id].qty * (10000 + tol) / 10000 + 1e-9).map((l) => `${ord[l.id].description}: ${+(ord[l.id].got + l.qty).toFixed(3)} received against ${ord[l.id].qty} ordered`);
+      const excessNote = String(b.excess_note || '').trim().slice(0, 300);
+      if (over.length && (!['owner', 'pm'].includes(req.user.role) || !excessNote)) return json({ ok: false, error: `More than ordered: ${over.join('; ')}. ${['owner', 'pm'].includes(req.user.role) ? 'Give a reason to accept the excess.' : 'Only the PM or the Owner can accept more than the PO (plus ' + tol / 100 + '%).'}`, code: 'excess', over }, 409);
       // A line not yet tied to a store item can be tied now, so what arrives is counted in the store.
       const links = lines.filter((l) => l.link && !stockOf[l.id]);
       for (const l of links) { if (!(await stockItemExists(env, l.link))) return json({ ok: false, error: 'That store item does not exist.' }, 400); stockOf[l.id] = l.link; }
@@ -338,8 +345,8 @@ export function registerProcurement2(router, h) {
       const summary = String(b.qty_note || '').slice(0, 300);
       // One batch: receipt, its lines, and the PO status computed from the totals. All or nothing.
       await env.DB.batch([
-        env.DB.prepare('INSERT INTO pro_grns (po_id, received_on, qty_note, challan_no, received_by, client_uuid, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-          .bind(po.id, b.received_on || now.substring(0, 10), summary, String(b.challan_no || '').slice(0, 40), req.user.user_id, uuid, now),
+        env.DB.prepare('INSERT INTO pro_grns (po_id, received_on, qty_note, challan_no, received_by, client_uuid, created_at, excess_note) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+          .bind(po.id, b.received_on || now.substring(0, 10), summary, String(b.challan_no || '').slice(0, 40), req.user.user_id, uuid, now, over.length ? excessNote : null),
         ...links.map((l) => env.DB.prepare('UPDATE pro_po_items SET stock_item_id = ? WHERE id = ? AND stock_item_id IS NULL').bind(l.link, l.id)),
         ...lines.map((l) => env.DB.prepare('INSERT INTO pro_grn_items (grn_id, po_item_id, qty_received, created_at) VALUES ((SELECT id FROM pro_grns WHERE client_uuid = ?), ?, ?, ?)').bind(uuid, l.id, l.qty, now)),
         // Items tied to a stock item also go into the store, in this same batch.
@@ -399,6 +406,7 @@ export function registerProcurement2(router, h) {
       const bill = await billWithBalance(env, Number(req.params.id));
       if (!bill) return json({ ok: false, error: 'Bill not found.' }, 404);
       if (!(await billAllowed(env, req, bill))) return json({ ok: false, error: 'Not allowed.' }, 403);
+      if (bill.hold_reason && !bill.released_at) return json({ ok: false, error: `This bill is on hold: ${bill.hold_reason} The PM or the Owner must release it before it is paid.`, code: 'held' }, 409);
       const b = await req.json();
       const amount = Math.round(num(b.amount_paise));
       if (!(amount > 0)) return json({ ok: false, error: 'Enter the amount paid.' }, 400);
@@ -416,6 +424,7 @@ export function registerProcurement2(router, h) {
       const bill = await billWithBalance(env, Number(req.params.id));
       if (!bill) return json({ ok: false, error: 'Bill not found.' }, 404);
       if (!(await billAllowed(env, req, bill))) return json({ ok: false, error: 'Not allowed.' }, 403);
+      if (bill.hold_reason && !bill.released_at) return json({ ok: false, error: `This bill is on hold: ${bill.hold_reason} The PM or the Owner must release it before it is paid.`, code: 'held' }, 409);
       if (bill.balance_paise <= 0) return json({ ok: false, error: 'This bill is already paid.' }, 400);
       const b = await req.json().catch(() => ({}));
       const id = await recordPayment(req, env, bill, bill.balance_paise, b);

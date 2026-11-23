@@ -21,8 +21,8 @@ const g1 = (await o.call('GET', `/api/branding?brand_id=${def.id}`)).data.brandi
 const g2 = (await o.call('GET', `/api/branding?brand_id=${b2}`)).data.branding;
 ok('each brand keeps its own profile', g1.legal_name === 'Default Legal ' + run && g2.legal_name === 'Second Legal ' + run && g2.letterhead_mode === 'bands');
 
-const p1 = (await o.call('POST', '/api/projects', { name: 'zz-mb one ' + run, code: 'M1' + run.toUpperCase().slice(-5) })).data.id;
-const p2 = (await o.call('POST', '/api/projects', { name: 'zz-mb two ' + run, code: 'M2' + run.toUpperCase().slice(-5), brand_id: b2 })).data.id;
+const p1 = (await o.call('POST', '/api/projects', { rera_no: 'P518000TEST', name: 'zz-mb one ' + run, code: 'M1' + run.toUpperCase().slice(-5) })).data.id;
+const p2 = (await o.call('POST', '/api/projects', { rera_no: 'P518000TEST', name: 'zz-mb two ' + run, code: 'M2' + run.toUpperCase().slice(-5), brand_id: b2 })).data.id;
 const plist = (await o.call('GET', '/api/projects')).data.projects;
 ok('new project defaults to the default brand', plist.find((p) => p.id === p1).brand_id === def.id);
 ok('project can be created under another brand', plist.find((p) => p.id === p2).brand_id === b2);

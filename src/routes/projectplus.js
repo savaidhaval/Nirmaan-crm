@@ -1,4 +1,5 @@
 // routes/projectplus.js — project profile, AutoDCR link, approval sub-steps and file movement, tasks with a person in charge, project quick view.
+import { gateOf, GATE_LABEL, todayIST } from '../core/gates.js';
 // Every route checks the module permission and the project the person may see. Every write is audited.
 
 const str = (v, n = 300) => String(v == null ? '' : v).trim().slice(0, n);
@@ -175,15 +176,43 @@ export function registerProjectPlus(router, h) {
     } catch (e) { return serverError(e, 'pp-file'); }
   }));
 
+  // What kind of approval this is, which wing it covers, and which approvals must come first.
+  router.put('/api/approvals/:id/gate', async (req, env) => withAuth(req, env, 'approvals', 'E', async (req, env) => {
+    try {
+      const it = await loadItem(env, req, Number(req.params.id));
+      if (!it) return json({ ok: false, error: 'Approval not found.' }, 404);
+      const b = await req.json();
+      const gate = b.gate_key === '' || b.gate_key == null ? null : String(b.gate_key);
+      if (gate && !GATE_LABEL[gate]) return json({ ok: false, error: 'Unknown approval type.' }, 400);
+      const deps = Array.isArray(b.depends_on) ? [...new Set(b.depends_on.map(Number).filter((x) => x > 0 && x !== it.id))].slice(0, 30) : null;
+      if (deps && deps.length) {
+        const ok = (await env.DB.prepare('SELECT COUNT(*) AS n FROM apr_items WHERE project_id = ? AND deleted_at IS NULL AND id IN (SELECT value FROM json_each(?))').bind(it.project_id, JSON.stringify(deps)).first()).n;
+        if (ok !== deps.length) return json({ ok: false, error: 'Pick approvals from this project only.' }, 400);
+        // no loops: none of the chosen approvals may (directly or further back) depend on this one
+        const loop = await env.DB.prepare(`WITH RECURSIVE up(id) AS (SELECT value FROM json_each(?1) UNION SELECT d.depends_on_id FROM apr_deps d JOIN up ON d.item_id = up.id) SELECT 1 AS x FROM up WHERE id = ?2 LIMIT 1`).bind(JSON.stringify(deps), it.id).first();
+        if (loop) return json({ ok: false, error: 'That would make the approvals wait for each other in a circle.' }, 400);
+      }
+      const now = nowStr();
+      await env.DB.batch([
+        env.DB.prepare('UPDATE apr_items SET gate_key = ?, wing = ? WHERE id = ?').bind(gate, String(b.wing || '').trim().slice(0, 20) || null, it.id),
+        ...(deps ? [env.DB.prepare('DELETE FROM apr_deps WHERE item_id = ?').bind(it.id), env.DB.prepare('INSERT OR IGNORE INTO apr_deps (item_id, depends_on_id, created_by, created_at) SELECT ?, value, ?, ? FROM json_each(?)').bind(it.id, req.user.user_id, now, JSON.stringify(deps))] : []),
+        audit(env, req.user, 'edit', 'apr_items', it.id, `${it.name}: type ${gate ? GATE_LABEL[gate] : 'none'}${deps ? `, needs ${deps.length} approval(s) first` : ''}`),
+      ]);
+      return json({ ok: true });
+    } catch (e) { return serverError(e, 'pp-gate'); }
+  }));
+
   router.get('/api/approvals/:id/steps', async (req, env) => withAuth(req, env, 'approvals', 'V', async (req, env) => {
     try {
       const it = await loadItem(env, req, Number(req.params.id));
       if (!it) return json({ ok: false, error: 'Approval not found.' }, 404);
-      const [steps, owner] = await env.DB.batch([
+      const [steps, owner, deps, others] = await env.DB.batch([
         env.DB.prepare('SELECT s.*, u.name AS assigned_name FROM apr_steps s LEFT JOIN users u ON u.id = s.assigned_to WHERE s.item_id = ? AND s.deleted_at IS NULL ORDER BY s.seq, s.id').bind(it.id),
         env.DB.prepare('SELECT name FROM users WHERE id = ?').bind(it.owner_user_id || 0),
+        env.DB.prepare('SELECT a.id, a.name, a.status FROM apr_deps d JOIN apr_items a ON a.id = d.depends_on_id WHERE d.item_id = ? AND a.deleted_at IS NULL ORDER BY a.stage_order').bind(it.id),
+        env.DB.prepare('SELECT id, name FROM apr_items WHERE project_id = ? AND deleted_at IS NULL AND id != ? ORDER BY stage_order, name LIMIT 200').bind(it.project_id, it.id),
       ]);
-      return json({ ok: true, data: { item: { ...it, owner_name: owner.results[0] ? owner.results[0].name : null }, steps: steps.results, has_template: STEP_TEMPLATES.some(([re]) => re.test(it.name)) } });
+      return json({ ok: true, data: { item: { ...it, owner_name: owner.results[0] ? owner.results[0].name : null, gate: gateOf(it) }, depends_on: deps.results, others: others.results, gate_labels: GATE_LABEL, steps: steps.results, has_template: STEP_TEMPLATES.some(([re]) => re.test(it.name)) } });
     } catch (e) { return serverError(e, 'pp-steps'); }
   }));
 
@@ -227,7 +256,7 @@ export function registerProjectPlus(router, h) {
       const assigned = b.assigned_to !== undefined ? numOrNull(b.assigned_to) : s.assigned_to;
       if (!(await userOk(env, assigned))) return json({ ok: false, error: 'Pick a person from the list.' }, 400);
       const pick = (k, n) => (b[k] !== undefined ? (str(b[k], n) || null) : s[k]);
-      const doneOn = status === 'done' ? (s.done_on || nowStr().slice(0, 10)) : null;
+      const doneOn = status === 'done' ? (s.done_on || todayIST()) : null;
       await env.DB.batch([
         env.DB.prepare('UPDATE apr_steps SET title = ?, responsible_designation = ?, responsible_name = ?, assigned_to = ?, target_date = ?, status = ?, done_on = ?, note = ? WHERE id = ?')
           .bind((pick('title', 200) || s.title).toUpperCase(), pick('responsible_designation', 120), pick('responsible_name', 120), assigned, b.target_date !== undefined ? (b.target_date || null) : s.target_date, status, doneOn, pick('note', 300), s.id),
@@ -267,7 +296,7 @@ export function registerProjectPlus(router, h) {
       const ids = await visibleProjectIds(env, req.user);
       if (pid && !ids.includes(pid)) return json({ ok: false, error: 'Not allowed.' }, 403);
       const tasks = await openTasks(env, ids, pid, q.get('mine') ? req.user.user_id : 0);
-      const today = nowStr().slice(0, 10);
+      const today = todayIST();
       tasks.forEach((t) => { t.late = !!(t.due && t.due < today); });
       tasks.sort((x, y) => (x.due || '9999') < (y.due || '9999') ? -1 : 1);
       return json({ ok: true, data: { tasks } });
@@ -324,7 +353,7 @@ export function registerProjectPlus(router, h) {
       const project = p.results[0];
       if (!project) return json({ ok: false, error: 'Project not found.' }, 404);
       const tasks = await openTasks(env, ids, pid, 0);
-      const today = nowStr().slice(0, 10);
+      const today = todayIST();
       tasks.forEach((t) => { t.late = !!(t.due && t.due < today); });
       tasks.sort((x, y) => (x.due || '9999') < (y.due || '9999') ? -1 : 1);
       const counts = Object.fromEntries(apr.results.map((r) => [r.status, r.n]));

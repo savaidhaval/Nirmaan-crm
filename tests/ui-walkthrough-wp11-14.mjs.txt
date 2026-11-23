@@ -6,7 +6,7 @@ let pass = 0, fail = 0; const ok = (n, c, x = '') => { c ? pass++ : fail++; cons
 class C { constructor() { this.cookie = ''; } async call(m, p, b) { const h = { 'X-NirmaanCRM': '1' }; if (this.cookie) h.cookie = this.cookie; let body; if (b) { h['Content-Type'] = 'application/json'; body = JSON.stringify(b); }
   const r = await fetch(BASE + p, { method: m, headers: h, body }); const sc = r.headers.get('set-cookie'); if (sc) this.cookie = sc.split(';')[0]; let d = null; try { d = await r.json(); } catch (e) {} return { status: r.status, data: d && d.data, err: d && d.error }; } }
 const o = new C(); await o.call('POST', '/api/auth/login', { email: 'owner@test.local', password: 'CiStrongPass-12345' });
-const pid = (await o.call('POST', '/api/projects', { name: 'UI Tower ' + run, code: 'UI' + run.toUpperCase().slice(-5), budget_paise: 5e9 })).data.id;
+const pid = (await o.call('POST', '/api/projects', { rera_no: 'P518000TEST', name: 'UI Tower ' + run, code: 'UI' + run.toUpperCase().slice(-5), budget_paise: 5e9 })).data.id;
 await o.call('POST', '/api/settings/con.enabled', { value: 'on' });
 await o.call('POST', '/api/settings/con.pm_approval_limit_paise', { value: 50000000 });
 const users = {};
@@ -114,7 +114,14 @@ await s.waitForSelector('[data-hoi]'); await shot(s, '78-handover-checklist');
 ok('starter checklist with the "edit to suit your process" note', (await s.$$('[data-hoi]')).length === 5 && (await s.locator('.modal').last().textContent()).includes('Starter checklist'));
 await s.locator('[data-hoi]').first().check(); await s.waitForTimeout(500);
 await s.click('#ho-details'); await s.waitForSelector('#f_oc_reference'); await s.fill('#f_possession_offered_on', iso(5)); await s.fill('#f_oc_reference', 'OC/2026/77'); await submit(s); ok('possession details saved', /Saved/.test(await toastText(s)));
-await s.waitForSelector('#ho-done'); await s.waitForTimeout(500); await s.click('#ho-done'); ok('Sales marks it handed over', /Handed over/.test(await toastText(s)));
+ok('Sales cannot give possession: the button is for the PM or Owner', !(await s.$('#ho-done')) && (await s.locator('.modal').last().textContent()).includes('after the OC is approved'));
+// the OC is recorded in Approvals with its letter
+const ocItem = (await o.call('POST', '/api/approvals', { project_id: pid, name: 'Occupancy Certificate (OC)', authority: 'MCGM' })).data.id;
+await o.call('POST', `/api/approvals/${ocItem}/event`, { event: 'applied' }); await o.call('POST', `/api/approvals/${ocItem}/event`, { event: 'approved', letter_no: 'OC/2026/77', letter_date: iso(-1) });
+s = await page('owner'); await s.evaluate((id) => { bookingDetail(id); }, bk); await s.waitForSelector('#ho-done'); await s.waitForTimeout(500); await s.click('#ho-done');
+await s.waitForSelector('#f_override_note'); ok('dues and open checklist items ask the Owner for a written reason', (await s.locator('.modal').last().textContent()).includes('still due'));
+await shot(s, '79a-possession-reason'); await s.fill('#f_override_note', 'Balance on loan disbursement next week; customer agreed'); await submit(s);
+ok('the Owner hands over with the reason', /Handed over/.test(await toastText(s)));
 await s.waitForTimeout(1200); const ht = (await s.locator('.modal').last().textContent()).replace(/\s+/g, ' ');
 ok('booking shows Handed over, OC reference and the date', ht.includes('Handed over on') && ht.includes('OC/2026/77'), ht.slice(0, 300));
 ok('the flat is possessed on the stacking plan', (await o.call('GET', `/api/reports/stacking?project_id=${pid}`)).data.units.find((u) => u.id === unit).state === 'possessed');

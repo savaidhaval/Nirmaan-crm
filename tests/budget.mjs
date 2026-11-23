@@ -9,8 +9,8 @@ const run = Date.now().toString(36); const digits = String(Date.now()).slice(-8)
 const o = new C(); await o.call('POST', '/api/auth/login', { email: process.env.OWNER_EMAIL, password: process.env.OWNER_PASSWORD });
 let seq = 0;
 const mkUser = async (role, projects) => { const email = `zp-${role}-${++seq}-${run}@test.local`; const r = await o.call('POST', '/api/users', { name: 'zp ' + role, email, role, projects }); const pw = 'ZpStrongPass-' + run; const c = new C(); await c.call('POST', '/api/auth/login', { email, password: r.data.temporaryPassword }); await c.call('POST', '/api/auth/change-password', { currentPassword: r.data.temporaryPassword, newPassword: pw }); c.id = r.data.id; c.email = email; c.pw = pw; return c; };
-const pid = (await o.call('POST', '/api/projects', { name: 'zz-wp7 ' + run, code: 'W7' + run.toUpperCase().slice(-6), budget_paise: 50000000 })).data.id;
-const pid2 = (await o.call('POST', '/api/projects', { name: 'zz-wp7b ' + run, code: 'Y7' + run.toUpperCase().slice(-6), budget_paise: 50000000 })).data.id;
+const pid = (await o.call('POST', '/api/projects', { rera_no: 'P518000TEST', name: 'zz-wp7 ' + run, code: 'W7' + run.toUpperCase().slice(-6), budget_paise: 50000000 })).data.id;
+const pid2 = (await o.call('POST', '/api/projects', { rera_no: 'P518000TEST', name: 'zz-wp7b ' + run, code: 'Y7' + run.toUpperCase().slice(-6), budget_paise: 50000000 })).data.id;
 const pm = await mkUser('pm', []); const pur = await mkUser('purchase', []); const acc = await mkUser('accounts', []); const site = await mkUser('site', [pid]); const sales = await mkUser('sales', []);
 const setSetting = (k, v) => o.call('POST', '/api/settings/' + k, { value: v });
 const L = 100000; // Rs 1,000
@@ -61,6 +61,7 @@ await setSetting('budget.gst_basis', 'exclusive');
 
 // ---------- bills and payments shared by head ----------
 const bill = (await o.call('POST', '/api/procurement/bills', { po_id: po1.id, vendor_id: v1, bill_no: 'B' + run, amount_paise: 2360 * L, gst_paise: 360 * L })).data.id;   // Rs 23,60,000 incl 3,60,000 GST
+await o.call('POST', `/api/procurement/bills/${bill}/release`, { note: 'Nothing received yet in this test; advance bill agreed' });
 await acc.call('POST', `/api/procurement/bills/${bill}/payments`, { amount_paise: 1000 * L });
 r = (await pm.call('GET', `/api/budget/overview?project_id=${pid}`)).data.rows.find((x) => x.id === st);
 ok('billed excludes GST (20,00,000) and paid shows 10,00,000', r.billed_paise === 2000 * L && r.paid_paise === 1000 * L, JSON.stringify(r));

@@ -1,0 +1,97 @@
+import { createRequire } from 'node:module';
+const { chromium } = createRequire(import.meta.url)('/opt/node-tools/node_modules/playwright');
+const BASE = process.env.BASE || 'http://localhost:8787', SHOTS = '/tmp/claude-0/scratch/shots';
+const run = Date.now().toString(36);
+let pass = 0, fail = 0; const ok = (n, c, x = '') => { c ? pass++ : fail++; console.log(`${c ? 'PASS' : 'FAIL'}  ${n}${c ? '' : '  ' + x}`); };
+class C { constructor() { this.cookie = ''; } async call(m, p, b) { const h = { 'X-NirmaanCRM': '1' }; if (this.cookie) h.cookie = this.cookie; let body; if (b) { h['Content-Type'] = 'application/json'; body = JSON.stringify(b); }
+  const r = await fetch(BASE + p, { method: m, headers: h, body }); const sc = r.headers.get('set-cookie'); if (sc) this.cookie = sc.split(';')[0]; let d = null; try { d = await r.json(); } catch (e) {} return { status: r.status, data: d && d.data, err: d && d.error }; } }
+const o = new C(); await o.call('POST', '/api/auth/login', { email: 'owner@test.local', password: 'CiStrongPass-12345' });
+const pid = (await o.call('POST', '/api/projects', { rera_no: 'P518000TEST', name: 'UI Tower ' + run, code: 'UI' + run.toUpperCase().slice(-5), budget_paise: 5e9 })).data.id;
+await o.call('POST', '/api/settings/con.enabled', { value: 'on' });
+await o.call('POST', '/api/settings/con.pm_approval_limit_paise', { value: 50000000 });
+const users = {};
+for (const role of ['site', 'pm', 'purchase', 'accounts', 'sales', 'viewer']) {
+  const email = `ui-${role}-${run}@test.local`; const r = await o.call('POST', '/api/users', { name: 'UI ' + role + ' ' + run, email, role, projects: role === 'site' ? [pid] : [] });
+  const c = new C(); await c.call('POST', '/api/auth/login', { email, password: r.data.temporaryPassword }); const pw = 'UiStrongPass-' + run;
+  await c.call('POST', '/api/auth/change-password', { currentPassword: r.data.temporaryPassword, newPassword: pw }); users[role] = { email, pw };
+}
+const browser = await chromium.launch();
+const ctxs = {};
+async function page(role) {
+  if (!ctxs[role]) {
+    const ctx = await browser.newContext({ viewport: { width: 390, height: 800 } });
+    const email = role === 'owner' ? 'owner@test.local' : users[role].email, password = role === 'owner' ? 'CiStrongPass-12345' : users[role].pw;
+    const r = await ctx.request.post(BASE + '/api/auth/login', { headers: { 'X-NirmaanCRM': '1', 'Content-Type': 'application/json' }, data: { email, password } });
+    if (!r.ok()) throw new Error('login ' + role + ' ' + r.status());
+    ctxs[role] = ctx;
+  }
+  const p = await ctxs[role].newPage(); p.on('dialog', (d) => d.accept()); p.on('pageerror', (e) => console.log('PAGEERROR', role, e.message));
+  await p.goto(BASE + '/'); await p.waitForFunction(() => typeof navigate === 'function' && typeof currentUser !== 'undefined' && currentUser, null, { timeout: 15000 }); return p;
+}
+const go = async (p, route) => { await p.evaluate((r) => navigate(r), route); await p.waitForTimeout(800); };
+const toastText = async (p) => { await p.waitForTimeout(500); return p.evaluate(() => (document.getElementById('toast') || {}).textContent || ''); };
+const submit = (p) => p.click('#modal-form button[type=submit]');
+const pick = (p, sel, label) => p.selectOption(sel, { label });
+const shot = (p, n) => p.screenshot({ path: `${SHOTS}/${n}.png` });
+
+const iso = (d) => new Date(Date.now() + 19800000 + d * 86400000).toISOString().slice(0, 10);
+const L = 100000;
+// project ready for the walkthrough: CC up to plinth, two milestones, a wing-A booking on a plan
+await o.call('POST', '/api/approvals/load-template', { project_id: pid });
+const items = (await o.call('GET', '/api/approvals')).data.items.filter((a) => a.project_id === pid);
+const gate = (g) => items.find((a) => a.gate_key === g).id;
+const pmc = new C(); await pmc.call('POST', '/api/auth/login', { email: users.pm.email, password: users.pm.pw });
+await o.call('POST', `/api/approvals/${gate('iod')}/event`, { event: 'applied' });
+await o.call('POST', `/api/approvals/${gate('iod')}/event`, { event: 'approved', letter_no: 'IOD/1', letter_date: iso(-30) });
+await o.call('POST', `/api/approvals/${gate('cc')}/event`, { event: 'applied' });
+
+// ===== Approvals: "Approved" asks for the letter, and the CC asks up to which floor =====
+const pmp = await page('pm'); await go(pmp, 'approvals'); await pmp.selectOption('#apr-p', String(pid)); await pmp.waitForTimeout(1200);
+await pmp.click(`#approvals-list [data-id="${gate('cc')}"]`); await pmp.waitForSelector('[data-ev="approved"]');
+ok('the approval offers only the allowed next steps', !(await pmp.$('[data-ev="expired"]')) && !!(await pmp.$('[data-ev="query"]')));
+await pmp.waitForSelector('text=Must come first', { timeout: 8000 }).catch(() => {});
+ok('it shows what must come first (the IOD, approved)', /Must come first:.*IOD/.test((await pmp.locator('.modal').last().textContent()).replace(/\s+/g, ' ')));
+await pmp.click('[data-ev="approved"]'); await pmp.waitForSelector('#f_letter_no');
+ok('"Approved" asks for the letter number, date and (for a CC) the floor', !!(await pmp.$('#f_cc_upto_floor')) && !!(await pmp.$('#f_file')));
+await pmp.fill('#f_letter_no', 'CHE/CC/77'); await pmp.fill('#f_cc_upto_floor', '0'); await shot(pmp, '210-approve-with-letter'); await submit(pmp); await pmp.waitForTimeout(1200);
+ok('the CC is approved with its letter', (await o.call('GET', `/api/approvals/${gate('cc')}`)).data.item.letter_no === 'CHE/CC/77');
+await pmp.evaluate(() => document.querySelectorAll('.modal-overlay').forEach((x) => x.remove()));
+
+// ===== Site: "Reached today" → PM certifies with the architect's certificate =====
+await o.call('POST', '/api/site/milestones', { project_id: pid, name: 'Plinth ' + run, wing: 'A', floor: 0, planned_date: iso(0) });
+await o.call('POST', '/api/site/milestones', { project_id: pid, name: 'Slab 2 ' + run, wing: 'A', floor: 2, planned_date: iso(10) });
+const sp = await page('site'); await go(sp, 'site'); await sp.waitForSelector('[data-msready]');
+ok('the site engineer sees "Reached today", not "Done"', (await sp.$$('[data-msready]')).length >= 2 && !(await sp.$('[data-mscert]')));
+await sp.click('[data-msready]'); await sp.waitForSelector('#f_actual_date'); await submit(sp); await sp.waitForTimeout(1200);
+ok('after tapping, it waits for the PM to certify', (await sp.textContent('#site-list')).includes('Waiting for the PM to certify'));
+await shot(sp, '211-site-ready');
+await go(pmp, 'site'); await pmp.waitForSelector('[data-mscert]');
+await pmp.click('[data-mscert]'); await pmp.waitForSelector('#f_cert_ref'); await pmp.fill('#f_cert_ref', 'ARCH/STAGE/12 dated today'); await shot(pmp, '212-pm-certify'); await submit(pmp); await pmp.waitForTimeout(1200);
+ok('the PM certifies it with the certificate', (await pmp.textContent('#site-list')).includes('Certificate: ARCH/STAGE/12'));
+const slab = (await o.call('GET', '/api/site/milestones')).data.milestones.find((m) => m.name === 'Slab 2 ' + run);
+await pmp.click(`[data-mscert="${slab.id}"]`); await pmp.waitForSelector('#f_cert_ref'); await pmp.fill('#f_cert_ref', 'ARCH/S2'); await submit(pmp); await pmp.waitForTimeout(1200);
+ok('slab 2 above the CC (plinth) is refused in plain words', /CC covers work up to floor 0/.test(await toastText(pmp)) || /floor 0/.test(await pmp.textContent('body')));
+await shot(pmp, '213-cc-stop');
+
+// ===== Work order: measurements and variations =====
+await o.call('POST', '/api/settings/con.enabled', { value: 'on' });
+const con = (await o.call('POST', '/api/contractors/contractors', { name: 'UI civil ' + run, trade: 'civil' })).data.id;
+const wo = (await o.call('POST', '/api/contractors/work-orders', { project_id: pid, contractor_id: con, scope: 'RCC', basis: 'item_rate', retention_bp: 500, items: [{ description: 'RCC M25', qty: 100, unit: 'cum', rate_paise: 10 * L }] })).data;
+await o.call('POST', `/api/contractors/work-orders/${wo.id}/submit`, {}); await o.call('POST', `/api/contractors/work-orders/${wo.id}/approve`, {});
+await sp.evaluate((id) => woDetail(id), wo.id); await sp.waitForSelector('#wo-meas'); await sp.click('#wo-meas'); await sp.waitForSelector('#me-new'); await sp.click('#me-new'); await sp.waitForSelector('#f_location');
+await sp.fill('#f_location', 'A wing plinth beams'); await sp.fill('#f_nos', '4'); await sp.fill('#f_length_m', '10'); await sp.fill('#f_width_m', '0.3'); await sp.fill('#f_depth_m', '0.6'); await sp.fill('#f_contractor_rep', 'Ramesh');
+await shot(sp, '214-measurement-form'); await submit(sp); await sp.waitForTimeout(300);  await sp.waitForTimeout(900);
+ok('the site engineer records a joint measurement: 4 x 10 x 0.3 x 0.6 = 7.2 cum', (await sp.locator('.modal').last().textContent()).includes('7.2'));
+await pmp.evaluate((id) => woDetail(id), wo.id); await pmp.waitForSelector('#wo-meas'); await pmp.click('#wo-meas'); await pmp.waitForSelector('[data-me="approve"]'); await pmp.click('[data-me="approve"]'); await pmp.waitForTimeout(1000);
+ok('the PM approves it', (await pmp.locator('.modal').last().textContent()).includes('Approved'));
+await shot(pmp, '215-measurements');
+await pmp.click('#me-x'); await pmp.waitForSelector('#wo-var'); await pmp.click('#wo-var'); await pmp.waitForSelector('#va-new'); await pmp.click('#va-new'); await pmp.waitForSelector('#f_reason');
+await pmp.selectOption('#f_wo_item_id', { index: 1 }); await pmp.fill('#f_qty', '60'); await pmp.fill('#f_reason', 'Raft thickened per drawing R2'); await submit(pmp); await pmp.waitForTimeout(1200);
+ok('a Rs 6 lakh variation goes to the Owner (above Rs 5 lakh)', /Owner/.test(await toastText(pmp)) && !(await pmp.$('[data-va="approve"]')));
+await shot(pmp, '216-variation');
+
+// ===== Settings show the rules in force =====
+const op = await page('owner'); await go(op, 'settings'); await op.waitForSelector('[data-key="pro.tolerance_bp"]');
+ok('Settings show 3% tolerance, Rs 5 lakh variation limit, 60 months retention', (await op.inputValue('[data-key="pro.tolerance_bp"]')) === '300' && (await op.inputValue('[data-key="con.variation_owner_limit_paise"]')) === '500000' && (await op.inputValue('[data-key="con.dlp_months"]')) === '60');
+
+await browser.close(); console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);

@@ -136,8 +136,15 @@ bookingDetail = async function (id) {
   };
   if ($('ho-done')) $('ho-done').onclick = async () => {
     if (!confirm('Mark this flat as handed over to the customer?')) return;
-    const r = await act(api(`/api/sales/bookings/${id}/handover/complete`, { method: 'POST' }), 'Handed over');
-    if (r) { if (r.data.warnings && r.data.warnings.length) alert('Handed over. Please note:\n' + r.data.warnings.join('\n')); again(); }
+    const path = `/api/sales/bookings/${id}/handover/complete`;
+    let r = null;
+    try { r = await api(path, { method: 'POST' }); }
+    catch (e) {
+      // dues, snags or checklist still open: the PM (snags) or the Owner (dues) may go ahead with a written reason; no OC is a hard stop
+      if (e.data && e.data.code === 'reason') { const v = await openForm({ title: 'Hand over anyway?', intro: e.message, fields: [{ name: 'override_note', label: 'Why go ahead now?', type: 'textarea', required: true }] }); if (v) r = await act(api(path, { method: 'POST', body: v })); }
+      else toast(e.message, 8000);
+    }
+    if (r) { toast('Handed over'); again(); }
   };
 };
 
@@ -149,7 +156,7 @@ function renderHandover(H, d) {
     ${H.template_is_starter && !done ? '<p class="muted">Starter checklist: edit it in Settings to match your process, and confirm with your advocate. It is not a complete legal list.</p>' : ''}
     ${H.items.map((i) => `<label class="check" style="display:block;margin:6px 0"><input type="checkbox" data-hoi="${i.id}"${i.done ? ' checked' : ''}${done || !sellers ? ' disabled' : ''}> ${esc(i.label)}${i.done_on ? ` <span class="muted">(${esc(i.done_on)})</span>` : ''}</label>`).join('')}
     <p><b>Snags in this flat:</b> ${H.snags.length ? H.snags.map((s) => `${esc(s.title)} (${esc(s.status)})`).join('; ') : 'none'}</p>
-    <div class="row-btns">${!done && sellers ? '<button class="btn small" id="ho-details">Possession details</button>' : ''}${!done && isRole('owner', 'pm') ? '<button class="btn small" id="ho-snag">+ Snag in this flat</button>' : ''}${!done && sellers ? '<button class="btn small btn-primary" id="ho-done">Mark handed over</button>' : ''}</div>`;
+    <div class="row-btns">${!done && sellers ? '<button class="btn small" id="ho-details">Possession details</button>' : ''}${!done && isRole('owner', 'pm') ? '<button class="btn small" id="ho-snag">+ Snag in this flat</button>' : ''}${!done && isRole('owner', 'pm') ? '<button class="btn small btn-primary" id="ho-done">Mark handed over</button>' : ''}</div>${!done && !isRole('owner', 'pm') ? '<p class="muted">The PM or the Owner gives possession, after the OC is approved.</p>' : ''}`;
 }
 
 // ---------- Sales page: receipts waiting, and the reports ----------

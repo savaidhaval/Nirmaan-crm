@@ -10,7 +10,7 @@ const o = new C(); await o.call('POST', '/api/auth/login', { email: process.env.
 let seq = 0;
 const mkUser = async (role, projects) => { const email = `zp-${role}-${++seq}-${run}@test.local`; const r = await o.call('POST', '/api/users', { name: 'zp ' + role, email, role, projects }); const pw = 'ZpStrongPass-' + run; const c = new C(); await c.call('POST', '/api/auth/login', { email, password: r.data.temporaryPassword }); await c.call('POST', '/api/auth/change-password', { currentPassword: r.data.temporaryPassword, newPassword: pw }); c.id = r.data.id; c.email = email; c.pw = pw; return c; };
 import { execSync } from 'node:child_process';
-const pid = (await o.call('POST', '/api/projects', { name: 'zz-da ' + run, code: 'DA' + run.toUpperCase().slice(-6), budget_paise: 50000000 })).data.id;
+const pid = (await o.call('POST', '/api/projects', { rera_no: 'P518000TEST', name: 'zz-da ' + run, code: 'DA' + run.toUpperCase().slice(-6), budget_paise: 50000000 })).data.id;
 const pm = await mkUser('pm', []); const sales = await mkUser('sales', []);
 const s1 = await mkUser('site', [pid]); const s2 = await mkUser('site', [pid]); const s3 = await mkUser('site', []);
 const notes = async (who) => JSON.stringify((await who.call('GET', '/api/notifications')).data);

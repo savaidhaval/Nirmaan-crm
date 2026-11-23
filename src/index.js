@@ -39,6 +39,7 @@ import { registerContractors, raDueSweep, activeContractorsForProject, contracto
 import { registerMfa, mfaChallenge } from './routes/mfa.js';
 import { registerImporter } from './routes/importer.js';
 import { registerPrivacy } from './routes/privacy.js';
+import { gateOf, GATE_DEPS, GATE_LABEL, approvalState, saleBlock, todayIST, isDate } from './core/gates.js';
 
 const router = new Router();
 
@@ -541,6 +542,9 @@ router.get('/api/settings', async (req, env) => {
         if (/password|secret|token|api_key|refresh|oauth/i.test(r.key)) { settings[r.key] = '[hidden]'; continue; }
         try { settings[r.key] = await getSetting(env, r.key); } catch (e) { settings[r.key] = '[unreadable]'; }
       }
+      // Values the code uses when nothing is saved yet, so the screen shows what is really in force.
+      const DEFAULTS = { 'con.variation_owner_limit_paise': 50000000, 'con.advance_recovery_bp': 1000, 'con.dlp_months': 60, 'pro.tolerance_bp': 300, 'tax.tds_no_pan_bp': 2000 };
+      for (const [k, v] of Object.entries(DEFAULTS)) if (settings[k] == null || settings[k] === '') settings[k] = v;
       return json({ ok: true, data: { settings } });
     } catch (e) {
       return serverError(e, 'settings');
@@ -553,7 +557,7 @@ const EDITABLE_SETTINGS = ['po.pm_approval_limit_paise', 'access.allow_second_ow
   'brochure.price_list_default_audience', 'storage.warn_percent', 'sales.max_holds_per_user', 'sales.max_discount_bp', 'sales.pm_max_discount_bp',
   'interest.rate_bp', 'interest.grace_days', 'interest.enabled', 'security.require_mfa_roles', 'tax.stamp_duty_bp', 'tax.metro_cess_bp', 'tax.women_concession_bp', 'tax.registration_bp', 'tax.registration_cap_paise', 'tax.gst_bp',
   'con.enabled', 'con.pm_approval_limit_paise', 'con.gst_bp', 'con.tds_bp', 'budget.gst_basis', 'petty.low_balance_paise', 'ai.enabled', 'ai.daily_limit', 'ai.model', 'rera.designated_pct_bp', 'fea.review_days', 'red.member_doc_checklist', 'red.rent_due_day', 'bank.keep_days', 'drawing.ack_hours', 'sales.bulk_daily_limit', 'sales.bulk_chunk', 'sales.demand_link_days', 'sales.visit_objections', 'sales.visit_radius_m',
-  'sales.receipt_approval_limit_paise', 'sales.discount_pm_limit_paise', 'sales.handover_template', 'apr.designations'];
+  'sales.receipt_approval_limit_paise', 'sales.discount_pm_limit_paise', 'sales.handover_template', 'apr.designations', 'con.variation_owner_limit_paise', 'con.advance_recovery_bp', 'con.dlp_months', 'pro.tolerance_bp', 'tax.tds_no_pan_bp'];
 
 router.post('/api/settings/:key', async (req, env) => {
   return withAuth(req, env, 'users_settings', 'E', async (req, env) => {
@@ -646,7 +650,7 @@ router.post('/api/approvals', async (req, env) => {
         return json({ ok: false, error: 'Not allowed.' }, 403);
       }
       const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
-      const result = await env.DB.prepare(`INSERT INTO apr_items (project_id, name, authority, category, stage_order, status, applied_on, approved_on, valid_till, reminder_days, renew_months, owner_user_id, consultant, fee_paise, notes, created_at, target_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(project_id, String(name).trim().toUpperCase().slice(0, 200), authority || '', category || 'approval', stage_order || 100, status || 'not_started', applied_on || null, approved_on || null, valid_till || null, reminder_days || 30, renew_months || null, owner_user_id || null, consultant || '', fee_paise || 0, notes || '', now, /^\d{4}-\d{2}-\d{2}$/.test(body.target_date || '') ? body.target_date : null).run();
+      const result = await env.DB.prepare(`INSERT INTO apr_items (project_id, name, authority, category, stage_order, status, applied_on, approved_on, valid_till, reminder_days, renew_months, owner_user_id, consultant, fee_paise, notes, created_at, target_date, gate_key) VALUES (?, ?, ?, ?, ?, 'not_started', NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(project_id, String(name).trim().toUpperCase().slice(0, 200), authority || '', category || 'approval', stage_order || 100, valid_till || null, reminder_days || 30, renew_months || null, owner_user_id || null, consultant || '', fee_paise || 0, notes || '', now, /^\d{4}-\d{2}-\d{2}$/.test(body.target_date || '') ? body.target_date : null, gateOf({ gate_key: GATE_LABEL[body.gate_key] ? body.gate_key : null, name })).run();
       await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, ?, 'apr_items', ?, ?, ?)`).bind(user.user_id, 'create', result.meta.last_row_id, `Created approval "${name}"`, now).run();
       return json({ ok: true, data: { id: result.meta.last_row_id } });
     } catch (e) {
@@ -679,37 +683,56 @@ router.post('/api/approvals/:id/event', async (req, env) => {
       const user = req.user;
       const id = Number(req.params.id);
       const body = await req.json();
-      const { event, note, applied_on, approved_on } = body;
-      if (!event) {
-        return json({ ok: false, error: 'Event is required.' }, 400);
-      }
+      const { event, note } = body;
       const item = await env.DB.prepare('SELECT * FROM apr_items WHERE id = ? AND deleted_at IS NULL').bind(id).first();
       if (!item) return json({ ok: false, error: 'Approval item not found.' }, 404);
-      const ids = await visibleProjectIds(env, user);
-      if (!ids.includes(item.project_id)) {
-        return json({ ok: false, error: 'Not allowed.' }, 403);
+      if (!(await visibleProjectIds(env, user)).includes(item.project_id)) return json({ ok: false, error: 'Not allowed.' }, 403);
+      const TO = { applied: 'applied', query: 'query', approved: 'approved', rejected: 'rejected', expired: 'expired', na: 'na', reopen: 'not_started' };
+      if (!TO[event]) return json({ ok: false, error: 'Unknown step.' }, 400);
+      const newStatus = TO[event], from = item.status || 'not_started';
+      // Allowed moves. Going back from "approved" (other than expiry) needs the Owner and a reason.
+      const MOVES = { not_started: ['applied', 'na'], applied: ['query', 'approved', 'rejected'], query: ['applied', 'approved', 'rejected'], rejected: ['applied'], expired: ['applied'], na: ['not_started'], approved: ['expired'] };
+      const backFromApproved = from === 'approved' && newStatus !== 'expired';
+      if (backFromApproved) {
+        if (user.role !== 'owner') return json({ ok: false, error: 'Only the Owner can undo an approval.' }, 403);
+        if (!String(note || '').trim()) return json({ ok: false, error: 'Say why the approval is being undone.' }, 400);
+      } else if (!(MOVES[from] || []).includes(newStatus)) {
+        return json({ ok: false, error: `It cannot go from "${from.replace('_', ' ')}" to "${newStatus.replace('_', ' ')}".` }, 400);
       }
-      const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
-      await env.DB.prepare(`INSERT INTO apr_events (item_id, event, note, by_user, created_at) VALUES (?, ?, ?, ?, ?)`).bind(id, event, note || '', user.user_id, now).run();
-      // Update item status based on event
-      let newStatus = item.status;
-      if (event === 'applied') newStatus = 'applied';
-      if (event === 'query') newStatus = 'query';
-      if (event === 'approved') { newStatus = 'approved'; }
-      if (event === 'rejected') newStatus = 'rejected';
-      if (event === 'expired') newStatus = 'expired';
-      if (event === 'na') newStatus = 'na';
-      const updates = [];
-      const vals = [];
-      if (newStatus !== item.status) { updates.push('status = ?'); vals.push(newStatus); }
-      if (event === 'applied' && applied_on) { updates.push('applied_on = ?'); vals.push(applied_on); }
-      if (event === 'approved' && approved_on) { updates.push('approved_on = ?'); vals.push(approved_on); }
-      if (updates.length > 0) {
-        vals.push(id);
-        await query(env.DB, `UPDATE apr_items SET ${updates.join(', ')} WHERE id = ?`, vals);
+      const updates = ['status = ?']; const vals = [newStatus];
+      if (newStatus === 'applied') {
+        // Approvals it depends on must be approved before this one is applied for.
+        const open = (await env.DB.prepare("SELECT a.name FROM apr_deps d JOIN apr_items a ON a.id = d.depends_on_id WHERE d.item_id = ? AND a.deleted_at IS NULL AND a.status != 'approved'").bind(id).all()).results;
+        if (open.length) return json({ ok: false, error: `First get: ${open.map((o) => o.name).join(', ')}.`, code: 'depends' }, 409);
+        if (body.applied_on && !isDate(body.applied_on)) return json({ ok: false, error: 'Check the date.' }, 400);
+        updates.push('applied_on = ?'); vals.push(body.applied_on || todayIST());
       }
-      await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, ?, 'apr_items', ?, ?, ?)`).bind(user.user_id, 'event', id, `Approval event: ${event}`, now).run();
-      return json({ ok: true });
+      if (newStatus === 'approved') {
+        const open = (await env.DB.prepare("SELECT a.name FROM apr_deps d JOIN apr_items a ON a.id = d.depends_on_id WHERE d.item_id = ? AND a.deleted_at IS NULL AND a.status != 'approved'").bind(id).all()).results;
+        if (open.length) return json({ ok: false, error: `It cannot be approved before: ${open.map((o) => o.name).join(', ')}.`, code: 'depends' }, 409);
+        const letterNo = String(body.letter_no || '').trim().slice(0, 80);
+        const letterDate = body.letter_date || body.approved_on;
+        if (!letterNo || !isDate(letterDate)) return json({ ok: false, error: 'Enter the approval letter number and its date.' }, 400);
+        if (letterDate > todayIST()) return json({ ok: false, error: 'The letter date cannot be in the future.' }, 400);
+        const gate = gateOf(item);
+        let floor = body.cc_upto_floor === '' || body.cc_upto_floor == null ? null : Math.round(Number(body.cc_upto_floor));
+        if (['cc', 'plinth_cc', 'further_cc'].includes(gate) && floor == null) floor = item.cc_upto_floor;
+        if (['cc', 'plinth_cc', 'further_cc'].includes(gate) && (floor == null || !(floor >= 0 && floor <= 200))) return json({ ok: false, error: 'Up to which floor does this CC allow work? (0 = up to plinth)' }, 400);
+        let doc = body.letter_doc_id ? Number(body.letter_doc_id) : null;
+        if (doc && !(await env.DB.prepare('SELECT 1 AS x FROM documents WHERE id = ? AND deleted_at IS NULL AND (project_id = ? OR project_id IS NULL)').bind(doc, item.project_id).first())) return json({ ok: false, error: 'That file was not found.' }, 400);
+        updates.push('approved_on = ?', 'letter_no = ?', 'letter_date = ?', 'letter_doc_id = COALESCE(?, letter_doc_id)', 'cc_upto_floor = ?');
+        vals.push(letterDate, letterNo, letterDate, doc, floor);
+        if (body.valid_till && isDate(body.valid_till)) { updates.push('valid_till = ?'); vals.push(body.valid_till); }
+      }
+      const now = nowStr();
+      vals.push(id, from);
+      const res = await env.DB.batch([
+        env.DB.prepare(`UPDATE apr_items SET ${updates.join(', ')} WHERE id = ? AND COALESCE(status, 'not_started') = ?`).bind(...vals),
+        env.DB.prepare('INSERT INTO apr_events (item_id, event, note, by_user, created_at) SELECT ?, ?, ?, ?, ? WHERE changes() > 0').bind(id, event, String(note || '').slice(0, 500) + (newStatus === 'approved' ? ` [letter ${String(body.letter_no || '').trim()} dated ${body.letter_date || body.approved_on}]` : ''), user.user_id, now),
+        env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) SELECT ?, ?, 'apr_items', ?, ?, ? WHERE changes() > 0`).bind(user.user_id, backFromApproved ? 'undo' : 'event', id, `${item.name}: ${from} → ${newStatus}${backFromApproved ? ' (approval undone: ' + String(note).slice(0, 120) + ')' : ''}`, now),
+      ]);
+      if (!res[0].meta.changes) return json({ ok: false, error: 'Someone changed this approval just now. Open it again.' }, 409);
+      return json({ ok: true, data: { status: newStatus } });
     } catch (e) {
       return serverError(e, 'apr-event');
     }
@@ -794,39 +817,107 @@ router.get('/api/site/milestones', async (req, env) => {
   });
 });
 
-router.post('/api/site/milestones/:id/done', async (req, env) => {
-  return withAuth(req, env, 'site', 'E', async (req, env) => {
-    try {
-      const user = req.user;
-      const id = Number(req.params.id);
-      const body = await req.json();
-      const { actual_date } = body;
-      const ms = await env.DB.prepare('SELECT * FROM site_milestones WHERE id = ? AND deleted_at IS NULL').bind(id).first();
-      if (!ms) return json({ ok: false, error: 'Milestone not found.' }, 404);
-      const ids = await visibleProjectIds(env, user);
-      if (!ids.includes(ms.project_id)) {
-        return json({ ok: false, error: 'Not allowed.' }, 403);
-      }
-      const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
-      const doneDate = actual_date || now;
-      await env.DB.prepare(`UPDATE site_milestones SET status = 'done', actual_date = ? WHERE id = ?`).bind(doneDate, id).run();
-      await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, ?, 'site_milestones', ?, ?, ?)`).bind(user.user_id, 'done', id, `Milestone marked done: ${ms.name}`, now).run();
-      // milestone.done subscriber: matching demands scheduled -> ready (due = done + N days)
-      let readied = 0;
-      if (ms.milestone_key) {
-        const dueDays = Number(await getSetting(env, 'demand.due_days_after_milestone')) || 7;
-        const r = await env.DB.prepare(`UPDATE sal_demands SET status = 'ready', due_date = date(?, '+' || ? || ' days')
-          WHERE status = 'scheduled' AND stage_id IN (SELECT id FROM sal_plan_stages WHERE project_id = ? AND milestone_key = ?)
-          AND booking_id IN (SELECT b.id FROM sal_bookings b JOIN sal_inventory i ON i.id = b.unit_id WHERE b.project_id = ? AND b.status <> 'cancelled' AND (? IS NULL OR ? = '' OR i.wing = ?))`)
-          .bind(String(doneDate).substring(0, 10), dueDays, ms.project_id, ms.milestone_key, ms.project_id, ms.wing || null, ms.wing || null, ms.wing || null).run();
-        readied = r.meta.changes || 0;
-      }
-      return json({ ok: true, data: { id, actual_date: doneDate, demands_ready: readied } });
-    } catch (e) {
-      return serverError(e, 'ms-done');
-    }
-  });
-});
+// ---------- Milestones: site says "ready", the PM certifies (architect's stage certificate). Only certification releases demands. ----------
+async function loadMilestone(env, req) {
+  const ms = await env.DB.prepare('SELECT * FROM site_milestones WHERE id = ? AND deleted_at IS NULL').bind(Number(req.params.id)).first();
+  if (!ms) return { err: json({ ok: false, error: 'Milestone not found.' }, 404) };
+  if (!(await visibleProjectIds(env, req.user)).includes(ms.project_id)) return { err: json({ ok: false, error: 'Not allowed.' }, 403) };
+  return { ms };
+}
+const msDateOk = (d) => isDate(d) && d <= todayIST() && d >= new Date(Date.now() + 19800000 - 400 * 86400000).toISOString().slice(0, 10);
+
+async function milestoneReady(req, env) {
+  const { ms, err } = await loadMilestone(env, req); if (err) return err;
+  if (ms.status === 'done') return json({ ok: false, error: 'This milestone is already certified.' }, 409);
+  const b = await req.json().catch(() => ({}));
+  const d = String(b.actual_date || b.ready_date || todayIST()).slice(0, 10);
+  if (!msDateOk(d)) return json({ ok: false, error: 'The date cannot be in the future.' }, 400);
+  const now = nowStr();
+  await env.DB.batch([
+    env.DB.prepare("UPDATE site_milestones SET status = 'ready', ready_at = ?, ready_by = ?, ready_note = ? WHERE id = ? AND status != 'done'").bind(d, req.user.user_id, String(b.note || '').slice(0, 300) || null, ms.id),
+    env.DB.prepare("INSERT INTO notifications (user_id, title, body, link, created_at) SELECT id, ?, ?, 'site', ? FROM users WHERE role IN ('pm', 'owner') AND active = 1 AND deleted_at IS NULL LIMIT 20")
+      .bind(`Ready to certify: ${ms.name}${ms.wing ? ' · ' + ms.wing : ''}`, `${req.user.name} says it was reached on ${d}. Check it and record the architect's certificate.`, now),
+    env.DB.prepare("INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, 'ready', 'site_milestones', ?, ?, ?)").bind(req.user.user_id, ms.id, `Milestone ready to certify: ${ms.name} (${d})`, now),
+  ]);
+  return json({ ok: true, data: { id: ms.id, status: 'ready', demands_ready: 0, note: 'Sent to the PM to certify. Buyers are not asked to pay until it is certified.' } });
+}
+
+async function milestoneCertify(req, env) {
+  const { ms, err } = await loadMilestone(env, req); if (err) return err;
+  const user = req.user;
+  if (ms.status === 'done') return json({ ok: false, error: 'This milestone is already certified. Use Undo if it was wrong.' }, 409);
+  const b = await req.json().catch(() => ({}));
+  const d = String(b.actual_date || ms.ready_at || '').slice(0, 10);
+  if (!msDateOk(d)) return json({ ok: false, error: 'Enter the date the stage was reached (not in the future).' }, 400);
+  const cert = String(b.cert_ref || '').trim().slice(0, 120);
+  if (!cert) return json({ ok: false, error: "Enter the architect's stage certificate (number and date)." }, 400);
+  const certDoc = b.cert_doc_id ? Number(b.cert_doc_id) : null;
+  if (certDoc && !(await env.DB.prepare('SELECT 1 AS x FROM documents WHERE id = ? AND deleted_at IS NULL AND (project_id = ? OR project_id IS NULL)').bind(certDoc, ms.project_id).first())) return json({ ok: false, error: 'That file was not found.' }, 400);
+  // A milestone tied to a payment stage must name its wing when the project has more than one.
+  if (!ms.wing && !ms.all_wings && ms.milestone_key) {
+    const w = await env.DB.prepare("SELECT COUNT(DISTINCT wing) AS n FROM sal_inventory WHERE project_id = ? AND deleted_at IS NULL AND COALESCE(wing, '') != ''").bind(ms.project_id).first();
+    if (w.n > 1) return json({ ok: false, error: 'This project has more than one wing. Say which wing reached this stage (or mark the milestone as applying to all wings).', code: 'wing' }, 400);
+  }
+  // Work must be covered by a Commencement Certificate up to this floor. The Owner may go past it with a reason (for work done before the CRM).
+  const st = await approvalState(env, ms.project_id);
+  const anyCc = st.approved('cc', ms.wing) || st.approved('plinth_cc', ms.wing) || st.approved('further_cc', ms.wing);
+  const upto = st.ccUpto(ms.wing);
+  let block = null;
+  if (!anyCc) block = 'No Commencement Certificate is marked approved for this project in Approvals.';
+  else if (ms.floor != null && (upto == null || ms.floor > upto)) block = `The approved CC covers work up to floor ${upto == null ? '(not recorded)' : upto}; this milestone is floor ${ms.floor}.`;
+  const override = String(b.override_note || '').trim().slice(0, 300);
+  if (block) {
+    if (user.role !== 'owner') return json({ ok: false, error: block + ' Record the CC (with "up to floor") in Approvals first.', code: 'cc' }, 409);
+    if (!override) return json({ ok: false, error: block + ' As the Owner you can go ahead only with a written reason.', code: 'cc' }, 409);
+  }
+  const now = nowStr();
+  const dueDays = Number(await getSetting(env, 'demand.due_days_after_milestone')) || 7;
+  const res = await env.DB.batch([
+    env.DB.prepare("UPDATE site_milestones SET status = 'done', actual_date = ?, cert_ref = ?, cert_doc_id = ?, certified_by = ?, override_note = ?, undone_at = NULL WHERE id = ? AND status != 'done'")
+      .bind(d, cert, certDoc, user.user_id, block ? override : null, ms.id),
+    // matching demands: scheduled -> ready, due N days after the stage date (wing must match; a blank wing reaches every wing only when marked so)
+    env.DB.prepare(`UPDATE sal_demands SET status = 'ready', due_date = date(?1, '+' || ?2 || ' days'), hold_reason = NULL
+      WHERE changes() > 0 AND status = 'scheduled' AND ?4 IS NOT NULL AND stage_id IN (SELECT id FROM sal_plan_stages WHERE project_id = ?3 AND milestone_key = ?4)
+      AND booking_id IN (SELECT b.id FROM sal_bookings b JOIN sal_inventory i ON i.id = b.unit_id WHERE b.project_id = ?3 AND b.status <> 'cancelled' AND (?5 = 1 OR i.wing = ?6 OR (?6 IS NULL AND ?7 = 0)))`)
+      .bind(d, dueDays, ms.project_id, ms.milestone_key || null, ms.all_wings ? 1 : 0, ms.wing || null, 0),
+    env.DB.prepare("INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, 'done', 'site_milestones', ?, ?, ?)")
+      .bind(user.user_id, ms.id, `Milestone certified: ${ms.name}${ms.wing ? ' (' + ms.wing + ')' : ''} on ${d}, certificate ${cert}${block ? ' — Owner went past: ' + block + ' Reason: ' + override : ''}`, now),
+  ]);
+  if (!res[0].meta.changes) return json({ ok: false, error: 'This milestone is already certified.' }, 409);
+  return json({ ok: true, data: { id: ms.id, actual_date: d, demands_ready: res[1].meta.changes || 0 } });
+}
+
+// Old button: a site engineer's "done" now means "ready to certify"; a PM / Owner certifies.
+router.post('/api/site/milestones/:id/done', async (req, env) => withAuth(req, env, 'site', 'E', async (req, env) => {
+  try { return userCan(req.user, 'site', 'A') ? await milestoneCertify(req, env) : await milestoneReady(req, env); } catch (e) { return serverError(e, 'ms-done'); }
+}));
+router.post('/api/site/milestones/:id/ready', async (req, env) => withAuth(req, env, 'site', 'E', async (req, env) => {
+  try { return await milestoneReady(req, env); } catch (e) { return serverError(e, 'ms-ready'); }
+}));
+router.post('/api/site/milestones/:id/certify', async (req, env) => withAuth(req, env, 'site', 'A', async (req, env) => {
+  try { return await milestoneCertify(req, env); } catch (e) { return serverError(e, 'ms-certify'); }
+}));
+// Undo a wrong certification: demands not yet sent go back to waiting; sent but unpaid ones are put on hold.
+router.post('/api/site/milestones/:id/undo', async (req, env) => withAuth(req, env, 'site', 'A', async (req, env) => {
+  try {
+    const { ms, err } = await loadMilestone(env, req); if (err) return err;
+    if (ms.status !== 'done') return json({ ok: false, error: 'Only a certified milestone can be undone.' }, 409);
+    const b = await req.json().catch(() => ({}));
+    const reason = String(b.reason || '').trim().slice(0, 300);
+    if (!reason) return json({ ok: false, error: 'Say why the milestone is being undone.' }, 400);
+    const now = nowStr();
+    const scope = `stage_id IN (SELECT id FROM sal_plan_stages WHERE project_id = ?1 AND milestone_key = ?2) AND settled_paise = 0
+      AND booking_id IN (SELECT b.id FROM sal_bookings b JOIN sal_inventory i ON i.id = b.unit_id WHERE b.project_id = ?1 AND (?3 = 1 OR i.wing = ?4 OR ?4 IS NULL))`;
+    const args = [ms.project_id, ms.milestone_key || '', ms.all_wings ? 1 : 0, ms.wing || null];
+    const res = await env.DB.batch([
+      env.DB.prepare("UPDATE site_milestones SET status = 'pending', undone_at = ?, undo_reason = ? WHERE id = ? AND status = 'done'").bind(now, reason, ms.id),
+      env.DB.prepare(`UPDATE sal_demands SET status = 'scheduled', due_date = NULL WHERE status = 'ready' AND sent_at IS NULL AND ${scope}`).bind(...args),
+      env.DB.prepare(`UPDATE sal_demands SET status = 'on_hold', hold_reason = ?5 WHERE status = 'ready' AND sent_at IS NOT NULL AND ${scope}`).bind(...args, `Milestone undone: ${reason}`.slice(0, 300)),
+      env.DB.prepare("INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, 'undo', 'site_milestones', ?, ?, ?)").bind(req.user.user_id, ms.id, `Milestone certification undone: ${ms.name}. Reason: ${reason}`, now),
+    ]);
+    return json({ ok: true, data: { demands_back_to_waiting: res[1].meta.changes || 0, demands_on_hold: res[2].meta.changes || 0 } });
+  } catch (e) { return serverError(e, 'ms-undo'); }
+}));
 
 router.get('/api/site/dprs', async (req, env) => {
   return withAuth(req, env, 'site', 'V', async (req, env) => {
@@ -852,6 +943,8 @@ router.post('/api/site/dprs', async (req, env) => {
       if (!project_id || !report_date || !work_summary) {
         return json({ ok: false, error: 'Project, date, and work summary are required.' }, 400);
       }
+      if (!isDate(report_date) || report_date > todayIST()) return json({ ok: false, error: 'The report date cannot be in the future.' }, 400);
+      if (report_date < new Date(Date.now() + 19800000 - 2 * 86400000).toISOString().slice(0, 10) && !['owner', 'pm'].includes(user.role)) return json({ ok: false, error: 'Reports older than 2 days can only be added by the PM.' }, 400);
       const ids = await visibleProjectIds(env, user);
       if (!ids.includes(Number(project_id))) {
         return json({ ok: false, error: 'Not allowed.' }, 403);
@@ -1183,8 +1276,12 @@ router.post('/api/approvals/load-template', async (req, env) => {
       if (Number(have.n) > 0) return json({ ok: false, error: 'This project already has approval items. Template can only be loaded into an empty list.' }, 400);
       const rows = MUMBAI_TEMPLATE.filter((r) => redevelopment || !r[4]);
       const now = nowStr();
-      const stmts = rows.map((r, i) => env.DB.prepare(`INSERT INTO apr_items (project_id, name, authority, category, stage_order, status, reminder_days, renew_months, notes, created_at) VALUES (?, ?, ?, ?, ?, 'not_started', ?, ?, ?, ?)`)
-        .bind(Number(project_id), r[0].toUpperCase(), r[1], r[2], (i + 1) * 10, r[3] || 30, r[2] === 'renewal' ? (r[0].startsWith('RERA quarterly') ? 3 : 12) : null, r[5], now));
+      const stmts = rows.map((r, i) => env.DB.prepare(`INSERT INTO apr_items (project_id, name, authority, category, stage_order, status, reminder_days, renew_months, notes, created_at, gate_key) VALUES (?, ?, ?, ?, ?, 'not_started', ?, ?, ?, ?, ?)`)
+        .bind(Number(project_id), r[0].toUpperCase(), r[1], r[2], (i + 1) * 10, r[3] || 30, r[2] === 'renewal' ? (r[0].startsWith('RERA quarterly') ? 3 : 12) : null, r[5], now, gateOf({ name: r[0] })));
+      // The usual order: CC needs the IOD, plinth CC needs the CC, and so on (editable on each approval).
+      const pairs = Object.entries(GATE_DEPS).flatMap(([g, needs]) => needs.map((n) => [g, n]));
+      stmts.push(env.DB.prepare(`INSERT OR IGNORE INTO apr_deps (item_id, depends_on_id, created_by, created_at) SELECT a.id, b.id, ?2, ?3 FROM apr_items a JOIN apr_items b ON b.project_id = a.project_id AND b.deleted_at IS NULL
+        JOIN json_each(?4) p ON json_extract(p.value, '$[0]') = a.gate_key AND json_extract(p.value, '$[1]') = b.gate_key WHERE a.project_id = ?1 AND a.deleted_at IS NULL`).bind(Number(project_id), req.user.user_id, now, JSON.stringify(pairs)));
       await env.DB.batch(stmts);
       await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, 'create', 'apr_items', ?, ?, ?)`).bind(req.user.user_id, Number(project_id), `Loaded Mumbai approvals template (${rows.length} items)`, now).run();
       return json({ ok: true, data: { count: rows.length } });
@@ -1238,8 +1335,10 @@ router.post('/api/site/milestones', async (req, env) => {
       const b = await req.json();
       const ids = await visibleProjectIds(env, req.user);
       if (!b.project_id || !b.name || !ids.includes(Number(b.project_id))) return json({ ok: false, error: 'Project and name are required.' }, 400);
-      const r = await env.DB.prepare('INSERT INTO site_milestones (project_id, wing, name, milestone_key, planned_date, sort_order, created_at, assigned_to) VALUES (?, ?, ?, ?, ?, ?, ?, (SELECT id FROM users WHERE id = ? AND active = 1))')
-        .bind(Number(b.project_id), b.wing || null, b.name, b.milestone_key || null, b.planned_date || null, b.sort_order || 100, nowStr(), Number(b.assigned_to) || 0).run();
+      const floor = b.floor === '' || b.floor == null ? null : Math.round(Number(b.floor));
+      if (floor != null && !(floor >= -5 && floor <= 200)) return json({ ok: false, error: 'Check the floor number.' }, 400);
+      const r = await env.DB.prepare('INSERT INTO site_milestones (project_id, wing, name, milestone_key, planned_date, sort_order, created_at, assigned_to, floor, all_wings) VALUES (?, ?, ?, ?, ?, ?, ?, (SELECT id FROM users WHERE id = ? AND active = 1), ?, ?)')
+        .bind(Number(b.project_id), b.wing || null, b.name, b.milestone_key || null, b.planned_date || null, b.sort_order || 100, nowStr(), Number(b.assigned_to) || 0, floor, b.all_wings ? 1 : 0).run();
       return json({ ok: true, data: { id: r.meta.last_row_id } });
     } catch (e) {
       return json({ ok: false, error: /UNIQUE/.test(e.message) ? 'That milestone key already exists for this wing.' : 'ms-create: ' + e.message }, /UNIQUE/.test(e.message) ? 400 : 500);
@@ -1368,6 +1467,9 @@ router.post('/api/procurement/pos/:id/grn', async (req, env) => {
       const dup = await env.DB.prepare('SELECT id FROM pro_grns WHERE client_uuid = ?').bind(b.client_uuid).first();
       if (dup) return json({ ok: true, data: { id: dup.id, duplicate: true } });
     }
+    // A PO with item lines is received line by line (quantities feed the store and the bill check); the note-only form is for old lump-sum POs.
+    if ((await env.DB.prepare('SELECT COUNT(*) AS n FROM pro_po_items WHERE po_id = ?').bind(po.id).first()).n) return json({ ok: false, error: 'Enter how much of each item arrived (Material received → item quantities).', code: 'use_lines' }, 409);
+    if (b.full && !['owner', 'pm'].includes(req.user.role)) return json({ ok: false, error: 'Only the PM or the Owner can mark a PO as fully received.' }, 403);
     const now = nowStr();
     const r = await env.DB.prepare('INSERT INTO pro_grns (po_id, received_on, qty_note, challan_no, received_by, client_uuid, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
       .bind(po.id, b.received_on || now.substring(0, 10), b.qty_note || '', b.challan_no || '', req.user.user_id, b.client_uuid || null, now).run();
@@ -1511,7 +1613,7 @@ const EXPORT_TABLES = ['projects', 'apr_items', 'apr_events', 'drw_drawings', 'd
     'sal_leads', 'sal_activities', 'sal_visits', 'sal_inventory', 'sal_partners', 'sal_bookings', 'sal_plan_stages', 'sal_demands', 'sal_receipts', 'documents', 'audit_log',
     'pro_grn_items', 'pro_payments', 'ppl_staff', 'ppl_hiring', 'ppl_candidates', 'sal_brokerage_payments', 'sal_refunds', 'sal_interest_waivers', 'mkt_spend', 'brands', 'counters',
     'pro_indents', 'pro_indent_items', 'pro_rfq_items', 'pro_quote_items',
-    'site_dpr_labour', 'bud_heads', 'stk_items', 'stk_balance', 'stk_moves', 'pro_party_docs', 'pro_professionals', 'ai_log', 'sal_receipt_requests', 'sal_adjustments', 'sal_booking_parties', 'sal_cost_sheets', 'sal_cost_sheet_lines', 'sal_handover', 'sal_handover_items', 'sal_booking_loans', 'rera_account_entries', 'eng_kudos', 'fea_versions', 'sal_bulk_runs', 'sal_bulk_items', 'drw_acks', 'tally_export_log', 'brand_profiles', 'project_members', 'drive_folders', 'bank_profiles', 'bank_import_batches', 'bank_import_rows', 'red_societies', 'red_members', 'red_consent_events', 'red_member_docs', 'red_rehab_allotments', 'red_transit_terms', 'red_transit_schedule', 'red_transit_payments', 'red_corpus_entries', 'red_meetings', 'red_meeting_attendees', 'prj_autodcr_history', 'apr_steps', 'pty_funds', 'pty_entries', 'con_contractors', 'con_work_orders', 'con_wo_items', 'con_ra_bills', 'con_ra_lines', 'con_payments', 'con_ledger'];
+    'site_dpr_labour', 'bud_heads', 'stk_items', 'stk_balance', 'stk_moves', 'pro_party_docs', 'pro_professionals', 'ai_log', 'sal_receipt_requests', 'sal_adjustments', 'sal_booking_parties', 'sal_cost_sheets', 'sal_cost_sheet_lines', 'sal_handover', 'sal_handover_items', 'sal_booking_loans', 'rera_account_entries', 'eng_kudos', 'fea_versions', 'sal_bulk_runs', 'sal_bulk_items', 'drw_acks', 'tally_export_log', 'brand_profiles', 'project_members', 'drive_folders', 'bank_profiles', 'bank_import_batches', 'bank_import_rows', 'red_societies', 'red_members', 'red_consent_events', 'red_member_docs', 'red_rehab_allotments', 'red_transit_terms', 'red_transit_schedule', 'red_transit_payments', 'red_corpus_entries', 'red_meetings', 'red_meeting_attendees', 'prj_autodcr_history', 'apr_steps', 'apr_deps', 'con_variations', 'con_measurements', 'pty_funds', 'pty_entries', 'con_contractors', 'con_work_orders', 'con_wo_items', 'con_ra_bills', 'con_ra_lines', 'con_payments', 'con_ledger'];
 const EXPORT_PARTS = 3;
 
 async function buildExport(env, part = 1) {
@@ -2087,7 +2189,7 @@ registerMfa(router, { json, serverError, getCurrentUser, getSetting, nowStr, enc
 registerImporter(router, { withAuth, json, serverError, visibleProjectIds, nowStr, encryptSetting });
 registerPrivacy(router, { withAuth, json, serverError, nowStr, decryptSetting });
 registerReports(router, { withAuth, json, serverError, visibleProjectIds, getSetting, nowStr });
-registerProcurement2(router, { withAuth, json, serverError, visibleProjectIds, nowStr, csvBom, getCurrentUser, userCan, grnStockStatements, stockItemExists });
+registerProcurement2(router, { withAuth, json, serverError, visibleProjectIds, nowStr, csvBom, getCurrentUser, userCan, grnStockStatements, stockItemExists, getSetting });
 registerStores(router, { withAuth, json, serverError, visibleProjectIds, nowStr, csvBom });
 registerPartyDocs(router, { withAuth, json, serverError, nowStr, getSetting });
 registerProfile(router, { withAuth, json, serverError, visibleProjectIds, nowStr, getSetting, printBrand, csvBom });

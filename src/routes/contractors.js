@@ -1,6 +1,7 @@
 // routes/contractors.js — WP-5: contractors, work orders, running-account (RA) bills, advance and retention ledger.
 // Labour is paid through contractors, so there is no payroll. All money is integer paise; rates for GST/TDS are settings.
 import { emit } from '../core/events.js';
+import { approvalState, isDate } from '../core/gates.js';
 
 const rupees = (p) => '₹' + (Number(p) / 100).toLocaleString('en-IN');
 const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
@@ -172,13 +173,15 @@ export function registerContractors(router, h) {
       if (ret < 0 || ret > 3000) return json({ ok: false, error: 'Retention looks wrong (0 to 30%).' }, 400);
       const adv = Math.round(num(b.advance_paise));
       if (adv < 0 || adv > value) return json({ ok: false, error: 'Advance cannot be more than the work order value.' }, 400);
+      const recBp = b.advance_recovery_bp !== undefined && b.advance_recovery_bp !== '' ? Math.round(num(b.advance_recovery_bp)) : Math.round(num(await getSetting(env, 'con.advance_recovery_bp')) || 1000);
+      if (adv > 0 && !(recBp > 0 && recBp <= 10000)) return json({ ok: false, error: 'Say what share of each bill recovers the advance (1% to 100%).' }, 400);
       const headId = b.budget_head_id ? Number(b.budget_head_id) : null;
       if (headId && !(await headBelongsToProject(env, headId, pid))) return json({ ok: false, error: 'That budget head belongs to a different project.' }, 400);
       const c = await env.DB.prepare('INSERT INTO counters (key, value) VALUES (?, 1) ON CONFLICT(key) DO UPDATE SET value = value + 1 RETURNING value').bind(`wo:${pid}`).first();
       const proj = await env.DB.prepare('SELECT code FROM projects WHERE id = ?').bind(pid).first();
       const no = `WO-${proj ? proj.code : pid}-${String(c.value).padStart(4, '0')}`;
-      const r = await env.DB.prepare("INSERT INTO con_work_orders (project_id, contractor_id, wo_no, scope, basis, value_paise, retention_bp, advance_paise, status, created_by, created_at, budget_head_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?)")
-        .bind(pid, cid, no, String(b.scope || '').slice(0, 1000), basis, value, ret, adv, req.user.user_id, nowStr(), headId).run();
+      const r = await env.DB.prepare("INSERT INTO con_work_orders (project_id, contractor_id, wo_no, scope, basis, value_paise, retention_bp, advance_paise, status, created_by, created_at, budget_head_id, advance_recovery_bp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?)")
+        .bind(pid, cid, no, String(b.scope || '').slice(0, 1000), basis, value, ret, adv, req.user.user_id, nowStr(), headId, adv > 0 ? recBp : null).run();
       const id = r.meta.last_row_id;
       await env.DB.batch([
         ...items.map((i) => env.DB.prepare('INSERT INTO con_wo_items (wo_id, description, qty, unit, rate_paise, amount_paise) VALUES (?, ?, ?, ?, ?, ?)').bind(id, i.description, i.qty, i.unit, i.rate, Math.round(i.qty * i.rate))),
@@ -208,8 +211,16 @@ export function registerContractors(router, h) {
         env.DB.prepare(`SELECT l.wo_item_id, SUM(l.qty_this_bill) AS qty FROM con_ra_lines l JOIN con_ra_bills r ON r.id = l.ra_id WHERE r.wo_id = ? AND r.status != 'cancelled' GROUP BY l.wo_item_id`).bind(wo.id).all(),
         woBalances(env, wo.id),
       ]);
+      const [vq, mq, pv, pm] = await env.DB.batch([
+        env.DB.prepare("SELECT wo_item_id, SUM(qty) AS q FROM con_variations WHERE wo_id = ? AND status = 'approved' AND wo_item_id IS NOT NULL GROUP BY wo_item_id").bind(wo.id),
+        env.DB.prepare("SELECT wo_item_id, SUM(qty) AS q FROM con_measurements WHERE wo_id = ? AND status = 'approved' GROUP BY wo_item_id").bind(wo.id),
+        env.DB.prepare("SELECT COUNT(*) AS n FROM con_variations WHERE wo_id = ? AND status = 'pending'").bind(wo.id),
+        env.DB.prepare("SELECT COUNT(*) AS n FROM con_measurements WHERE wo_id = ? AND status = 'pending'").bind(wo.id),
+      ]);
       const usedMap = Object.fromEntries(used.results.map((u) => [u.wo_item_id, u.qty]));
-      return json({ ok: true, data: { work_order: wo, items: items.results.map((i) => ({ ...i, billed_qty: usedMap[i.id] || 0 })), ra_bills: bills.results, balances: bal } });
+      const vMap = Object.fromEntries(vq.results.map((u) => [u.wo_item_id, u.q])), mMap = Object.fromEntries(mq.results.map((u) => [u.wo_item_id, u.q]));
+      return json({ ok: true, data: { work_order: wo, items: items.results.map((i) => ({ ...i, billed_qty: usedMap[i.id] || 0, variation_qty: vMap[i.id] || 0, allowed_qty: i.qty + (vMap[i.id] || 0), measured_qty: mMap[i.id] || 0 })),
+        ra_bills: bills.results, balances: bal, pending_variations: pv.results[0].n, pending_measurements: pm.results[0].n } });
     } catch (e) { return serverError(e, 'wo-get'); }
   }));
 
@@ -250,6 +261,7 @@ export function registerContractors(router, h) {
       const { wo, err } = await loadWo(env, req); if (err) return err;
       const open = await env.DB.prepare("SELECT COUNT(*) AS n FROM con_ra_bills WHERE wo_id = ? AND status IN ('draft', 'checked', 'approved', 'part_paid')").bind(wo.id).first();
       if (open.n) return json({ ok: false, error: 'Some RA bills are not settled yet.' }, 409);
+      { const bal0 = await woBalances(env, wo.id); if (bal0.advance_outstanding > 0) return json({ ok: false, error: `${rupees(bal0.advance_outstanding)} of the advance is not recovered yet. Recover it on a bill (or as a deduction) before closing.`, code: 'advance' }, 409); }
       const bal = await woBalances(env, wo.id);
       if (bal.retention_held > 0) return json({ ok: false, error: `Release the retention (${rupees(bal.retention_held)}) before closing.` }, 409);
       const r = await env.DB.prepare("UPDATE con_work_orders SET status = 'closed' WHERE id = ? AND status = 'approved'").bind(wo.id).run();
@@ -267,6 +279,18 @@ export function registerContractors(router, h) {
     const b = await req.json();
     const amount = Math.round(num(b.amount_paise));
     if (!(amount > 0)) return json({ ok: false, error: 'Enter the amount.' }, 400);
+    let early = '';
+    if (kind === 'retention_release') {
+      // Retention is held for the defect liability period, counted from the OC.
+      const months = Math.round(num(await getSetting(env, 'con.dlp_months'))) || 60;
+      const oc = (await approvalState(env, wo.project_id)).ocDate(null);
+      const until = oc ? new Date(Date.UTC(+oc.slice(0, 4), +oc.slice(5, 7) - 1 + months, +oc.slice(8, 10))).toISOString().slice(0, 10) : null;
+      if (!until || todayIST() < until) {
+        early = until ? `before the defect liability period ends on ${until}` : 'before the OC (the defect liability period starts at the OC)';
+        if (req.user.role !== 'owner') return json({ ok: false, error: `Retention cannot be released ${early}. Only the Owner can release it early, with a reason.`, code: 'dlp' }, 409);
+        if (!String(b.note || '').trim()) return json({ ok: false, error: `This is ${early}. Write why it is being released early.`, code: 'dlp' }, 400);
+      }
+    }
     const uuid = String(b.client_uuid || crypto.randomUUID());
     const dup = await env.DB.prepare('SELECT id FROM con_payments WHERE client_uuid = ?').bind(uuid).first();
     if (dup) return json({ ok: true, data: { id: dup.id, duplicate: true } });
@@ -283,29 +307,170 @@ export function registerContractors(router, h) {
     if (!res[0].meta.changes) {
       return json({ ok: false, error: kind === 'advance' ? `That is more than the advance agreed on this work order (${rupees(wo.advance_paise)}).` : 'That is more than the retention being held.' }, 400);
     }
-    await audit(env, req.user, kind, 'con_work_orders', wo.id, `${kind === 'advance' ? 'Advance' : 'Retention released'} ${rupees(amount)} on ${wo.wo_no}`).run();
+    await audit(env, req.user, kind, 'con_work_orders', wo.id, `${kind === 'advance' ? 'Advance' : 'Retention released'} ${rupees(amount)} on ${wo.wo_no}${early ? ` (${early}; reason: ${String(b.note).slice(0, 120)})` : ''}`).run();
     return json({ ok: true, data: { id: res[0].meta.last_row_id } });
   }
   router.post('/api/contractors/work-orders/:id/advance', guard('E', async (req, env) => { try { return await moneyOut(req, env, 'advance'); } catch (e) { return serverError(e, 'wo-advance'); } }));
   router.post('/api/contractors/work-orders/:id/release-retention', guard('E', async (req, env) => { try { return await moneyOut(req, env, 'retention_release'); } catch (e) { return serverError(e, 'wo-retention'); } }));
 
+  // ---------- variations (extra quantity or a new item) ----------
+  async function varLimit(env) { return num(await getSetting(env, 'con.variation_owner_limit_paise')) || 50000000; }
+  router.get('/api/contractors/work-orders/:id/variations', guard('V', async (req, env) => {
+    try {
+      const { wo, err } = await loadWo(env, req); if (err) return err;
+      if (req.user.role === 'site') return json({ ok: true, data: { variations: [] } });
+      const rows = (await env.DB.prepare(`SELECT v.*, i.description AS item, u.name AS created_by_name, a.name AS approved_by_name FROM con_variations v LEFT JOIN con_wo_items i ON i.id = v.wo_item_id
+        LEFT JOIN users u ON u.id = v.created_by LEFT JOIN users a ON a.id = v.approved_by WHERE v.wo_id = ? ORDER BY v.id DESC LIMIT 100`).bind(wo.id).all()).results;
+      return json({ ok: true, data: { variations: rows, owner_limit_paise: await varLimit(env) } });
+    } catch (e) { return serverError(e, 'var-list'); }
+  }));
+  router.post('/api/contractors/work-orders/:id/variations', guard('C', async (req, env) => {
+    try {
+      if (!['owner', 'pm', 'purchase'].includes(req.user.role)) return json({ ok: false, error: 'Only Purchase, the PM or the Owner can raise a variation.' }, 403);
+      const { wo, err } = await loadWo(env, req); if (err) return err;
+      if (wo.status !== 'approved') return json({ ok: false, error: 'Variations are raised on an approved work order.' }, 409);
+      const b = await req.json();
+      const reason = String(b.reason || '').trim().slice(0, 300);
+      if (!reason) return json({ ok: false, error: 'Say why the extra work is needed (site instruction, drawing change, client change...).' }, 400);
+      let itemId = b.wo_item_id ? Number(b.wo_item_id) : null, desc = String(b.description || '').trim().slice(0, 200), unit = String(b.unit || '').slice(0, 20), qty = null, rate = null, amount;
+      if (itemId) {
+        const it = await env.DB.prepare('SELECT * FROM con_wo_items WHERE id = ? AND wo_id = ?').bind(itemId, wo.id).first();
+        if (!it) return json({ ok: false, error: 'That item is not on this work order.' }, 400);
+        qty = num(b.qty); if (!(qty > 0)) return json({ ok: false, error: 'Enter the extra quantity.' }, 400);
+        rate = it.rate_paise; amount = Math.round(qty * rate); desc = desc || it.description; unit = it.unit;   // extra quantity is at the work-order rate
+      } else if (num(b.qty) > 0 && num(b.rate_paise) > 0) {
+        if (!desc) return json({ ok: false, error: 'Describe the new item.' }, 400);
+        qty = num(b.qty); rate = Math.round(num(b.rate_paise)); amount = Math.round(qty * rate);
+      } else {
+        if (!desc) return json({ ok: false, error: 'Describe the extra work.' }, 400);
+        amount = Math.round(num(b.amount_paise)); if (!(amount > 0)) return json({ ok: false, error: 'Enter the amount of the extra work.' }, 400);
+      }
+      const now = nowStr();
+      const res = await env.DB.batch([
+        env.DB.prepare('INSERT INTO con_variations (wo_id, wo_item_id, description, unit, qty, rate_paise, amount_paise, reason, drawing_ref, status, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, \'pending\', ?, ?)')
+          .bind(wo.id, itemId, desc, unit, qty, rate, amount, reason, String(b.drawing_ref || '').slice(0, 120) || null, req.user.user_id, now),
+        audit(env, req.user, 'create', 'con_variations', wo.id, `Variation on ${wo.wo_no}: ${desc} ${rupees(amount)} (${reason})`),
+      ]);
+      const limit = await varLimit(env);
+      await notifyRoles(env, amount > limit ? ['owner'] : ['owner', 'pm'], `Variation to approve: ${wo.wo_no}`, `${desc}: ${rupees(amount)}. ${reason}`, req.user.user_id);
+      return json({ ok: true, data: { id: res[0].meta.last_row_id, amount_paise: amount, needs_owner: amount > limit } });
+    } catch (e) { return serverError(e, 'var-create'); }
+  }));
+  const decideVar = (approve) => guard('A', async (req, env) => {
+    try {
+      const v = await env.DB.prepare('SELECT v.*, w.project_id, w.wo_no FROM con_variations v JOIN con_work_orders w ON w.id = v.wo_id WHERE v.id = ?').bind(Number(req.params.id)).first();
+      if (!v || !(await visibleProjectIds(env, req.user)).includes(v.project_id)) return json({ ok: false, error: 'Variation not found.' }, 404);
+      if (v.created_by === req.user.user_id && req.user.role !== 'owner') return json({ ok: false, error: 'You cannot approve a variation you raised.' }, 403);
+      const limit = await varLimit(env);
+      if (approve && v.amount_paise > limit && req.user.role !== 'owner') return json({ ok: false, error: `Variations above ${rupees(limit)} need the Owner.` }, 403);
+      const b = await req.json().catch(() => ({}));
+      if (!approve && !String(b.note || '').trim()) return json({ ok: false, error: 'Please say why it is rejected.' }, 400);
+      const now = nowStr();
+      const res = await env.DB.batch([
+        env.DB.prepare("UPDATE con_variations SET status = ?, approved_by = ?, approved_at = ?, decision_note = ? WHERE id = ? AND status = 'pending'").bind(approve ? 'approved' : 'rejected', req.user.user_id, now, String(b.note || '').slice(0, 300), v.id),
+        // a new item with quantity and rate joins the work order so it can be measured and billed
+        env.DB.prepare(`INSERT INTO con_wo_items (wo_id, description, qty, unit, rate_paise, amount_paise, variation_id) SELECT wo_id, description, qty, unit, rate_paise, amount_paise, id FROM con_variations
+          WHERE id = ? AND status = 'approved' AND wo_item_id IS NULL AND qty > 0 AND rate_paise > 0 AND changes() > 0`).bind(v.id),
+        audit(env, req.user, approve ? 'approve' : 'reject', 'con_variations', v.id, `${req.user.name} ${approve ? 'approved' : 'rejected'} variation on ${v.wo_no}: ${v.description} ${rupees(v.amount_paise)}${v.created_by === req.user.user_id ? ' (approved by Owner as maker)' : ''}`),
+      ]);
+      if (!res[0].meta.changes) return json({ ok: false, error: 'This variation was already decided.' }, 409);
+      return json({ ok: true });
+    } catch (e) { return serverError(e, 'var-decide'); }
+  });
+  router.post('/api/contractors/variations/:id/approve', decideVar(true));
+  router.post('/api/contractors/variations/:id/reject', decideVar(false));
+
+  // ---------- joint measurements (site engineer + contractor's person) ----------
+  router.get('/api/contractors/work-orders/:id/measurements', guard('V', async (req, env) => {
+    try {
+      const { wo, err } = await loadWo(env, req); if (err) return err;
+      const [rows, items] = await env.DB.batch([
+        env.DB.prepare(`SELECT m.*, i.description AS item, i.unit, u.name AS measured_by_name, a.name AS approved_by_name FROM con_measurements m JOIN con_wo_items i ON i.id = m.wo_item_id
+          LEFT JOIN users u ON u.id = m.measured_by LEFT JOIN users a ON a.id = m.approved_by WHERE m.wo_id = ? ORDER BY m.id DESC LIMIT 200`).bind(wo.id),
+        env.DB.prepare('SELECT id, description, unit FROM con_wo_items WHERE wo_id = ? ORDER BY id').bind(wo.id),
+      ]);
+      return json({ ok: true, data: { measurements: rows.results, items: items.results } });
+    } catch (e) { return serverError(e, 'meas-list'); }
+  }));
+  router.post('/api/contractors/work-orders/:id/measurements', guard('V', async (req, env) => {
+    try {
+      if (!['owner', 'pm', 'purchase', 'site'].includes(req.user.role)) return json({ ok: false, error: 'Only the site engineer, Purchase, the PM or the Owner can record a measurement.' }, 403);
+      const { wo, err } = await loadWo(env, req); if (err) return err;
+      if (wo.status !== 'approved') return json({ ok: false, error: 'Measurements are recorded on an approved work order.' }, 409);
+      const b = await req.json();
+      const uuid = String(b.client_uuid || crypto.randomUUID());
+      const dup = await env.DB.prepare('SELECT id FROM con_measurements WHERE client_uuid = ?').bind(uuid).first();
+      if (dup) return json({ ok: true, data: { id: dup.id, duplicate: true } });
+      const it = await env.DB.prepare('SELECT id, description FROM con_wo_items WHERE id = ? AND wo_id = ?').bind(Number(b.wo_item_id), wo.id).first();
+      if (!it) return json({ ok: false, error: 'Pick the work-order item.' }, 400);
+      const location = String(b.location || '').trim().slice(0, 120);
+      if (!location) return json({ ok: false, error: 'Say where it was measured (wing, floor, grid).' }, 400);
+      const rep = String(b.contractor_rep || '').trim().slice(0, 80);
+      if (!rep) return json({ ok: false, error: "Enter the contractor's person who measured with you." }, 400);
+      const dim = (k) => (b[k] === '' || b[k] == null ? null : num(b[k]));
+      const nos = dim('nos'), L = dim('length_m'), W = dim('width_m'), D = dim('depth_m');
+      if ([nos, L, W, D].some((x) => x != null && x < 0)) return json({ ok: false, error: 'Measurements cannot be negative.' }, 400);
+      const parts = [nos, L, W, D].filter((x) => x != null);
+      const qty = b.qty !== undefined && b.qty !== '' ? num(b.qty) : (parts.length ? Math.round(parts.reduce((t, x) => t * x, 1) * 1000) / 1000 : 0);
+      if (!(qty > 0)) return json({ ok: false, error: 'Enter the measured quantity (or the sizes to work it out).' }, 400);
+      const photo = b.photo_doc_id ? Number(b.photo_doc_id) : null;
+      const now = nowStr();
+      const res = await env.DB.batch([
+        env.DB.prepare("INSERT INTO con_measurements (wo_id, wo_item_id, location, nos, length_m, width_m, depth_m, qty, contractor_rep, photo_doc_id, note, status, measured_by, created_at, client_uuid) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)")
+          .bind(wo.id, it.id, location, nos, L, W, D, qty, rep, photo, String(b.note || '').slice(0, 300) || null, req.user.user_id, now, uuid),
+        audit(env, req.user, 'create', 'con_measurements', wo.id, `Measurement on ${wo.wo_no}: ${it.description} ${qty} at ${location} (with ${rep})`),
+      ]);
+      return json({ ok: true, data: { id: res[0].meta.last_row_id, qty } });
+    } catch (e) { return serverError(e, 'meas-create'); }
+  }));
+  const decideMeas = (approve) => guard('A', async (req, env) => {
+    try {
+      const m = await env.DB.prepare('SELECT m.*, w.project_id, w.wo_no FROM con_measurements m JOIN con_work_orders w ON w.id = m.wo_id WHERE m.id = ?').bind(Number(req.params.id)).first();
+      if (!m || !(await visibleProjectIds(env, req.user)).includes(m.project_id)) return json({ ok: false, error: 'Measurement not found.' }, 404);
+      if (m.measured_by === req.user.user_id && req.user.role !== 'owner') return json({ ok: false, error: 'Someone else must approve a measurement you recorded.' }, 403);
+      const b = await req.json().catch(() => ({}));
+      if (!approve && !String(b.note || '').trim()) return json({ ok: false, error: 'Please say why it is rejected.' }, 400);
+      const res = await env.DB.batch([
+        env.DB.prepare("UPDATE con_measurements SET status = ?, approved_by = ?, approved_at = ?, decision_note = ? WHERE id = ? AND status = 'pending'").bind(approve ? 'approved' : 'rejected', req.user.user_id, nowStr(), String(b.note || '').slice(0, 300), m.id),
+        audit(env, req.user, approve ? 'approve' : 'reject', 'con_measurements', m.id, `${req.user.name} ${approve ? 'approved' : 'rejected'} measurement ${m.qty} at ${m.location} on ${m.wo_no}`),
+      ]);
+      if (!res[0].meta.changes) return json({ ok: false, error: 'This measurement was already decided.' }, 409);
+      return json({ ok: true });
+    } catch (e) { return serverError(e, 'meas-decide'); }
+  });
+  router.post('/api/contractors/measurements/:id/approve', decideMeas(true));
+  router.post('/api/contractors/measurements/:id/reject', decideMeas(false));
+
   // ---------- RA bills ----------
+  // Limits: an item can be billed up to its work-order quantity plus approved variations, and never beyond what is measured and approved.
+  // A lump-sum order can be billed up to its value plus approved variations. Advance is recovered at the order's rate unless a reason is given.
   router.post('/api/contractors/work-orders/:id/ra-bills', guard('C', async (req, env) => {
     try {
       if (!['owner', 'pm', 'purchase'].includes(req.user.role)) return json({ ok: false, error: 'Only Purchase, the PM or the Owner can raise an RA bill.' }, 403);
       const { wo, err } = await loadWo(env, req); if (err) return err;
       if (wo.status !== 'approved') return json({ ok: false, error: 'RA bills can only be raised on an approved work order.' }, 409);
       const b = await req.json();
-      const items = (await env.DB.prepare('SELECT id, description, qty, rate_paise FROM con_wo_items WHERE wo_id = ?').bind(wo.id).all()).results;
-      const warnings = []; let gross = 0; const lines = [];
+      const [itemsR, usedR, varR, measR] = await env.DB.batch([
+        env.DB.prepare('SELECT id, description, qty, unit, rate_paise FROM con_wo_items WHERE wo_id = ?').bind(wo.id),
+        env.DB.prepare("SELECT l.wo_item_id, SUM(l.qty_this_bill) AS q FROM con_ra_lines l JOIN con_ra_bills r ON r.id = l.ra_id WHERE r.wo_id = ? AND r.status != 'cancelled' GROUP BY l.wo_item_id").bind(wo.id),
+        env.DB.prepare("SELECT wo_item_id, SUM(COALESCE(qty, 0)) AS q, SUM(amount_paise) AS a FROM con_variations WHERE wo_id = ? AND status = 'approved' GROUP BY wo_item_id").bind(wo.id),
+        env.DB.prepare("SELECT wo_item_id, SUM(qty) AS q FROM con_measurements WHERE wo_id = ? AND status = 'approved' GROUP BY wo_item_id").bind(wo.id),
+      ]);
+      const items = itemsR.results;
+      const used = Object.fromEntries(usedR.results.map((u) => [u.wo_item_id, u.q]));
+      const extraQty = Object.fromEntries(varR.results.filter((v) => v.wo_item_id).map((v) => [v.wo_item_id, v.q]));
+      const lumpExtra = varR.results.filter((v) => !v.wo_item_id).reduce((t, v) => t + (v.a || 0), 0);
+      const measured = Object.fromEntries(measR.results.map((m) => [m.wo_item_id, m.q]));
+      const problems = []; let gross = 0; const lines = [];
       if (items.length) {
         const byId = Object.fromEntries(items.map((i) => [i.id, i]));
-        const used = Object.fromEntries((await env.DB.prepare("SELECT l.wo_item_id, SUM(l.qty_this_bill) AS q FROM con_ra_lines l JOIN con_ra_bills r ON r.id = l.ra_id WHERE r.wo_id = ? AND r.status != 'cancelled' GROUP BY l.wo_item_id").bind(wo.id).all()).results.map((u) => [u.wo_item_id, u.q]));
         for (const l of Array.isArray(b.lines) ? b.lines : []) {
           const it = byId[Number(l.wo_item_id)]; const q = num(l.qty);
           if (!it) return json({ ok: false, error: 'A line does not belong to this work order.' }, 400);
           if (!(q > 0)) continue;
-          if ((used[it.id] || 0) + q > it.qty + 1e-9) warnings.push(`${it.description}: ${(used[it.id] || 0) + q} billed in total against ${it.qty} in the work order`);
+          const allowed = it.qty + (extraQty[it.id] || 0), before = used[it.id] || 0;
+          if (before + q > allowed + 1e-9) problems.push(`${it.description}: ${+(before + q).toFixed(3)} ${it.unit || ''} billed in total, but only ${+allowed.toFixed(3)} is in the work order${extraQty[it.id] ? ' with its approved variations' : ''}. Raise a variation first.`);
+          else if (before + q > (measured[it.id] || 0) + 1e-9) problems.push(`${it.description}: only ${+((measured[it.id] || 0) - before).toFixed(3)} ${it.unit || ''} is measured and approved and not yet billed. Record the joint measurement first.`);
           const amt = Math.round(q * it.rate_paise); gross += amt; lines.push({ item: it, q, amt });
         }
         if (!lines.length) return json({ ok: false, error: 'Enter the quantity done for at least one item.' }, 400);
@@ -313,33 +478,45 @@ export function registerContractors(router, h) {
         gross = Math.round(num(b.gross_paise));
         if (!(gross > 0)) return json({ ok: false, error: 'Enter the amount of work done.' }, 400);
         const prev = await env.DB.prepare("SELECT COALESCE(SUM(gross_paise), 0) AS s FROM con_ra_bills WHERE wo_id = ? AND status != 'cancelled'").bind(wo.id).first();
-        if (prev.s + gross > wo.value_paise) warnings.push(`Billed so far ${rupees(prev.s + gross)} against a work order of ${rupees(wo.value_paise)}`);
+        if (prev.s + gross > wo.value_paise + lumpExtra) problems.push(`Billed so far would be ${rupees(prev.s + gross)} against ${rupees(wo.value_paise + lumpExtra)} (work order${lumpExtra ? ' plus approved variations' : ''}). Raise a variation first.`);
       }
-      if (warnings.length && !b.confirm_over) return json({ ok: false, error: 'This bill goes beyond the work order.', code: 'over_limit', warnings }, 409);
+      if (problems.length) return json({ ok: false, error: problems[0], code: 'over_limit', warnings: problems }, 409);
       const retention = Math.round((gross * wo.retention_bp) / 10000);
-      const rec = Math.round(num(b.advance_recovery_paise)), other = Math.round(num(b.other_deductions_paise));
-      if (rec < 0 || other < 0) return json({ ok: false, error: 'Deductions cannot be negative.' }, 400);
-      if (rec > 0) {
-        const bal = await woBalances(env, wo.id);
-        const pend = await env.DB.prepare("SELECT COALESCE(SUM(advance_recovery_paise), 0) AS s FROM con_ra_bills WHERE wo_id = ? AND status IN ('draft', 'checked')").bind(wo.id).first();
-        if (rec > bal.advance_outstanding - pend.s) return json({ ok: false, error: `Only ${rupees(Math.max(0, bal.advance_outstanding - pend.s))} of advance is left to recover.` }, 400);
-      }
+      const other = Math.round(num(b.other_deductions_paise));
+      if (other < 0) return json({ ok: false, error: 'Deductions cannot be negative.' }, 400);
+      // advance recovery: the order's share of this bill, up to what is still outstanding
+      const bal = await woBalances(env, wo.id);
+      const pend = await env.DB.prepare("SELECT COALESCE(SUM(advance_recovery_paise), 0) AS s FROM con_ra_bills WHERE wo_id = ? AND status IN ('draft', 'checked')").bind(wo.id).first();
+      const left = Math.max(0, bal.advance_outstanding - pend.s);
+      const recBp = wo.advance_recovery_bp != null ? wo.advance_recovery_bp : (left > 0 ? Math.round(num(await getSetting(env, 'con.advance_recovery_bp')) || 1000) : 0);
+      const due = Math.min(left, Math.round((gross * recBp) / 10000));
+      let rec = b.advance_recovery_paise === undefined || b.advance_recovery_paise === '' ? due : Math.round(num(b.advance_recovery_paise));
+      if (rec < 0) return json({ ok: false, error: 'Deductions cannot be negative.' }, 400);
+      if (rec > left) return json({ ok: false, error: `Only ${rupees(left)} of advance is left to recover.` }, 400);
+      const recReason = String(b.advance_recovery_reason || '').trim().slice(0, 200);
+      if (rec < due && !recReason) return json({ ok: false, error: `This bill should recover ${rupees(due)} of the advance. Say why it recovers less.`, code: 'recovery' }, 400);
       const gstBp = b.gst_bp !== undefined ? Math.round(num(b.gst_bp)) : Math.round(num(await getSetting(env, 'con.gst_bp')));
       const tdsBp = b.tds_bp !== undefined ? Math.round(num(b.tds_bp)) : Math.round(num(await getSetting(env, 'con.tds_bp')));
       if (gstBp < 0 || gstBp > 2800 || tdsBp < 0 || tdsBp > 3000) return json({ ok: false, error: 'GST or TDS rate looks wrong.' }, 400);
       const gst = Math.round((gross * gstBp) / 10000), tds = Math.round((gross * tdsBp) / 10000);
       const net = gross - retention - rec - other + gst - tds;
       if (!(net >= 0)) return json({ ok: false, error: 'Deductions are more than the bill.' }, 400);
-      const c = await env.DB.prepare('INSERT INTO counters (key, value) VALUES (?, 1) ON CONFLICT(key) DO UPDATE SET value = value + 1 RETURNING value').bind(`ra:${wo.id}`).first();
-      await env.DB.prepare(`INSERT INTO con_ra_bills (wo_id, ra_no, period_from, period_to, due_date, gross_paise, retention_paise, advance_recovery_paise, other_deductions_paise, gst_bp, gst_paise, tds_bp, tds_paise, net_paise, status, note, created_by, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?)`)
-        .bind(wo.id, c.value, b.period_from || null, b.period_to || null, b.due_date || null, gross, retention, rec, other, gstBp, gst, tdsBp, tds, net, String(b.note || '').slice(0, 300), req.user.user_id, nowStr()).run();
-      await env.DB.batch([
-        ...lines.map((l) => env.DB.prepare('INSERT INTO con_ra_lines (ra_id, wo_item_id, qty_this_bill, rate_paise, amount_paise) VALUES ((SELECT id FROM con_ra_bills WHERE wo_id = ? AND ra_no = ?), ?, ?, ?, ?)').bind(wo.id, c.value, l.item.id, l.q, l.item.rate_paise, l.amt)),
-        audit(env, req.user, 'create', 'con_ra_bills', 0, `RA ${c.value} on ${wo.wo_no}: gross ${rupees(gross)}, net ${rupees(net)}`),
+      const key = `ra:${wo.id}`, now = nowStr();
+      const note = [String(b.note || '').trim(), rec < due ? `Advance recovery reduced from ${rupees(due)}: ${recReason}` : ''].filter(Boolean).join(' · ').slice(0, 300);
+      const RA = '(SELECT id FROM con_ra_bills WHERE wo_id = ? AND ra_no = (SELECT value FROM counters WHERE key = ?))';
+      // one batch: number, bill, lines and audit together (all or nothing)
+      const res = await env.DB.batch([
+        env.DB.prepare('INSERT INTO counters (key, value) VALUES (?, 1) ON CONFLICT(key) DO UPDATE SET value = value + 1').bind(key),
+        env.DB.prepare(`INSERT INTO con_ra_bills (wo_id, ra_no, period_from, period_to, due_date, gross_paise, retention_paise, advance_recovery_paise, other_deductions_paise, gst_bp, gst_paise, tds_bp, tds_paise, net_paise, status, note, created_by, created_at)
+          VALUES (?, (SELECT value FROM counters WHERE key = ?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?)`)
+          .bind(wo.id, key, b.period_from || null, b.period_to || null, b.due_date || null, gross, retention, rec, other, gstBp, gst, tdsBp, tds, net, note, req.user.user_id, now),
+        ...lines.map((l) => env.DB.prepare(`INSERT INTO con_ra_lines (ra_id, wo_item_id, qty_this_bill, rate_paise, amount_paise) VALUES (${RA}, ?, ?, ?, ?)`).bind(wo.id, key, l.item.id, l.q, l.item.rate_paise, l.amt)),
+        env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) SELECT ?, 'create', 'con_ra_bills', id, ?, ? FROM con_ra_bills WHERE id = ${RA}`)
+          .bind(req.user.user_id, `RA bill on ${wo.wo_no}: gross ${rupees(gross)}, net ${rupees(net)}`, now, wo.id, key),
+        env.DB.prepare(`SELECT id, ra_no FROM con_ra_bills WHERE id = ${RA}`).bind(wo.id, key),
       ]);
-      const ra = await env.DB.prepare('SELECT id FROM con_ra_bills WHERE wo_id = ? AND ra_no = ?').bind(wo.id, c.value).first();
-      return json({ ok: true, data: { id: ra.id, ra_no: c.value, gross_paise: gross, retention_paise: retention, advance_recovery_paise: rec, gst_paise: gst, tds_paise: tds, net_paise: net, warnings } });
+      const ra = res[res.length - 1].results[0];
+      return json({ ok: true, data: { id: ra.id, ra_no: ra.ra_no, gross_paise: gross, retention_paise: retention, advance_recovery_paise: rec, gst_paise: gst, tds_paise: tds, net_paise: net, warnings: [] } });
     } catch (e) { return serverError(e, 'ra-create'); }
   }));
 
@@ -349,7 +526,7 @@ export function registerContractors(router, h) {
       if (ra.created_by === req.user.user_id && req.user.role !== 'owner') return json({ ok: false, error: 'You cannot check a bill you raised.' }, 403);
       const r = await env.DB.prepare("UPDATE con_ra_bills SET status = 'checked', checked_by = ? WHERE id = ? AND status = 'draft'").bind(req.user.user_id, ra.id).run();
       if (!r.meta.changes) return json({ ok: false, error: 'Only a draft can be checked.' }, 409);
-      await notifyRoles(env, ra.net_paise > await pmLimit(env) ? ['owner'] : ['owner', 'pm'], `RA bill to approve: ${ra.wo_no} / RA ${ra.ra_no}`, `Net ${rupees(ra.net_paise)}`, req.user.user_id);
+      await notifyRoles(env, ra.gross_paise > await pmLimit(env) ? ['owner'] : ['owner', 'pm'], `RA bill to approve: ${ra.wo_no} / RA ${ra.ra_no}`, `Net ${rupees(ra.net_paise)}`, req.user.user_id);
       return json({ ok: true });
     } catch (e) { return serverError(e, 'ra-check'); }
   }));
@@ -358,8 +535,10 @@ export function registerContractors(router, h) {
     try {
       const { ra, err } = await loadRa(env, req); if (err) return err;
       if (ra.created_by === req.user.user_id && req.user.role !== 'owner') return json({ ok: false, error: 'You cannot approve a bill you raised.' }, 403);
+      if (ra.checked_by === req.user.user_id && req.user.role !== 'owner') return json({ ok: false, error: 'You checked this bill, so someone else must approve it.' }, 403);
       const limit = await pmLimit(env);
-      if (!mayDecide(req.user, ra.net_paise, limit)) return json({ ok: false, error: `This bill is above your limit (${rupees(limit)}). The Owner must approve it.` }, 403);
+      // the limit is on the work done (gross), not on what is left after deductions
+      if (!mayDecide(req.user, ra.gross_paise, limit)) return json({ ok: false, error: `This bill's work done (${rupees(ra.gross_paise)}) is above your limit (${rupees(limit)}). The Owner must approve it.` }, 403);
       const now = nowStr();
       // One batch: status change, then ledger rows that exist only if the bill is approved by me and has none yet.
       const res = await env.DB.batch([

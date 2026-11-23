@@ -378,3 +378,16 @@ id TEXT PK, source TEXT, seen_at TEXT
 - pro_pos: material_category, transport_paise, loading_paise, packing_paise, insurance_paise, other_charges_paise, other_charges_label, charges_gst_bp (NULL = same as the PO's GST), price_basis, delivery_date, delivery_address, payment_terms, warranty, penalty_clause, category_details (JSON of the material's usual lines). amount_paise = material + charges; gst_paise = material x gst_bp + charges x charges_gst_bp. pro_po_items.hsn.
 - Setting apr.designations: officer titles offered in the approval drop-downs, separated by ; or new lines (empty = the built-in list).
 - stk_moves: kind 'receipt' rows can now also come from "Stock received" (note says where from); a site engineer's receipt is 'pending' until a PM or the Owner approves it.
+
+## 0034 additions (controls)
+- apr_items: gate_key (iod | cc | plinth_cc | further_cc | rera_reg | fire_final | bcc | oc; older rows are recognised by name), wing (a part OC/CC for one wing), cc_upto_floor (a CC: work allowed up to this floor, 0 = plinth), letter_no, letter_date, letter_doc_id. Status moves are fixed: not_started → applied/na; applied → query/approved/rejected; query → applied/approved/rejected; rejected/expired → applied; approved → expired (anything else back from approved: Owner + reason). Creating an approval always starts at not_started.
+- apr_deps (item_id, depends_on_id, created_by, created_at): approvals that must be approved before this one can be applied for or approved. In the backup list.
+- site_milestones: floor, all_wings, ready_at, ready_by, ready_note, cert_ref (architect's stage certificate), cert_doc_id, certified_by, override_note (Owner went past a missing CC), undone_at, undo_reason. Status: pending | ready | done.
+- sal_demands: hold_reason; new status on_hold (a sent demand whose milestone certification was undone).
+- con_work_orders.advance_recovery_bp; con_wo_items.variation_id (item added by a variation).
+- con_variations (wo_id, wo_item_id or NULL, description, unit, qty, rate_paise, amount_paise, reason, drawing_ref, status pending|approved|rejected, created_by/at, approved_by/at, decision_note). In the backup list.
+- con_measurements (wo_id, wo_item_id, location, nos, length_m, width_m, depth_m, qty, contractor_rep, photo_doc_id, note, status, measured_by, approved_by/at, decision_note, client_uuid). In the backup list.
+- pro_bills: hold_reason, released_by, released_at, release_note, created_by. A held bill cannot be paid until released.
+- pro_grns.excess_note: why more than the PO (+ tolerance) was accepted.
+- sal_handover.override_note: why possession went ahead with dues, snags or checklist items open.
+- Settings: con.variation_owner_limit_paise (default 50000000 = Rs 5 lakh), pro.tolerance_bp (300 = 3%), con.dlp_months (60, counted from the OC letter date), con.advance_recovery_bp (1000 = 10%), tax.tds_no_pan_bp (2000 = 20%, confirm with CA).

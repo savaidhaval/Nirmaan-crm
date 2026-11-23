@@ -9,8 +9,8 @@ const run = Date.now().toString(36); const digits = String(Date.now()).slice(-8)
 const o = new C(); await o.call('POST', '/api/auth/login', { email: process.env.OWNER_EMAIL, password: process.env.OWNER_PASSWORD });
 let seq = 0;
 const mkUser = async (role, projects) => { const email = `zp-${role}-${++seq}-${run}@test.local`; const r = await o.call('POST', '/api/users', { name: 'zp ' + role, email, role, projects }); const pw = 'ZpStrongPass-' + run; const c = new C(); await c.call('POST', '/api/auth/login', { email, password: r.data.temporaryPassword }); await c.call('POST', '/api/auth/change-password', { currentPassword: r.data.temporaryPassword, newPassword: pw }); c.id = r.data.id; c.email = email; c.pw = pw; return c; };
-const pid = (await o.call('POST', '/api/projects', { name: 'zz-wp6 ' + run, code: 'W6' + run.toUpperCase().slice(-6), budget_paise: 50000000 })).data.id;
-const pid2 = (await o.call('POST', '/api/projects', { name: 'zz-wp6b ' + run, code: 'X6' + run.toUpperCase().slice(-6), budget_paise: 50000000 })).data.id;
+const pid = (await o.call('POST', '/api/projects', { rera_no: 'P518000TEST', name: 'zz-wp6 ' + run, code: 'W6' + run.toUpperCase().slice(-6), budget_paise: 50000000 })).data.id;
+const pid2 = (await o.call('POST', '/api/projects', { rera_no: 'P518000TEST', name: 'zz-wp6b ' + run, code: 'X6' + run.toUpperCase().slice(-6), budget_paise: 50000000 })).data.id;
 const site = await mkUser('site', [pid]); const pur = await mkUser('purchase', []); const pm = await mkUser('pm', []);
 const setSetting = (k, v) => o.call('POST', '/api/settings/' + k, { value: v });
 const iso = (d) => new Date(Date.now() + 19800000 - d * 86400000).toISOString().slice(0, 10);
@@ -43,7 +43,7 @@ ok('contractor without an approved work order refused', (await site.call('POST',
 ok('same contractor twice refused', (await site.call('POST', '/api/site/dprs', { project_id: pid, report_date: iso(2), work_summary: 'x', labour: [{ contractor_id: A, headcount: 3 }, { contractor_id: A, headcount: 4 }] })).status === 400);
 ok('absurd headcount refused', (await site.call('POST', '/api/site/dprs', { project_id: pid, report_date: iso(2), work_summary: 'x', labour: [{ contractor_id: A, headcount: 99999 }] })).status === 400);
 ok('failed reports left nothing behind', (await o.call('GET', `/api/site/dprs?project_id=${pid}`)).data.dprs.length === 1);
-const old = await site.call('POST', '/api/site/dprs', { project_id: pid, report_date: iso(3), work_summary: 'old style', labour_count: 7 });
+const old = await site.call('POST', '/api/site/dprs', { project_id: pid, report_date: iso(2), work_summary: 'old style', labour_count: 7 });
 ok('old single-number report still works', (await o.call('GET', `/api/site/dprs?project_id=${pid}`)).data.dprs.find((d) => d.id === old.data.id).labour_count === 7);
 ok('last-labour ignores reports that had no lines', (await site.call('GET', `/api/site/dprs/last-labour?project_id=${pid}`)).data.labour.length === 2);
 await site.call('POST', '/api/site/dprs', { project_id: pid, report_date: iso(0), work_summary: 'today', labour: [{ contractor_id: A, headcount: 12 }] });
