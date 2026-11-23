@@ -64,7 +64,7 @@ await o.call('POST', '/api/approvals', { project_id: p2, name: 'zz appr two' });
 const all = (await o.call('GET', '/api/approvals')).data.items.filter((a) => a.project_id === p1 || a.project_id === p2);
 const only2 = (await o.call('GET', `/api/approvals?project_id=${p2}`)).data.items;
 ok('without a pick, both projects show', all.length === 2);
-ok('picking project 2 shows only its items', only2.length === 1 && only2[0].name === 'zz appr two');
+ok('picking project 2 shows only its items', only2.length === 1 && only2[0].name.toLowerCase() === 'zz appr two');
 await o.call('POST', '/api/sales/leads', { name: 'zz lead one', phone: '9' + run.replace(/\D/g, '').padEnd(9, '1').slice(0, 9), project_id: p1 });
 await o.call('POST', '/api/sales/leads', { name: 'zz lead two', phone: '8' + run.replace(/\D/g, '').padEnd(9, '2').slice(0, 9), project_id: p2 });
 const leads2 = (await o.call('GET', `/api/sales/leads?project_id=${p2}`)).data.leads.filter((l) => l.name.startsWith('zz lead'));

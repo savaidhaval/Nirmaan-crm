@@ -15,7 +15,7 @@ import { registerSales3, ensureDemandNumber, handoverDueSweep } from './routes/s
 import { registerBulkDemands, demandLetterHtml } from './routes/bulk_demands.js';
 import { registerReports } from './routes/reports.js';
 import { registerFinance } from './routes/finance.js';
-import { registerProcurement2 } from './routes/procurement2.js';
+import { registerProcurement2, poTermsStatement } from './routes/procurement2.js';
 import { csvBom } from './core/util.js';
 import { registerPetty } from './routes/petty.js';
 import { registerProfile } from './routes/profile.js';
@@ -28,6 +28,7 @@ import { registerStatements } from './routes/statements.js';
 import { registerDashExtras, dashSnapshotSweep } from './routes/dash_extras.js';
 import { registerDrawingAcks, drawingAckSweep } from './routes/drw_acks.js';
 import { registerVisits, visitOptions, cleanFeedback } from './routes/visits.js';
+import { registerProjectPlus } from './routes/projectplus.js';
 import { registerRera, reraSweep } from './routes/rera.js';
 import { registerAi } from './routes/ai.js';
 import { registerProfessionals } from './routes/professionals.js';
@@ -552,7 +553,7 @@ const EDITABLE_SETTINGS = ['po.pm_approval_limit_paise', 'access.allow_second_ow
   'brochure.price_list_default_audience', 'storage.warn_percent', 'sales.max_holds_per_user', 'sales.max_discount_bp', 'sales.pm_max_discount_bp',
   'interest.rate_bp', 'interest.grace_days', 'interest.enabled', 'security.require_mfa_roles', 'tax.stamp_duty_bp', 'tax.metro_cess_bp', 'tax.women_concession_bp', 'tax.registration_bp', 'tax.registration_cap_paise', 'tax.gst_bp',
   'con.enabled', 'con.pm_approval_limit_paise', 'con.gst_bp', 'con.tds_bp', 'budget.gst_basis', 'petty.low_balance_paise', 'ai.enabled', 'ai.daily_limit', 'ai.model', 'rera.designated_pct_bp', 'fea.review_days', 'red.member_doc_checklist', 'red.rent_due_day', 'bank.keep_days', 'drawing.ack_hours', 'sales.bulk_daily_limit', 'sales.bulk_chunk', 'sales.demand_link_days', 'sales.visit_objections', 'sales.visit_radius_m',
-  'sales.receipt_approval_limit_paise', 'sales.discount_pm_limit_paise', 'sales.handover_template'];
+  'sales.receipt_approval_limit_paise', 'sales.discount_pm_limit_paise', 'sales.handover_template', 'apr.designations'];
 
 router.post('/api/settings/:key', async (req, env) => {
   return withAuth(req, env, 'users_settings', 'E', async (req, env) => {
@@ -622,7 +623,7 @@ router.get('/api/approvals', async (req, env) => {
       const user = req.user;
       const ids = await visibleProjectIds(env, user);
       if (ids.length === 0) return json({ ok: true, data: { items: [] } });
-      const sql = `SELECT * FROM apr_items WHERE deleted_at IS NULL AND project_id IN (${ids.map(() => '?').join(',')}) ORDER BY stage_order, name`;
+      const sql = `SELECT a.*, u.name AS owner_name, (SELECT COUNT(*) FROM apr_steps st WHERE st.item_id = a.id AND st.deleted_at IS NULL) AS steps_total, (SELECT COUNT(*) FROM apr_steps st WHERE st.item_id = a.id AND st.deleted_at IS NULL AND st.status IN ('done', 'na')) AS steps_done FROM apr_items a LEFT JOIN users u ON u.id = a.owner_user_id WHERE a.deleted_at IS NULL AND a.project_id IN (${ids.map(() => '?').join(',')}) ORDER BY a.stage_order, a.name`;
       const rows = await query(env.DB, sql, ids);
       return json({ ok: true, data: { items: rows.results } });
     } catch (e) {
@@ -645,7 +646,7 @@ router.post('/api/approvals', async (req, env) => {
         return json({ ok: false, error: 'Not allowed.' }, 403);
       }
       const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
-      const result = await env.DB.prepare(`INSERT INTO apr_items (project_id, name, authority, category, stage_order, status, applied_on, approved_on, valid_till, reminder_days, renew_months, owner_user_id, consultant, fee_paise, notes, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(project_id, name, authority || '', category || 'approval', stage_order || 100, status || 'not_started', applied_on || null, approved_on || null, valid_till || null, reminder_days || 30, renew_months || null, owner_user_id || null, consultant || '', fee_paise || 0, notes || '', now).run();
+      const result = await env.DB.prepare(`INSERT INTO apr_items (project_id, name, authority, category, stage_order, status, applied_on, approved_on, valid_till, reminder_days, renew_months, owner_user_id, consultant, fee_paise, notes, created_at, target_date) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(project_id, String(name).trim().toUpperCase().slice(0, 200), authority || '', category || 'approval', stage_order || 100, status || 'not_started', applied_on || null, approved_on || null, valid_till || null, reminder_days || 30, renew_months || null, owner_user_id || null, consultant || '', fee_paise || 0, notes || '', now, /^\d{4}-\d{2}-\d{2}$/.test(body.target_date || '') ? body.target_date : null).run();
       await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, ?, 'apr_items', ?, ?, ?)`).bind(user.user_id, 'create', result.meta.last_row_id, `Created approval "${name}"`, now).run();
       return json({ ok: true, data: { id: result.meta.last_row_id } });
     } catch (e) {
@@ -784,7 +785,7 @@ router.get('/api/site/milestones', async (req, env) => {
       const user = req.user;
       const ids = await visibleProjectIds(env, user);
       if (ids.length === 0) return json({ ok: true, data: { milestones: [] } });
-      const sql = `SELECT * FROM site_milestones WHERE deleted_at IS NULL AND project_id IN (${ids.map(() => '?').join(',')}) ORDER BY sort_order, name`;
+      const sql = `SELECT m.*, u.name AS assigned_name FROM site_milestones m LEFT JOIN users u ON u.id = m.assigned_to WHERE m.deleted_at IS NULL AND m.project_id IN (${ids.map(() => '?').join(',')}) ORDER BY m.sort_order, m.name`;
       const rows = await query(env.DB, sql, ids);
       return json({ ok: true, data: { milestones: rows.results } });
     } catch (e) {
@@ -1075,6 +1076,7 @@ router.post('/api/procurement/pos', async (req, env) => {
       const stockId = body.stock_item_id ? Number(body.stock_item_id) : null;
       if (stockId && !(await stockItemExists(env, stockId))) return json({ ok: false, error: 'That stock item does not exist.' }, 400);
       const gstBp = gst_bp !== undefined ? Number(gst_bp) : 1800;
+      { const pre = poTermsStatement(env, { id: 0, gst_bp: gstBp }, amount_paise, body); if (pre.error) return json({ ok: false, error: pre.error }, 400); }
       const gst_paise = Math.round(amount_paise * gstBp / 10000);
       const total_paise = amount_paise + gst_paise;
       const status = 'draft';
@@ -1088,7 +1090,12 @@ router.post('/api/procurement/pos', async (req, env) => {
       const result = await env.DB.prepare(`INSERT INTO pro_pos (project_id, vendor_id, rfq_id, po_no, po_seq, amount_paise, gst_bp, gst_paise, total_paise, terms, status, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(project_id, vendor_id, rfq_id || null, poNo, nextSeq, amount_paise, gstBp, gst_paise, total_paise, terms || '', status, user.user_id, now).run();
       for (const it of items) {
         const qty = Number(it.qty) || 0; const rate = Math.round(Number(it.rate_paise) || 0);
-        await env.DB.prepare('INSERT INTO pro_po_items (po_id, description, qty, unit, rate_paise, amount_paise, budget_head_id, stock_item_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').bind(result.meta.last_row_id, String(it.description), qty, it.unit || '', rate, Math.round(qty * rate), headId, stockId).run();
+        await env.DB.prepare('INSERT INTO pro_po_items (po_id, description, qty, unit, rate_paise, amount_paise, budget_head_id, stock_item_id, hsn) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').bind(result.meta.last_row_id, String(it.description), qty, it.unit || '', rate, Math.round(qty * rate), headId, stockId, String(it.hsn || '').trim().slice(0, 12) || null).run();
+      }
+      if (['material_category', 'transport_paise', 'loading_paise', 'packing_paise', 'insurance_paise', 'other_charges_paise', 'delivery_date', 'payment_terms', 'category_details', 'price_basis'].some((k) => body[k] !== undefined && body[k] !== '')) {
+        const fresh = await env.DB.prepare('SELECT * FROM pro_pos WHERE id = ?').bind(result.meta.last_row_id).first();
+        const t = poTermsStatement(env, fresh, amount_paise, body);
+        if (!t.error) await t.stmt.run();
       }
       await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, ?, 'pro_pos', ?, ?, ?)`).bind(user.user_id, 'create', result.meta.last_row_id, `Created PO ${poNo}`, now).run();
       return json({ ok: true, data: { id: result.meta.last_row_id, po_no: poNo } });
@@ -1177,7 +1184,7 @@ router.post('/api/approvals/load-template', async (req, env) => {
       const rows = MUMBAI_TEMPLATE.filter((r) => redevelopment || !r[4]);
       const now = nowStr();
       const stmts = rows.map((r, i) => env.DB.prepare(`INSERT INTO apr_items (project_id, name, authority, category, stage_order, status, reminder_days, renew_months, notes, created_at) VALUES (?, ?, ?, ?, ?, 'not_started', ?, ?, ?, ?)`)
-        .bind(Number(project_id), r[0], r[1], r[2], (i + 1) * 10, r[3] || 30, r[2] === 'renewal' ? (r[0].startsWith('RERA quarterly') ? 3 : 12) : null, r[5], now));
+        .bind(Number(project_id), r[0].toUpperCase(), r[1], r[2], (i + 1) * 10, r[3] || 30, r[2] === 'renewal' ? (r[0].startsWith('RERA quarterly') ? 3 : 12) : null, r[5], now));
       await env.DB.batch(stmts);
       await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, 'create', 'apr_items', ?, ?, ?)`).bind(req.user.user_id, Number(project_id), `Loaded Mumbai approvals template (${rows.length} items)`, now).run();
       return json({ ok: true, data: { count: rows.length } });
@@ -1231,8 +1238,8 @@ router.post('/api/site/milestones', async (req, env) => {
       const b = await req.json();
       const ids = await visibleProjectIds(env, req.user);
       if (!b.project_id || !b.name || !ids.includes(Number(b.project_id))) return json({ ok: false, error: 'Project and name are required.' }, 400);
-      const r = await env.DB.prepare('INSERT INTO site_milestones (project_id, wing, name, milestone_key, planned_date, sort_order, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-        .bind(Number(b.project_id), b.wing || null, b.name, b.milestone_key || null, b.planned_date || null, b.sort_order || 100, nowStr()).run();
+      const r = await env.DB.prepare('INSERT INTO site_milestones (project_id, wing, name, milestone_key, planned_date, sort_order, created_at, assigned_to) VALUES (?, ?, ?, ?, ?, ?, ?, (SELECT id FROM users WHERE id = ? AND active = 1))')
+        .bind(Number(b.project_id), b.wing || null, b.name, b.milestone_key || null, b.planned_date || null, b.sort_order || 100, nowStr(), Number(b.assigned_to) || 0).run();
       return json({ ok: true, data: { id: r.meta.last_row_id } });
     } catch (e) {
       return json({ ok: false, error: /UNIQUE/.test(e.message) ? 'That milestone key already exists for this wing.' : 'ms-create: ' + e.message }, /UNIQUE/.test(e.message) ? 400 : 500);
@@ -1263,7 +1270,7 @@ async function decidePo(req, env, decision) {
   if (!po) return json({ ok: false, error: 'PO not found.' }, 404);
   if (!(await visibleProjectIds(env, req.user)).includes(po.project_id)) return json({ ok: false, error: 'Not allowed.' }, 403);
   if (po.status !== 'pending_approval') return json({ ok: false, error: 'This PO is not waiting for approval.' }, 400);
-  if (po.created_by === req.user.user_id) return json({ ok: false, error: 'You cannot approve a PO you created.' }, 403);
+  if (po.created_by === req.user.user_id && req.user.role !== 'owner') return json({ ok: false, error: 'You cannot approve a PO you created.' }, 403);
   const limit = Number(await getSetting(env, 'po.pm_approval_limit_paise')) || 500000;
   if (req.user.role !== 'owner' && po.total_paise > limit) {
     return json({ ok: false, error: `This PO is above your approval limit (₹${(limit / 100).toLocaleString('en-IN')}). The Owner must approve it.` }, 403);
@@ -1271,7 +1278,7 @@ async function decidePo(req, env, decision) {
   const now = nowStr();
   const status = decision === 'approve' ? 'approved' : 'rejected';
   await env.DB.prepare('UPDATE pro_pos SET status = ?, approved_by = ?, approved_at = ? WHERE id = ?').bind(status, req.user.user_id, now, po.id).run();
-  await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, ?, 'pro_pos', ?, ?, ?)`).bind(req.user.user_id, decision, po.id, `${req.user.name} ${status} ${po.po_no} (₹${(po.total_paise / 100).toLocaleString('en-IN')})`, now).run();
+  await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, ?, 'pro_pos', ?, ?, ?)`).bind(req.user.user_id, decision, po.id, `${req.user.name} ${status} ${po.po_no} (₹${(po.total_paise / 100).toLocaleString('en-IN')})${po.created_by === req.user.user_id ? ' (approved by Owner as maker)' : ''}`, now).run();
   const warnings = decision === 'approve' ? await checkHeadOver(env, getSetting, nowStr, po.project_id, await headsOnPo(env, po.id)) : [];
   return json({ ok: true, data: { status, warnings } });
 }
@@ -1504,7 +1511,7 @@ const EXPORT_TABLES = ['projects', 'apr_items', 'apr_events', 'drw_drawings', 'd
     'sal_leads', 'sal_activities', 'sal_visits', 'sal_inventory', 'sal_partners', 'sal_bookings', 'sal_plan_stages', 'sal_demands', 'sal_receipts', 'documents', 'audit_log',
     'pro_grn_items', 'pro_payments', 'ppl_staff', 'ppl_hiring', 'ppl_candidates', 'sal_brokerage_payments', 'sal_refunds', 'sal_interest_waivers', 'mkt_spend', 'brands', 'counters',
     'pro_indents', 'pro_indent_items', 'pro_rfq_items', 'pro_quote_items',
-    'site_dpr_labour', 'bud_heads', 'stk_items', 'stk_balance', 'stk_moves', 'pro_party_docs', 'pro_professionals', 'ai_log', 'sal_receipt_requests', 'sal_adjustments', 'sal_booking_parties', 'sal_cost_sheets', 'sal_cost_sheet_lines', 'sal_handover', 'sal_handover_items', 'sal_booking_loans', 'rera_account_entries', 'eng_kudos', 'fea_versions', 'sal_bulk_runs', 'sal_bulk_items', 'drw_acks', 'tally_export_log', 'brand_profiles', 'project_members', 'drive_folders', 'bank_profiles', 'bank_import_batches', 'bank_import_rows', 'red_societies', 'red_members', 'red_consent_events', 'red_member_docs', 'red_rehab_allotments', 'red_transit_terms', 'red_transit_schedule', 'red_transit_payments', 'red_corpus_entries', 'red_meetings', 'pty_funds', 'pty_entries', 'con_contractors', 'con_work_orders', 'con_wo_items', 'con_ra_bills', 'con_ra_lines', 'con_payments', 'con_ledger'];
+    'site_dpr_labour', 'bud_heads', 'stk_items', 'stk_balance', 'stk_moves', 'pro_party_docs', 'pro_professionals', 'ai_log', 'sal_receipt_requests', 'sal_adjustments', 'sal_booking_parties', 'sal_cost_sheets', 'sal_cost_sheet_lines', 'sal_handover', 'sal_handover_items', 'sal_booking_loans', 'rera_account_entries', 'eng_kudos', 'fea_versions', 'sal_bulk_runs', 'sal_bulk_items', 'drw_acks', 'tally_export_log', 'brand_profiles', 'project_members', 'drive_folders', 'bank_profiles', 'bank_import_batches', 'bank_import_rows', 'red_societies', 'red_members', 'red_consent_events', 'red_member_docs', 'red_rehab_allotments', 'red_transit_terms', 'red_transit_schedule', 'red_transit_payments', 'red_corpus_entries', 'red_meetings', 'red_meeting_attendees', 'prj_autodcr_history', 'apr_steps', 'pty_funds', 'pty_entries', 'con_contractors', 'con_work_orders', 'con_wo_items', 'con_ra_bills', 'con_ra_lines', 'con_payments', 'con_ledger'];
 const EXPORT_PARTS = 3;
 
 async function buildExport(env, part = 1) {
@@ -2056,6 +2063,7 @@ async function driveUpload(env, file, projectId) {
   });
 }
 
+const INLINE_MIME = /^(image\/(png|jpe?g|webp|gif)|application\/pdf|text\/plain)$/;
 async function driveResponse(env, doc, req, disposition) {
   let upstream;
   try {
@@ -2068,6 +2076,7 @@ async function driveResponse(env, doc, req, disposition) {
     'Content-Disposition': `${disposition}; filename*=UTF-8''${encodeURIComponent(doc.title)}`,
     'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff',
   });
+  if (disposition === 'inline' && !/pdf/i.test(doc.mime || '')) h.set('Content-Security-Policy', "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; sandbox");
   for (const k of ['content-length', 'content-range', 'accept-ranges']) if (upstream.headers.get(k)) h.set(k, upstream.headers.get(k));
   return new Response(upstream.body, { status: upstream.status, headers: h });
 }
@@ -2078,12 +2087,13 @@ registerMfa(router, { json, serverError, getCurrentUser, getSetting, nowStr, enc
 registerImporter(router, { withAuth, json, serverError, visibleProjectIds, nowStr, encryptSetting });
 registerPrivacy(router, { withAuth, json, serverError, nowStr, decryptSetting });
 registerReports(router, { withAuth, json, serverError, visibleProjectIds, getSetting, nowStr });
-registerProcurement2(router, { withAuth, json, serverError, visibleProjectIds, nowStr, csvBom, getCurrentUser, userCan, grnStockStatements });
+registerProcurement2(router, { withAuth, json, serverError, visibleProjectIds, nowStr, csvBom, getCurrentUser, userCan, grnStockStatements, stockItemExists });
 registerStores(router, { withAuth, json, serverError, visibleProjectIds, nowStr, csvBom });
 registerPartyDocs(router, { withAuth, json, serverError, nowStr, getSetting });
 registerProfile(router, { withAuth, json, serverError, visibleProjectIds, nowStr, getSetting, printBrand, csvBom });
 registerFeasibility(router, { withAuth, json, serverError, visibleProjectIds, nowStr });
 registerVisits(router, { withAuth, json, serverError, visibleProjectIds, getSetting, nowStr, leadAccess, csvBom });
+registerProjectPlus(router, { withAuth, json, serverError, visibleProjectIds, nowStr, getSetting });
 registerRera(router, { withAuth, json, serverError, visibleProjectIds, nowStr, getSetting, csvBom });
 registerAi(router, { withAuth, json, serverError, visibleProjectIds, nowStr, getSetting, userCan, checkRateLimit });
 registerProfessionals(router, { withAuth, json, serverError, nowStr, encryptSetting, decryptSetting });
@@ -2488,16 +2498,22 @@ router.get('/api/files/download/:docId', async (req, env) => {
 
       if (doc.module === 'brochure' && doc.audience !== 'customer' && !['owner', 'pm'].includes(req.user.role)) return json({ ok: false, error: 'Not allowed.' }, 403); // internal brochures stay internal
       if (!docVisible(req.user, doc)) return json({ ok: false, error: 'Not allowed.' }, 403);
-      if (doc.store === 'gdrive') return driveResponse(env, doc, req, 'attachment');
+      // View in the app without downloading: only pictures, PDFs and plain text are shown inline; anything else still downloads.
+      const sp = new URL(req.url).searchParams;
+      const viewable = INLINE_MIME.test(String(doc.mime || '').toLowerCase());
+      if (sp.get('meta')) return json({ ok: true, data: { id: doc.id, title: doc.title, mime: doc.mime || '', viewable, kind: /^image\//i.test(doc.mime || '') ? 'image' : /pdf/i.test(doc.mime || '') ? 'pdf' : viewable ? 'text' : 'other' } });
+      const disposition = sp.get('inline') && viewable ? 'inline' : 'attachment';
+      if (doc.store === 'gdrive') return driveResponse(env, doc, req, disposition);
       if (doc.store === 'd1' || doc.store === null) {
         const blob = await env.DB.prepare('SELECT * FROM file_blobs WHERE id = ?').bind(doc.blob_id).first();
         if (!blob) return json({ ok: false, error: 'File data not found.' }, 404);
         return new Response(blobBytes(blob.data), {
           headers: {
             'Content-Type': doc.mime || 'application/octet-stream',
-            'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(doc.title)}`,
+            'Content-Disposition': `${disposition}; filename*=UTF-8''${encodeURIComponent(doc.title)}`,
             'X-Content-Type-Options': 'nosniff',
             'Cache-Control': 'private, no-store',
+            ...(disposition === 'inline' && !/pdf/i.test(doc.mime || '') ? { 'Content-Security-Policy': "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; sandbox" } : {}),
           },
         });
       }

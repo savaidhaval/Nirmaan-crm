@@ -7,7 +7,7 @@ const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : null; 
 const txt = (v, n) => String(v == null ? '' : v).trim().slice(0, n);
 const rupees = (p) => '₹' + (Number(p) / 100).toLocaleString('en-IN');
 const STATUSES = ['pending', 'consented', 'declined'];
-const TYPES = ['owner', 'tenant', 'commercial', 'other'];
+const TYPES = ['owner', 'residential', 'tenant', 'commercial', 'other'];
 const AADHAAR = /\b\d{4}[\s-]?\d{4}[\s-]?\d{4}\b/;
 const dateOk = (v) => /^\d{4}-\d{2}-\d{2}$/.test(String(v || ''));
 const PAGE = 25;
@@ -16,13 +16,21 @@ const checklistOf = (v) => String(v || '').split(/[\n;]+/).map((x) => x.trim()).
 
 // Fills the transit-rent schedule for every term (or one member): from the start month up to 12 months ahead, never past the end date.
 // INSERT OR IGNORE on UNIQUE(member_id, period) means it can run any number of times safely.
+// Year-wise rent from the member's terms (year 1 to 5; later years use year 5). NULL when not set, so the term's monthly rent is used.
+// nExpr is the month number counted from the first rent month (0 = first month).
+const YEAR_RENT = (nExpr) => `NULLIF(CAST(ROUND((CASE (${nExpr}) / 12 WHEN 0 THEN rm.rent_y1_paise WHEN 1 THEN rm.rent_y2_paise WHEN 2 THEN rm.rent_y3_paise WHEN 3 THEN rm.rent_y4_paise ELSE rm.rent_y5_paise END)
+  * (CASE WHEN rm.rent_basis = 'per_sqft' THEN COALESCE(rm.carpet_sqft, 0) ELSE 1 END)) AS INTEGER), 0)`;
 const FILL_SQL = (one) => `INSERT OR IGNORE INTO red_transit_schedule (member_id, period, due_paise, due_on)
   WITH RECURSIVE m(n) AS (SELECT 0 UNION ALL SELECT n + 1 FROM m WHERE n < 47)
-  SELECT t.member_id, strftime('%Y-%m', date(t.start_date, 'start of month', '+' || m.n || ' months')), t.monthly_rent_paise,
+  SELECT t.member_id, strftime('%Y-%m', date(t.start_date, 'start of month', '+' || m.n || ' months')), COALESCE(${YEAR_RENT('m.n')}, t.monthly_rent_paise),
     date(t.start_date, 'start of month', '+' || m.n || ' months', '+' || (?1 - 1) || ' days')
-  FROM red_transit_terms t JOIN m
+  FROM red_transit_terms t JOIN m LEFT JOIN red_members rm ON rm.id = t.member_id
   WHERE date(t.start_date, 'start of month', '+' || m.n || ' months') <= date('now', 'start of month', '+12 months')
     AND (t.end_date IS NULL OR date(t.start_date, 'start of month', '+' || m.n || ' months') <= t.end_date)${one ? ' AND t.member_id = ?2' : ''}`;
+// Months with no payment yet take the year-wise rent (when set). Bind: member id.
+const MONTHS_FROM_START = `((CAST(substr(red_transit_schedule.period, 1, 4) AS INTEGER) - CAST(substr(t.start_date, 1, 4) AS INTEGER)) * 12 + CAST(substr(red_transit_schedule.period, 6, 2) AS INTEGER) - CAST(substr(t.start_date, 6, 2) AS INTEGER))`;
+const REPRICE_SQL = `UPDATE red_transit_schedule SET due_paise = COALESCE((SELECT ${YEAR_RENT(MONTHS_FROM_START)} FROM red_transit_terms t JOIN red_members rm ON rm.id = t.member_id WHERE t.member_id = red_transit_schedule.member_id), due_paise)
+  WHERE member_id = ? AND NOT EXISTS (SELECT 1 FROM red_transit_payments p WHERE p.schedule_id = red_transit_schedule.id AND p.reversed_at IS NULL)`;
 
 export async function redevSweep(env, getSetting) {
   const day = Math.min(28, Math.max(1, Math.round(Number(await getSetting(env, 'red.rent_due_day')) || 1)));
@@ -130,6 +138,7 @@ export function registerRedevelopment(router, h) {
       const proj = await env.DB.prepare('SELECT id, name, type FROM projects WHERE id = ? AND deleted_at IS NULL').bind(pid).first();
       if (!proj || !(await visibleProjectIds(env, req.user)).includes(pid)) return bad('Pick a project.');
       if (proj.type !== 'redevelopment') return bad('This project is not a redevelopment project. Change its type first.');
+      if (await env.DB.prepare('SELECT 1 AS x FROM red_societies WHERE project_id = ? AND deleted_at IS NULL').bind(pid).first()) return bad('This project already has its society. A project has one society: open it from the list.', 409);
       const f = societyFields(b); if (f.error) return bad(f.error);
       const r = await env.DB.prepare('INSERT INTO red_societies (project_id, name, registration_no, address, consent_threshold_bp, count_basis, notes, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)')
         .bind(pid, f.v.name, f.v.registration_no, f.v.address, f.v.bp, f.v.basis, f.v.notes, req.user.user_id, nowStr()).run();
@@ -174,10 +183,19 @@ export function registerRedevelopment(router, h) {
       const like = term ? `%${term}%` : '';
       const where = `society_id = ?1 AND deleted_at IS NULL AND (?2 = '' OR consent_status = ?2) AND (?3 = '' OR member_name LIKE ?3 OR unit_label LIKE ?3 OR wing LIKE ?3)`;
       const total = (await env.DB.prepare(`SELECT COUNT(*) AS n FROM red_members WHERE ${where}`).bind(soc.id, st, like).first()).n;
-      const rows = (await env.DB.prepare(`SELECT id, wing, unit_label, member_name, phone, member_type, carpet_sqft, consent_status, consent_date, notes FROM red_members WHERE ${where} ORDER BY wing, unit_label, id LIMIT ${PAGE} OFFSET ?4`).bind(soc.id, st, like, (page - 1) * PAGE).all()).results;
+      const rows = (await env.DB.prepare(`SELECT id, wing, unit_label, member_name, phone, member_type, carpet_sqft, consent_status, consent_date, notes, extra_area_bp, new_rera_sqft, buys_extra, buys_extra_sqft, car_parks FROM red_members WHERE ${where} ORDER BY wing, unit_label, id LIMIT ${PAGE} OFFSET ?4`).bind(soc.id, st, like, (page - 1) * PAGE).all()).results;
       if (!canPhone(req.user)) for (const r of rows) delete r.phone;
       return json({ ok: true, data: { members: rows, total, page, page_size: PAGE } });
     } catch (e) { return serverError(e, 'red-members'); }
+  }));
+
+  // Names only, for pick lists (meeting attendance). No phone numbers.
+  router.get('/api/redev/societies/:id/member-names', async (req, env) => withAuth(req, env, 'redevelopment', 'V', async (req, env) => {
+    try {
+      const { soc, err } = await loadSociety(env, req, Number(req.params.id)); if (err) return err;
+      const rows = (await env.DB.prepare('SELECT id, wing, unit_label, member_name FROM red_members WHERE society_id = ? AND deleted_at IS NULL ORDER BY wing, unit_label, id LIMIT 2000').bind(soc.id).all()).results;
+      return json({ ok: true, data: { members: rows } });
+    } catch (e) { return serverError(e, 'red-member-names'); }
   }));
 
   router.post('/api/redev/societies/:id/members', async (req, env) => withAuth(req, env, 'redevelopment', 'C', async (req, env) => {
@@ -343,6 +361,44 @@ export function registerRedevelopment(router, h) {
     } catch (e) { return serverError(e, 'red-rehab-set'); }
   }));
 
+  // ======================= member terms: year-wise rent, corpus, parking, shifting, area =======================
+  const TERM_COLS = 'rent_basis, rent_y1_paise, rent_y2_paise, rent_y3_paise, rent_y4_paise, rent_y5_paise, corpus_paise, car_parks, shifting_paise, extra_area_bp, new_rera_sqft, buys_extra, buys_extra_sqft';
+  router.get('/api/redev/members/:id/terms', async (req, env) => withAuth(req, env, 'transit', 'V', async (req, env) => {
+    try {
+      const { mem, err } = await loadMember(env, req, Number(req.params.id)); if (err) return err;
+      const t = await env.DB.prepare(`SELECT id, member_name, unit_label, wing, member_type, carpet_sqft, ${TERM_COLS} FROM red_members WHERE id = ?`).bind(mem.id).first();
+      return json({ ok: true, data: { terms: t } });
+    } catch (e) { return serverError(e, 'red-terms'); }
+  }));
+  router.put('/api/redev/members/:id/terms', async (req, env) => withAuth(req, env, 'transit', 'E', async (req, env) => {
+    try {
+      const { mem, err } = await loadMember(env, req, Number(req.params.id)); if (err) return err;
+      const b = await req.json().catch(() => ({}));
+      const basis = ['per_sqft', 'monthly'].includes(b.rent_basis) ? b.rent_basis : null;
+      const money = (k) => { if (b[k] === '' || b[k] == null) return null; const v = Math.round(num(b[k])); return v >= 0 && v <= 1e12 ? v : NaN; };
+      const rents = [1, 2, 3, 4, 5].map((y) => money(`rent_y${y}_paise`));
+      const corpus = money('corpus_paise'), shifting = money('shifting_paise');
+      if ([...rents, corpus, shifting].some((v) => Number.isNaN(v))) return bad('Check the amounts.');
+      if (rents.some((v) => v != null) && !basis) return bad('Say whether the rent is per sq ft or a monthly amount.');
+      const area = b.carpet_sqft === '' || b.carpet_sqft == null ? mem.carpet_sqft : num(b.carpet_sqft);
+      if (area != null && !(area >= 0 && area <= 100000)) return bad('Check the current flat area.');
+      if (basis === 'per_sqft' && rents.some((v) => v != null) && !(area > 0)) return bad('Enter the current flat area to work out rent per sq ft.');
+      const cars = b.car_parks === '' || b.car_parks == null ? null : Math.round(num(b.car_parks)); if (cars != null && !(cars >= 0 && cars <= 50)) return bad('Check the number of car parkings.');
+      const pct = b.extra_area_pct === '' || b.extra_area_pct == null ? null : num(b.extra_area_pct); if (pct != null && !(pct >= 0 && pct <= 500)) return bad('Check the extra area %.');
+      const bp = pct == null ? null : Math.round(pct * 100);
+      const newArea = area != null && bp != null ? Math.round(area * (10000 + bp)) / 10000 : null;
+      const buys = b.buys_extra ? 1 : 0; const buysSqft = buys && b.buys_extra_sqft !== '' && b.buys_extra_sqft != null ? num(b.buys_extra_sqft) : null;
+      if (buysSqft != null && !(buysSqft > 0 && buysSqft <= 100000)) return bad('Check the extra area being bought.');
+      await env.DB.batch([
+        env.DB.prepare(`UPDATE red_members SET carpet_sqft = ?, rent_basis = ?, rent_y1_paise = ?, rent_y2_paise = ?, rent_y3_paise = ?, rent_y4_paise = ?, rent_y5_paise = ?, corpus_paise = ?, car_parks = ?, shifting_paise = ?, extra_area_bp = ?, new_rera_sqft = ?, buys_extra = ?, buys_extra_sqft = ? WHERE id = ?`)
+          .bind(area, basis, ...rents, corpus, cars, shifting, bp, newArea, buys, buysSqft, mem.id),
+        env.DB.prepare(REPRICE_SQL).bind(mem.id),
+        audit(env, req.user, 'update', 'red_members', mem.id, `Terms for ${mem.member_name}: ${basis ? 'rent set year-wise' : 'no rent'}${bp != null ? `, extra area ${pct}% (new RERA carpet ${newArea} sq ft)` : ''}${buys ? ', buying extra area' : ''}`),
+      ]);
+      return json({ ok: true, data: { new_rera_sqft: newArea } });
+    } catch (e) { return serverError(e, 'red-terms-set'); }
+  }));
+
   // ======================= WP-2: transit rent =======================
   const dueDay = async (env) => Math.min(28, Math.max(1, Math.round(Number(await getSetting(env, 'red.rent_due_day')) || 1)));
   router.post('/api/redev/members/:id/transit-term', async (req, env) => withAuth(req, env, 'transit', 'E', async (req, env) => {
@@ -361,6 +417,7 @@ export function registerRedevelopment(router, h) {
         env.DB.prepare(FILL_SQL(true)).bind(await dueDay(env), mem.id),
         // a changed rent applies to months that have no payment against them yet
         env.DB.prepare('UPDATE red_transit_schedule SET due_paise = ? WHERE member_id = ? AND NOT EXISTS (SELECT 1 FROM red_transit_payments p WHERE p.schedule_id = red_transit_schedule.id AND p.reversed_at IS NULL)').bind(rent, mem.id),
+        env.DB.prepare(REPRICE_SQL).bind(mem.id),
         audit(env, req.user, 'update', 'red_transit_terms', mem.id, `Transit rent for ${mem.member_name}: ${rupees(rent)} a month from ${b.start_date}`),
       ]);
       const n = (await env.DB.prepare('SELECT COUNT(*) AS n FROM red_transit_schedule WHERE member_id = ?').bind(mem.id).first()).n;
@@ -491,7 +548,8 @@ export function registerRedevelopment(router, h) {
   router.get('/api/redev/societies/:id/meetings', async (req, env) => withAuth(req, env, 'redevelopment', 'V', async (req, env) => {
     try {
       const { soc, err } = await loadSociety(env, req, Number(req.params.id)); if (err) return err;
-      const rows = (await env.DB.prepare(`SELECT mt.*, d.title AS minutes_title FROM red_meetings mt LEFT JOIN documents d ON d.id = mt.minutes_document_id AND d.deleted_at IS NULL WHERE mt.society_id = ? AND mt.deleted_at IS NULL ORDER BY mt.held_on DESC, mt.id DESC LIMIT 200`).bind(soc.id).all()).results;
+      const rows = (await env.DB.prepare(`SELECT mt.*, d.title AS minutes_title, u.name AS next_action_owner_name, (SELECT json_group_array(a.member_id) FROM red_meeting_attendees a WHERE a.meeting_id = mt.id) AS attendee_ids FROM red_meetings mt LEFT JOIN documents d ON d.id = mt.minutes_document_id AND d.deleted_at IS NULL LEFT JOIN users u ON u.id = mt.next_action_owner WHERE mt.society_id = ? AND mt.deleted_at IS NULL ORDER BY mt.held_on DESC, mt.id DESC LIMIT 200`).bind(soc.id).all()).results;
+      for (const r of rows) { try { r.attendee_ids = JSON.parse(r.attendee_ids || '[]'); } catch (e) { r.attendee_ids = []; } }
       if (new URL(req.url).searchParams.get('csv')) return csvResponse(`meetings-${soc.id}.csv`, [['Date', 'Kind', 'Agenda', 'Attendees', 'Resolution', 'Passed', 'Next action', 'Due', 'Done'], ...rows.map((r) => [r.held_on, r.kind, r.agenda || '', r.attendees_count ?? '', r.resolution_text || '', r.resolution_passed ? 'yes' : 'no', r.next_action || '', r.next_action_due || '', r.next_action_done ? 'yes' : 'no'])]);
       return json({ ok: true, data: { meetings: rows, note: 'Record only. Confirm required procedures with your advocate.' } });
     } catch (e) { return serverError(e, 'red-meetings'); }
@@ -502,14 +560,24 @@ export function registerRedevelopment(router, h) {
     if (b.next_action_due && !txt(b.next_action, 200)) return { error: 'Say what the next action is.' };
     let doc = null; if (b.minutes_document_id) { doc = await env.DB.prepare("SELECT id FROM documents WHERE id = ? AND deleted_at IS NULL AND category = 'society' AND project_id = ?").bind(Number(b.minutes_document_id), soc.project_id).first(); if (!doc) return { error: 'That file is not a society file of this project.' }; }
     const att = b.attendees_count === '' || b.attendees_count == null ? null : Math.round(num(b.attendees_count)); if (att != null && (att < 0 || att > 100000)) return { error: 'Check the number of attendees.' };
-    return { v: { kind: ['general_body', 'committee', 'other'].includes(b.kind) ? b.kind : 'general_body', held, agenda: txt(b.agenda, 600), att, text: txt(b.resolution_text, 1000), passed: b.resolution_passed ? 1 : 0, doc: doc ? doc.id : null, action: txt(b.next_action, 200), due: b.next_action_due || null } };
+    const ids = Array.isArray(b.attendee_ids) ? [...new Set(b.attendee_ids.map(Number).filter((x) => x > 0))].slice(0, 2000) : null;
+    const owner = b.next_action_owner === '' || b.next_action_owner == null ? null : Number(b.next_action_owner);
+    if (owner && !(await env.DB.prepare('SELECT 1 AS x FROM users WHERE id = ? AND active = 1 AND deleted_at IS NULL').bind(owner).first())) return { error: 'Pick the person in charge from the list.' };
+    return { v: { kind: ['general_body', 'committee', 'other'].includes(b.kind) ? b.kind : 'general_body', held, agenda: txt(b.agenda, 600), att, text: txt(b.resolution_text, 1000), passed: b.resolution_passed ? 1 : 0, doc: doc ? doc.id : null, action: txt(b.next_action, 200), due: b.next_action_due || null, ids, owner } };
   };
+  const ATTEND_SQL = [
+    'DELETE FROM red_meeting_attendees WHERE meeting_id = ?1',
+    'INSERT OR IGNORE INTO red_meeting_attendees (meeting_id, member_id) SELECT ?1, m.id FROM json_each(?2) j JOIN red_members m ON m.id = j.value AND m.society_id = ?3 AND m.deleted_at IS NULL',
+    'UPDATE red_meetings SET attendees_count = (SELECT COUNT(*) FROM red_meeting_attendees WHERE meeting_id = ?1) WHERE id = ?1',
+  ];
+  const attendStmts = (env, meetingId, ids, societyId) => (ids ? ATTEND_SQL.map((q, i) => (i === 1 ? env.DB.prepare(q).bind(meetingId, JSON.stringify(ids), societyId) : env.DB.prepare(q).bind(meetingId))) : []);
   router.post('/api/redev/societies/:id/meetings', async (req, env) => withAuth(req, env, 'redevelopment', 'C', async (req, env) => {
     try {
       const { soc, err } = await loadSociety(env, req, Number(req.params.id)); if (err) return err;
       const f = await meetingFields(env, await req.json().catch(() => ({})), soc); if (f.error) return bad(f.error); const v = f.v;
-      const r = await env.DB.prepare('INSERT INTO red_meetings (society_id, kind, held_on, agenda, attendees_count, resolution_text, resolution_passed, minutes_document_id, next_action, next_action_due, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-        .bind(soc.id, v.kind, v.held, v.agenda, v.att, v.text, v.passed, v.doc, v.action, v.due, req.user.user_id, nowStr()).run();
+      const r = await env.DB.prepare('INSERT INTO red_meetings (society_id, kind, held_on, agenda, attendees_count, resolution_text, resolution_passed, minutes_document_id, next_action, next_action_due, created_by, created_at, next_action_owner) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+        .bind(soc.id, v.kind, v.held, v.agenda, v.att, v.text, v.passed, v.doc, v.action, v.due, req.user.user_id, nowStr(), v.owner).run();
+      if (v.ids) await env.DB.batch(attendStmts(env, r.meta.last_row_id, v.ids, soc.id));
       await audit(env, req.user, 'create', 'red_meetings', r.meta.last_row_id, `Logged a ${v.kind.replace('_', ' ')} meeting of ${soc.name} on ${v.held}`).run();
       return json({ ok: true, data: { id: r.meta.last_row_id } });
     } catch (e) { return serverError(e, 'red-meeting-add'); }
@@ -521,8 +589,8 @@ export function registerRedevelopment(router, h) {
       const b = await req.json().catch(() => ({}));
       const f = await meetingFields(env, { ...mt, ...b, minutes_document_id: b.minutes_document_id !== undefined ? b.minutes_document_id : mt.minutes_document_id }, { project_id: mt.project_id }); if (f.error) return bad(f.error); const v = f.v;
       const done = b.next_action_done !== undefined ? (b.next_action_done ? 1 : 0) : mt.next_action_done;
-      await env.DB.batch([env.DB.prepare('UPDATE red_meetings SET kind = ?, held_on = ?, agenda = ?, attendees_count = ?, resolution_text = ?, resolution_passed = ?, minutes_document_id = ?, next_action = ?, next_action_due = ?, next_action_done = ? WHERE id = ?')
-        .bind(v.kind, v.held, v.agenda, v.att, v.text, v.passed, v.doc, v.action, v.due, done, mt.id), audit(env, req.user, 'update', 'red_meetings', mt.id, `Edited the meeting of ${mt.society_name} on ${v.held}`)]);
+      await env.DB.batch([env.DB.prepare('UPDATE red_meetings SET kind = ?, held_on = ?, agenda = ?, attendees_count = ?, resolution_text = ?, resolution_passed = ?, minutes_document_id = ?, next_action = ?, next_action_due = ?, next_action_done = ?, next_action_owner = ? WHERE id = ?')
+        .bind(v.kind, v.held, v.agenda, v.att, v.text, v.passed, v.doc, v.action, v.due, done, b.next_action_owner !== undefined ? v.owner : mt.next_action_owner, mt.id), ...attendStmts(env, mt.id, v.ids, mt.society_id), audit(env, req.user, 'update', 'red_meetings', mt.id, `Edited the meeting of ${mt.society_name} on ${v.held}`)]);
       return json({ ok: true });
     } catch (e) { return serverError(e, 'red-meeting-edit'); }
   }));

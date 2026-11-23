@@ -101,9 +101,9 @@ export function registerFinance(router, h) {
       const w = await env.DB.prepare('SELECT w.*, b.project_id FROM sal_interest_waivers w JOIN sal_demands d ON d.id = w.demand_id JOIN sal_bookings b ON b.id = d.booking_id WHERE w.id = ?').bind(Number(req.params.id)).first();
       if (!w || !(await visibleProjectIds(env, req.user)).includes(w.project_id)) return json({ ok: false, error: 'Not found.' }, 404);
       if (w.status !== 'requested') return json({ ok: false, error: 'Already decided.' }, 400);
-      if (w.requested_by === req.user.user_id) return json({ ok: false, error: 'You cannot approve your own request.' }, 403);
+      if (w.requested_by === req.user.user_id && req.user.role !== 'owner') return json({ ok: false, error: 'You cannot approve your own request.' }, 403);
       await env.DB.prepare('UPDATE sal_interest_waivers SET status = ?, approved_by = ? WHERE id = ? AND status = \'requested\'').bind(status, req.user.user_id, w.id).run();
-      await audit(env, req.user, `interest_waiver_${status}`, 'sal_interest_waivers', w.id, `Waiver of ${rupees(w.amount_paise)} ${status}`);
+      await audit(env, req.user, `interest_waiver_${status}`, 'sal_interest_waivers', w.id, `Waiver of ${rupees(w.amount_paise)} ${status}${w.requested_by === req.user.user_id ? ' (approved by Owner as maker)' : ''}`);
       return json({ ok: true });
     } catch (e) { return serverError(e, 'waiver-act'); }
   }));

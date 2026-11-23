@@ -71,16 +71,28 @@ async function render(d) {
   let body = '';
   if (d.kind === 'po') {
     const p = d.po;
+    const CH = [['transport_paise', 'Transportation'], ['loading_paise', 'Loading / unloading'], ['packing_paise', 'Packing and forwarding'], ['insurance_paise', 'Transit insurance'], ['other_charges_paise', p.other_charges_label || 'Other charges']];
+    const charges = CH.filter(([k]) => p[k] > 0);
+    const chTotal = charges.reduce((t, [k]) => t + p[k], 0);
+    const goods = p.amount_paise - chTotal;
+    const hsn = d.items.some((i) => i.hsn);
+    const cols = hsn ? 7 : 6;
+    let det = {}; try { det = JSON.parse(p.category_details || '{}') || {}; } catch (x) { det = {}; }
+    const CAT = { cement: 'Cement', steel: 'Steel', rmc: 'Ready-mix concrete', sand_aggregate: 'Sand / aggregate', blocks_bricks: 'Blocks / bricks', electrical: 'Electrical', plumbing: 'Plumbing', tiles: 'Tiles', paint: 'Paint', hardware: 'Hardware', other: 'Other' };
+    const termRows = [['Material', CAT[p.material_category]], ...Object.entries(det), ['Price basis', p.price_basis], ['Delivery by', p.delivery_date], ['Deliver to', p.delivery_address], ['Payment terms', p.payment_terms], ['Warranty / guarantee', p.warranty], ['Penalty for delay or poor quality', p.penalty_clause]].filter(([, v]) => v);
     body = `<div class="doc-title">Purchase Order</div>
       <div class="two"><div><b>To:</b><br>${e(p.vendor)}<br>${e(p.vendor_address || '')}<br>${p.vendor_gstin ? 'GSTIN ' + e(p.vendor_gstin) : ''}</div>
       <div style="text-align:right"><b>PO No:</b> ${e(p.po_no)}<br><b>Date:</b> ${e(String(p.created_at).substring(0, 10))}<br><b>Project:</b> ${e(p.project_name)}<br>${e(p.project_address || '')}</div></div>
-      <table><tr><th>#</th><th>Description</th><th class="r">Qty</th><th>Unit</th><th class="r">Rate</th><th class="r">Amount</th></tr>
-      ${d.items.map((i, n) => `<tr><td>${n + 1}</td><td>${e(i.description)}</td><td class="r">${e(i.qty)}</td><td>${e(i.unit)}</td><td class="r">${inr(i.rate_paise)}</td><td class="r">${inr(i.amount_paise)}</td></tr>`).join('') || `<tr><td>1</td><td colspan="4">As agreed</td><td class="r">${inr(p.amount_paise)}</td></tr>`}
-      <tr><td colspan="5" class="r">Subtotal</td><td class="r">${inr(p.amount_paise)}</td></tr>
-      <tr><td colspan="5" class="r">GST @ ${(p.gst_bp / 100).toFixed(1)}%</td><td class="r">${inr(p.gst_paise)}</td></tr>
-      <tr><th colspan="5" class="r">Total</th><th class="r">${inr(p.total_paise)}</th></tr></table>
+      <table><tr><th>#</th><th>Description</th>${hsn ? '<th>HSN</th>' : ''}<th class="r">Qty</th><th>Unit</th><th class="r">Rate</th><th class="r">Amount</th></tr>
+      ${d.items.map((i, n) => `<tr><td>${n + 1}</td><td>${e(i.description)}</td>${hsn ? `<td>${e(i.hsn || '')}</td>` : ''}<td class="r">${e(i.qty)}</td><td>${e(i.unit)}</td><td class="r">${inr(i.rate_paise)}</td><td class="r">${inr(i.amount_paise)}</td></tr>`).join('') || `<tr><td>1</td><td colspan="${cols - 2}">As agreed</td><td class="r">${inr(goods)}</td></tr>`}
+      <tr><td colspan="${cols - 1}" class="r">Material value</td><td class="r">${inr(goods)}</td></tr>
+      ${charges.map(([k, l]) => `<tr><td colspan="${cols - 1}" class="r">${e(l)}</td><td class="r">${inr(p[k])}</td></tr>`).join('')}
+      ${charges.length ? `<tr><td colspan="${cols - 1}" class="r">Subtotal</td><td class="r">${inr(p.amount_paise)}</td></tr>` : ''}
+      <tr><td colspan="${cols - 1}" class="r">GST${charges.length && p.charges_gst_bp != null && p.charges_gst_bp !== p.gst_bp ? ` (material ${(p.gst_bp / 100).toFixed(1)}%, charges ${(p.charges_gst_bp / 100).toFixed(1)}%)` : ` @ ${(p.gst_bp / 100).toFixed(1)}%`}</td><td class="r">${inr(p.gst_paise)}</td></tr>
+      <tr><th colspan="${cols - 1}" class="r">Total</th><th class="r">${inr(p.total_paise)}</th></tr></table>
       <div class="words">${rupeeWords(p.total_paise)}</div>
-      ${p.terms ? `<p><b>Terms:</b> ${e(p.terms)}</p>` : ''}`;
+      ${termRows.length ? `<table style="margin-top:4mm">${termRows.map(([k, v]) => `<tr><td style="width:38%"><b>${e(k)}</b></td><td>${e(v)}</td></tr>`).join('')}</table>` : ''}
+      ${p.terms ? `<p><b>Other terms:</b> ${e(p.terms)}</p>` : ''}`;
   } else if (d.kind === 'demand') {
     const x = d.demand; const total = x.amount_paise + (x.gst_paise || 0);
     body = `<div class="doc-title">Demand Letter</div>

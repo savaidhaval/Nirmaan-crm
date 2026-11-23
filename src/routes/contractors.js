@@ -228,14 +228,14 @@ export function registerContractors(router, h) {
     try {
       const { wo, err } = await loadWo(env, req); if (err) return err;
       const b = await req.json().catch(() => ({}));
-      if (wo.created_by === req.user.user_id) return json({ ok: false, error: 'You cannot approve a work order you drew up.' }, 403);
+      if (wo.created_by === req.user.user_id && req.user.role !== 'owner') return json({ ok: false, error: 'You cannot approve a work order you drew up.' }, 403);
       const limit = await pmLimit(env);
       if (!mayDecide(req.user, wo.value_paise, limit)) return json({ ok: false, error: `This work order is above your limit (${rupees(limit)}). The Owner must decide.` }, 403);
       if (decision === 'rejected' && !String(b.note || '').trim()) return json({ ok: false, error: 'Please say why it is rejected.' }, 400);
       const r = await env.DB.prepare("UPDATE con_work_orders SET status = ?, approved_by = ?, approved_at = ?, decision_note = ? WHERE id = ? AND status = 'pending_approval'")
         .bind(decision, req.user.user_id, nowStr(), String(b.note || '').slice(0, 300), wo.id).run();
       if (!r.meta.changes) return json({ ok: false, error: 'This work order is not waiting for approval.' }, 409);
-      await audit(env, req.user, decision === 'approved' ? 'approve' : 'reject', 'con_work_orders', wo.id, `${req.user.name} ${decision} ${wo.wo_no} (${rupees(wo.value_paise)})`).run();
+      await audit(env, req.user, decision === 'approved' ? 'approve' : 'reject', 'con_work_orders', wo.id, `${req.user.name} ${decision} ${wo.wo_no} (${rupees(wo.value_paise)})${wo.created_by === req.user.user_id ? ' (approved by Owner as maker)' : ''}`).run();
       if (decision === 'approved') emit('wo.approved', { wo_id: wo.id, project_id: wo.project_id, contractor_id: wo.contractor_id, value_paise: wo.value_paise });
       if (wo.created_by) await env.DB.prepare('INSERT INTO notifications (user_id, title, body, link, created_at) VALUES (?, ?, ?, ?, ?)').bind(wo.created_by, `Work order ${decision}: ${wo.wo_no}`, String(b.note || ''), 'contractors', nowStr()).run();
       const warnings = decision === 'approved' && wo.budget_head_id ? await onWoApproved(env, wo) : [];
@@ -346,7 +346,7 @@ export function registerContractors(router, h) {
   router.post('/api/contractors/ra-bills/:id/check', guard('A', async (req, env) => {
     try {
       const { ra, err } = await loadRa(env, req); if (err) return err;
-      if (ra.created_by === req.user.user_id) return json({ ok: false, error: 'You cannot check a bill you raised.' }, 403);
+      if (ra.created_by === req.user.user_id && req.user.role !== 'owner') return json({ ok: false, error: 'You cannot check a bill you raised.' }, 403);
       const r = await env.DB.prepare("UPDATE con_ra_bills SET status = 'checked', checked_by = ? WHERE id = ? AND status = 'draft'").bind(req.user.user_id, ra.id).run();
       if (!r.meta.changes) return json({ ok: false, error: 'Only a draft can be checked.' }, 409);
       await notifyRoles(env, ra.net_paise > await pmLimit(env) ? ['owner'] : ['owner', 'pm'], `RA bill to approve: ${ra.wo_no} / RA ${ra.ra_no}`, `Net ${rupees(ra.net_paise)}`, req.user.user_id);
@@ -357,7 +357,7 @@ export function registerContractors(router, h) {
   router.post('/api/contractors/ra-bills/:id/approve', guard('A', async (req, env) => {
     try {
       const { ra, err } = await loadRa(env, req); if (err) return err;
-      if (ra.created_by === req.user.user_id) return json({ ok: false, error: 'You cannot approve a bill you raised.' }, 403);
+      if (ra.created_by === req.user.user_id && req.user.role !== 'owner') return json({ ok: false, error: 'You cannot approve a bill you raised.' }, 403);
       const limit = await pmLimit(env);
       if (!mayDecide(req.user, ra.net_paise, limit)) return json({ ok: false, error: `This bill is above your limit (${rupees(limit)}). The Owner must approve it.` }, 403);
       const now = nowStr();
@@ -370,7 +370,7 @@ export function registerContractors(router, h) {
         env.DB.prepare(`INSERT INTO con_ledger (contractor_id, project_id, wo_id, kind, amount_paise, ref_table, ref_id, created_at)
           SELECT ?2, ?3, w.id, 'advance_recovery', r.advance_recovery_paise, 'con_ra_bills', r.id, ?4 FROM con_ra_bills r JOIN con_work_orders w ON w.id = r.wo_id
           WHERE r.id = ?1 AND r.status = 'approved' AND r.approved_by = ?5 AND r.advance_recovery_paise > 0 AND NOT EXISTS (SELECT 1 FROM con_ledger WHERE ref_table = 'con_ra_bills' AND ref_id = ?1 AND kind = 'advance_recovery')`).bind(ra.id, ra.contractor_id, ra.project_id, now, req.user.user_id),
-        audit(env, req.user, 'approve', 'con_ra_bills', ra.id, `${req.user.name} approved ${ra.wo_no} / RA ${ra.ra_no} (net ${rupees(ra.net_paise)})`),
+        audit(env, req.user, 'approve', 'con_ra_bills', ra.id, `${req.user.name} approved ${ra.wo_no} / RA ${ra.ra_no} (net ${rupees(ra.net_paise)})${ra.created_by === req.user.user_id ? ' (approved by Owner as maker)' : ''}`),
       ]);
       if (!res[0].meta.changes) return json({ ok: false, error: 'This bill is not waiting for approval (it must be checked first).' }, 409);
       emit('ra.approved', { ra_id: ra.id, wo_id: ra.wo_id, project_id: ra.project_id, gross_paise: ra.gross_paise, net_paise: ra.net_paise });

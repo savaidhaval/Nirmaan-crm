@@ -1,0 +1,127 @@
+import { createRequire } from 'node:module';
+const { chromium } = createRequire(import.meta.url)('/opt/node-tools/node_modules/playwright');
+const BASE = process.env.BASE || 'http://localhost:8787', SHOTS = '/tmp/claude-0/scratch/shots';
+const run = Date.now().toString(36);
+let pass = 0, fail = 0; const ok = (n, c, x = '') => { c ? pass++ : fail++; console.log(`${c ? 'PASS' : 'FAIL'}  ${n}${c ? '' : '  ' + x}`); };
+class C { constructor() { this.cookie = ''; } async call(m, p, b) { const h = { 'X-NirmaanCRM': '1' }; if (this.cookie) h.cookie = this.cookie; let body; if (b) { h['Content-Type'] = 'application/json'; body = JSON.stringify(b); }
+  const r = await fetch(BASE + p, { method: m, headers: h, body }); const sc = r.headers.get('set-cookie'); if (sc) this.cookie = sc.split(';')[0]; let d = null; try { d = await r.json(); } catch (e) {} return { status: r.status, data: d && d.data, err: d && d.error }; } }
+const o = new C(); await o.call('POST', '/api/auth/login', { email: 'owner@test.local', password: 'CiStrongPass-12345' });
+const pid = (await o.call('POST', '/api/projects', { name: 'UI Tower ' + run, code: 'UI' + run.toUpperCase().slice(-5), budget_paise: 5e9 })).data.id;
+await o.call('POST', '/api/settings/con.enabled', { value: 'on' });
+await o.call('POST', '/api/settings/con.pm_approval_limit_paise', { value: 50000000 });
+const users = {};
+for (const role of ['site', 'pm', 'purchase', 'accounts', 'sales', 'viewer']) {
+  const email = `ui-${role}-${run}@test.local`; const r = await o.call('POST', '/api/users', { name: 'UI ' + role + ' ' + run, email, role, projects: role === 'site' ? [pid] : [] });
+  const c = new C(); await c.call('POST', '/api/auth/login', { email, password: r.data.temporaryPassword }); const pw = 'UiStrongPass-' + run;
+  await c.call('POST', '/api/auth/change-password', { currentPassword: r.data.temporaryPassword, newPassword: pw }); users[role] = { email, pw };
+}
+const browser = await chromium.launch();
+const ctxs = {};
+async function page(role) {
+  if (!ctxs[role]) {
+    const ctx = await browser.newContext({ viewport: { width: 390, height: 800 } });
+    const email = role === 'owner' ? 'owner@test.local' : users[role].email, password = role === 'owner' ? 'CiStrongPass-12345' : users[role].pw;
+    const r = await ctx.request.post(BASE + '/api/auth/login', { headers: { 'X-NirmaanCRM': '1', 'Content-Type': 'application/json' }, data: { email, password } });
+    if (!r.ok()) throw new Error('login ' + role + ' ' + r.status());
+    ctxs[role] = ctx;
+  }
+  const p = await ctxs[role].newPage(); p.on('dialog', (d) => d.accept()); p.on('pageerror', (e) => console.log('PAGEERROR', role, e.message));
+  await p.goto(BASE + '/'); await p.waitForFunction(() => typeof navigate === 'function' && typeof currentUser !== 'undefined' && currentUser, null, { timeout: 15000 }); return p;
+}
+const go = async (p, route) => { await p.evaluate((r) => navigate(r), route); await p.waitForTimeout(800); };
+const toastText = async (p) => { await p.waitForTimeout(500); return p.evaluate(() => (document.getElementById('toast') || {}).textContent || ''); };
+const submit = (p) => p.click('#modal-form button[type=submit]');
+const pick = (p, sel, label) => p.selectOption(sel, { label });
+const shot = (p, n) => p.screenshot({ path: `${SHOTS}/${n}.png` });
+
+// ===== phone section bar =====
+const ow = await page('owner'); await go(ow, 'projects'); await ow.waitForTimeout(800);
+ok('on a phone, opening Projects shows a sliding bar of its pages', await ow.evaluate(() => { const b = document.getElementById('sub-nav'); return !!b && getComputedStyle(b).display !== 'none' && b.querySelectorAll('.sub-link').length >= 4 && b.querySelector('.active').textContent.includes('Projects'); }));
+ok('the bar slides sideways and has a Tasks page', await ow.evaluate(() => { const b = document.getElementById('sub-nav'); return b.scrollWidth > b.clientWidth && [...b.querySelectorAll('.sub-link')].some((a) => a.textContent.includes('Tasks')); }));
+await shot(ow, '190-section-bar');
+await ow.click('#sub-nav [data-route="approvals"]'); await ow.waitForTimeout(900);
+ok('tapping a page in the bar opens it and marks it', (await ow.textContent('h1')).includes('Approvals') && await ow.evaluate(() => document.querySelector('#sub-nav .active').dataset.route === 'approvals'));
+
+// ===== new project with its details =====
+await go(ow, 'projects'); await ow.click('#btn-new-project'); await ow.waitForSelector('#f_members_count');
+await ow.fill('#f_name', 'Om Sai ' + run); await ow.fill('#f_code', 'OS' + run.toUpperCase().slice(-5));
+await ow.fill('#f_members_count', '36'); await ow.fill('#f_plot_area_sqm', '980'); await ow.fill('#f_ward', 'H/East');
+await pick(ow, '#f_planning_authority', 'MCGM (BMC)');
+await ow.click('.multi-item:has-text("SRA")'); await ow.click('.multi-item:has-text("Estate Department")');
+await ow.fill('#f_property_card_details', 'Holder: Om Sai CHS, 980 sq m'); await ow.fill('#f_conveyance_details', 'BDR-4/555/1999');
+await ow.fill('#f_maps_url', 'https://www.google.com/maps/place/x/@19.0728,72.8826,17z');
+await shot(ow, '191-new-project-form');
+await submit(ow); await ow.waitForTimeout(1800);
+const created = (await o.call('GET', '/api/projects')).data.projects.find((p) => p.name === 'Om Sai ' + run);
+ok('the new project keeps members, plot area, authorities, title details and the map link', created && created.members_count === 36 && created.plot_area_sqm === 980 && JSON.parse(created.other_authorities).includes('SRA') && created.maps_url && created.lat, JSON.stringify(created || {}).slice(0, 300));
+
+// ===== quick view =====
+await o.call('POST', `/api/approvals`, { project_id: created.id, name: 'iod', owner_user_id: (await o.call('GET', '/api/auth/me')).data.user.id, target_date: '2026-01-05' });
+await go(ow, 'projects'); await ow.waitForSelector(`[data-pq="${created.id}"]`); await ow.click(`[data-pq="${created.id}"]`); await ow.waitForSelector('#pq-tasks');
+const qv = (await ow.textContent('#app-main')).replace(/\s+/g, ' ');
+ok('tapping a project shows its details, where it stands and the open tasks with who is responsible', qv.includes('Where it stands') && qv.includes('Ongoing tasks') && qv.includes('In charge') && qv.includes('36') && qv.includes('H/East'), qv.slice(0, 300));
+ok('a late task is marked Late', qv.includes('Late'));
+ok('there is an Open in Google Maps button and no GPS button', !!(await ow.$('a:has-text("Open in Google Maps")')) && !(await ow.$('[data-loc]')));
+await shot(ow, '192-project-quick-view');
+
+// ===== approvals: AutoDCR, capitals, steps =====
+await go(ow, 'approvals'); await ow.selectOption('#apr-p', String(created.id)); await ow.waitForTimeout(1000);
+await ow.click('#dcr-set'); await ow.fill('#f_url', 'https://autodcr.mcgm.gov.in/p/42'); await submit(ow); await ow.waitForTimeout(1000);
+ok('AutoDCR link sits on Approvals with an Open button, and cannot be removed', !!(await ow.$('a:has-text("Open AutoDCR")')) && (await ow.textContent('#apr-dcr')).includes('cannot be removed'));
+ok('approval names show in capitals', await ow.evaluate(() => { const b = document.querySelector('#approvals-list .caps'); return b && getComputedStyle(b).textTransform === 'uppercase' && b.textContent === b.textContent.toUpperCase(); }));
+await ow.click('#approvals-list [data-id]'); await ow.waitForSelector('#ap-tpl');
+await shot(ow, '193-approval-detail');
+await ow.click('#ap-tpl'); await ow.waitForTimeout(1200);
+const stepsTxt = await ow.textContent('.modal');
+ok('"Add the usual steps" fills the IOD steps; the Assistant Engineer puts up the IOD', stepsTxt.includes('IOD PREPARED AND PUT UP') && stepsTxt.includes('Assistant Engineer (Building Proposal)'));
+await ow.click('#ap-file'); await ow.waitForSelector('#f_holder_designation');
+await ow.selectOption('#f_holder_designation', 'Assistant Engineer (Building Proposal)'); await ow.selectOption('#f_next_designation', 'Executive Engineer (Building Proposal)');
+await shot(ow, '194-file-moved-form'); await submit(ow); await ow.waitForTimeout(1200);
+ok('"File moved" records who holds the file now and who gets it next', (await ow.textContent('.modal')).includes('File is with: Assistant Engineer (Building Proposal)'));
+await shot(ow, '195-approval-steps');
+await ow.evaluate(() => document.querySelectorAll('.modal-overlay').forEach((x) => x.remove()));
+
+// ===== tasks page =====
+await go(ow, 'tasks'); await ow.waitForSelector('#tasks-body .card');
+ok('the Tasks page lists open work with the person in charge and date', (await ow.textContent('#tasks-body')).includes('In charge:'));
+await shot(ow, '196-tasks');
+
+// ===== viewer =====
+const fd = new FormData(); fd.append('file', new Blob([Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==', 'base64')], { type: 'image/png' }), 'site.png');
+fd.append('title', 'Site photo ' + run); fd.append('project_id', String(created.id)); fd.append('category', 'drawing');
+const upr = await fetch(BASE + '/api/files/upload', { method: 'POST', headers: { 'X-NirmaanCRM': '1', cookie: o.cookie }, body: fd }); const up = (await upr.json()).data;
+await go(ow, 'documents'); await ow.waitForTimeout(1200);
+await ow.evaluate((id) => { const a = document.createElement('a'); a.href = `/api/files/download/${id}`; a.id = 'tst-link'; a.textContent = 'open'; document.getElementById('app-main').appendChild(a); }, up.id);
+await ow.click('#tst-link'); await ow.waitForSelector('.viewer-modal img', { timeout: 8000 }).catch(() => {});
+ok('tapping a file opens it inside the app (no download)', !!(await ow.$('.viewer-modal img')) && await ow.evaluate(() => document.querySelector('.viewer-modal img').complete));
+await shot(ow, '197-file-viewer'); await ow.click('#vw-close');
+
+// ===== redevelopment: member terms, attendees =====
+const soc = (await o.call('POST', '/api/redev/societies', { project_id: created.id, name: 'Om Sai CHS ' + run })).data.id;
+for (const [n, u] of [['Asha', '101'], ['Bala', '102'], ['Chitra', '103']]) await o.call('POST', `/api/redev/societies/${soc}/members`, { member_name: n, unit_label: u, carpet_sqft: 400, member_type: 'residential' });
+await go(ow, 'redevelopment'); await ow.click(`[data-soc="${soc}"]`); await ow.waitForSelector('[data-terms]');
+await ow.click('[data-terms]'); await ow.waitForSelector('#f_extra_area_pct');
+await ow.fill('#f_extra_area_pct', '35'); await ow.fill('#f_y1', '30000'); await ow.fill('#f_y2', '33000'); await ow.fill('#f_corpus', '500000'); await ow.fill('#f_car_parks', '1'); await ow.check('#f_buys_extra'); await ow.fill('#f_buys_extra_sqft', '50');
+await shot(ow, '198-member-terms'); await submit(ow); await ow.waitForTimeout(1200);
+ok('member card shows the new RERA carpet worked out (540 sq ft) and "Buying extra area"', (await ow.textContent('#rd-pane')).includes('new RERA carpet 540 sq ft') && (await ow.textContent('#rd-pane')).includes('Buying extra area'));
+await ow.click('[data-tab="meetings"]'); await ow.waitForSelector('#mt-new'); await ow.click('#mt-new'); await ow.waitForSelector('.multi-item');
+await ow.click('.multi-item:has-text("Asha")'); await ow.click('.multi-item:has-text("Chitra")'); await ow.fill('#f_next_action', 'Send draft DA');
+await shot(ow, '199-meeting-attendees'); await submit(ow); await ow.waitForTimeout(1200);
+ok('the meeting saves 2 present from the ticked names, with the person in charge of the next action', (await ow.textContent('#rd-pane')).includes('2 present') && (await ow.textContent('#rd-pane')).includes('In charge:'));
+
+// ===== store: stock received =====
+const it = (await o.call('POST', '/api/stores/items', { name: 'Bricks ' + run, unit: 'nos' })).data.id;
+await go(ow, 'stores'); await ow.selectOption('#stk-project', String(created.id)); await ow.waitForTimeout(800);
+await ow.click('#stk-receive'); await ow.waitForSelector('#f_qty'); await ow.selectOption('#f_item_id', String(it)); await ow.fill('#f_qty', '500'); await submit(ow); await ow.waitForTimeout(1200);
+ok('"Stock received" adds opening stock to the count', (await ow.textContent('#stk-body')).includes('500'));
+await shot(ow, '200-store-received');
+
+// ===== PO charges & terms =====
+const vend = (await o.call('POST', '/api/procurement/vendors', { name: 'UI vendor ' + run })).data.id;
+await o.call('POST', '/api/procurement/pos', { project_id: created.id, vendor_id: vend, material_category: 'steel', items: [{ description: 'TMT 12mm', qty: 2, unit: 'MT', rate_paise: 5500000 }] });
+await go(ow, 'procurement'); await ow.waitForSelector('[data-poterms]'); await ow.click('[data-poterms]'); await ow.waitForSelector('#f_transport_paise');
+await ow.fill('#f_transport_paise', '4000'); await ow.fill('#f_loading_paise', '1000'); await ow.fill('#f_x1', 'Fe 500D');
+await shot(ow, '201-po-charges'); await submit(ow); await ow.waitForTimeout(1200);
+ok('PO charges are saved and the total updates', (await toastText(ow)).includes('New total'));
+
+await browser.close(); console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);

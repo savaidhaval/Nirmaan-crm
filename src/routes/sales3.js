@@ -74,7 +74,7 @@ export function registerSales3(router, h) {
       const rq = await env.DB.prepare('SELECT * FROM sal_receipt_requests WHERE id = ?').bind(Number(req.params.id)).first();
       if (!rq) return json({ ok: false, error: 'Request not found.' }, 404);
       const { booking, err } = await loadBooking(env, req, rq.booking_id); if (err) return err;
-      if (rq.requested_by === req.user.user_id) return json({ ok: false, error: 'You cannot approve a receipt you recorded.' }, 403);
+      if (rq.requested_by === req.user.user_id && req.user.role !== 'owner') return json({ ok: false, error: 'You cannot approve a receipt you recorded.' }, 403);
       if (booking.status === 'cancelled') return json({ ok: false, error: 'This booking is cancelled.' }, 400);
       const claim = await env.DB.prepare("UPDATE sal_receipt_requests SET status = 'approving' WHERE id = ? AND status = 'pending'").bind(rq.id).run();
       if (!claim.meta.changes) return json({ ok: false, error: 'This receipt was already decided.' }, 409);
@@ -83,7 +83,7 @@ export function registerSales3(router, h) {
       const posted = await shared.postReceipt(env, booking, fields, { user_id: rq.requested_by, name: 'recorded by request' }, [
         env.DB.prepare("UPDATE sal_receipt_requests SET status = 'approved', decided_by = ?, decided_at = ?, receipt_id = last_insert_rowid() WHERE id = ? AND status = 'approving'").bind(req.user.user_id, nowStr(), rq.id)]);
       claimed = null;
-      await audit(env, req.user, 'approve', 'sal_receipt_requests', rq.id, `${req.user.name} approved receipt ${posted.receiptNo} of ${rupees(rq.amount_paise)}`).run();
+      await audit(env, req.user, 'approve', 'sal_receipt_requests', rq.id, `${req.user.name} approved receipt ${posted.receiptNo} of ${rupees(rq.amount_paise)}${rq.requested_by === req.user.user_id ? ' (approved by Owner as maker)' : ''}`).run();
       if (rq.requested_by) await env.DB.prepare('INSERT INTO notifications (user_id, title, body, link, created_at) VALUES (?, ?, ?, ?, ?)').bind(rq.requested_by, `Receipt approved: ${posted.receiptNo}`, `${booking.customer_name}, ${rupees(rq.amount_paise)}`, 'sales', nowStr()).run();
       return json({ ok: true, data: { receipt_no: posted.receiptNo } });
     } catch (e) {
@@ -144,7 +144,7 @@ export function registerSales3(router, h) {
       const a = await env.DB.prepare('SELECT * FROM sal_adjustments WHERE id = ?').bind(Number(req.params.id)).first();
       if (!a) return json({ ok: false, error: 'Not found.' }, 404);
       const { booking, err } = await loadBooking(env, req, a.booking_id); if (err) return err;
-      if (a.created_by === req.user.user_id) return json({ ok: false, error: 'You cannot approve a note you raised.' }, 403);
+      if (a.created_by === req.user.user_id && req.user.role !== 'owner') return json({ ok: false, error: 'You cannot approve a note you raised.' }, 403);
       const sign = a.kind === 'debit_note' ? -1 : 1;          // delta that is SUBTRACTED from the demand: positive for credit notes, negative for debit notes
       const dAmt = sign * a.amount_paise, dGst = sign * a.gst_paise;
       const fy = fyOf(); const key = `${KIND_PREFIX[a.kind].toLowerCase()}:${booking.project_id}:${fy}`;
@@ -152,8 +152,8 @@ export function registerSales3(router, h) {
       const now = nowStr();
       // The claim only succeeds while the demand can take the change (never below what was paid). Every later statement runs only if the one before changed a row.
       const res = await env.DB.batch([
-        env.DB.prepare(`UPDATE sal_adjustments SET status = 'approved', approved_by = ?1, approved_at = ?2 WHERE id = ?3 AND status = 'pending' AND created_by != ?1
-          AND EXISTS (SELECT 1 FROM sal_demands d WHERE d.id = sal_adjustments.demand_id AND d.amount_paise - ?4 >= 0 AND (d.amount_paise - ?4) + (COALESCE(d.gst_paise, 0) - ?5) >= d.settled_paise)`).bind(req.user.user_id, now, a.id, dAmt, dGst),
+        env.DB.prepare(`UPDATE sal_adjustments SET status = 'approved', approved_by = ?1, approved_at = ?2 WHERE id = ?3 AND status = 'pending' AND (created_by != ?1 OR ?6 = 1)
+          AND EXISTS (SELECT 1 FROM sal_demands d WHERE d.id = sal_adjustments.demand_id AND d.amount_paise - ?4 >= 0 AND (d.amount_paise - ?4) + (COALESCE(d.gst_paise, 0) - ?5) >= d.settled_paise)`).bind(req.user.user_id, now, a.id, dAmt, dGst, req.user.role === 'owner' ? 1 : 0),
         env.DB.prepare('INSERT INTO counters (key, value) SELECT ?1, 1 WHERE changes() > 0 ON CONFLICT(key) DO UPDATE SET value = value + 1').bind(key),
         env.DB.prepare("UPDATE sal_adjustments SET adj_no = ?1 || printf('%04d', (SELECT value FROM counters WHERE key = ?2)) WHERE id = ?3 AND status = 'approved' AND adj_no IS NULL AND approved_by = ?4 AND changes() > 0")
           .bind(`${KIND_PREFIX[a.kind]}-${proj ? proj.code : booking.project_id}-${fy}-`, key, a.id, req.user.user_id),
@@ -166,7 +166,7 @@ export function registerSales3(router, h) {
         return json({ ok: false, error: cur.status !== 'pending' ? 'This note was already decided.' : 'That would reduce the demand below what the customer has already paid.' }, cur.status !== 'pending' ? 409 : 400);
       }
       const done = await env.DB.prepare('SELECT adj_no FROM sal_adjustments WHERE id = ?').bind(a.id).first();
-      await audit(env, req.user, 'approve', 'sal_adjustments', a.id, `${a.kind.replace('_', ' ')} ${done.adj_no} of ${rupees(a.amount_paise)} approved for ${booking.customer_name}`).run();
+      await audit(env, req.user, 'approve', 'sal_adjustments', a.id, `${a.kind.replace('_', ' ')} ${done.adj_no} of ${rupees(a.amount_paise)} approved for ${booking.customer_name}${a.created_by === req.user.user_id ? ' (approved by Owner as maker)' : ''}`).run();
       return json({ ok: true, data: { adj_no: done.adj_no } });
     } catch (e) { return serverError(e, 'adj-approve'); }
   }));
@@ -414,14 +414,14 @@ export function registerSales3(router, h) {
     try {
       const s = await env.DB.prepare('SELECT * FROM sal_cost_sheets WHERE id = ?').bind(Number(req.params.id)).first();
       if (!s || !(await sheetAccess(env, req, s))) return json({ ok: false, error: 'Cost sheet not found.' }, 404);
-      if (s.created_by === req.user.user_id) return json({ ok: false, error: 'You cannot approve a cost sheet you made.' }, 403);
+      if (s.created_by === req.user.user_id && req.user.role !== 'owner') return json({ ok: false, error: 'You cannot approve a cost sheet you made.' }, 403);
       const b = await req.json().catch(() => ({}));
       const limit = Math.round(num(await getSetting(env, 'sales.discount_pm_limit_paise')));
       if (approve && req.user.role !== 'owner' && s.below_list_paise > limit) return json({ ok: false, error: `This cost sheet is ${rupees(s.below_list_paise)} below the rate card, above the PM's limit (${rupees(limit)}). The Owner must approve it.` }, 403);
       if (!approve && !String(b.note || '').trim()) return json({ ok: false, error: 'Please say why it is rejected.' }, 400);
       const r = await env.DB.prepare("UPDATE sal_cost_sheets SET status = ?, approved_by = ?, approved_at = ?, decision_note = ? WHERE id = ? AND status = 'pending_approval'").bind(approve ? 'approved' : 'rejected', req.user.user_id, nowStr(), String(b.note || '').slice(0, 200), s.id).run();
       if (!r.meta.changes) return json({ ok: false, error: 'This cost sheet is not waiting for approval.' }, 409);
-      await audit(env, req.user, approve ? 'approve' : 'reject', 'sal_cost_sheets', s.id, `${req.user.name} ${approve ? 'approved' : 'rejected'} cost sheet v${s.version} (${rupees(s.agreement_value_paise)}, ${rupees(s.below_list_paise)} below rate card)`).run();
+      await audit(env, req.user, approve ? 'approve' : 'reject', 'sal_cost_sheets', s.id, `${req.user.name} ${approve ? 'approved' : 'rejected'} cost sheet v${s.version} (${rupees(s.agreement_value_paise)}, ${rupees(s.below_list_paise)} below rate card)${s.created_by === req.user.user_id ? ' (approved by Owner as maker)' : ''}`).run();
       if (s.created_by) await env.DB.prepare('INSERT INTO notifications (user_id, title, body, link, created_at) VALUES (?, ?, ?, ?, ?)').bind(s.created_by, `Cost sheet ${approve ? 'approved' : 'rejected'}`, String(b.note || ''), 'sales', nowStr()).run();
       return json({ ok: true });
     } catch (e) { return serverError(e, 'cs-decide'); }

@@ -53,8 +53,43 @@ export async function headsOnPo(env, poId) {
   return (await env.DB.prepare('SELECT DISTINCT budget_head_id AS h FROM pro_po_items WHERE po_id = ? AND budget_head_id IS NOT NULL').bind(poId).all()).results.map((r) => r.h);
 }
 
+
+// ----- PO charges and terms (transport, loading, packing, insurance, other; delivery, payment terms, warranty, penalty) -----
+const PO_CATEGORIES = ['cement', 'steel', 'rmc', 'sand_aggregate', 'blocks_bricks', 'electrical', 'plumbing', 'tiles', 'paint', 'hardware', 'other'];
+const CHARGE_KEYS = ['transport_paise', 'loading_paise', 'packing_paise', 'insurance_paise', 'other_charges_paise'];
+// Works out the PO totals with the charges and returns the UPDATE statement, or { error }.
+// goods: value of the material lines before GST. Charges carry their own GST rate (defaults to the PO rate).
+export function poTermsStatement(env, po, goods, b) {
+  const t = (k, n) => (b[k] === undefined ? (po[k] ?? null) : (String(b[k] || '').trim().slice(0, n) || null));
+  const ch = {};
+  for (const k of CHARGE_KEYS) {
+    const v = b[k] === undefined ? (po[k] || 0) : Math.round(Number(b[k]) || 0);
+    if (!(v >= 0 && v <= 1e13)) return { error: 'Check the charges.' };
+    ch[k] = v;
+  }
+  const cat = b.material_category === undefined ? (po.material_category ?? null) : (PO_CATEGORIES.includes(b.material_category) ? b.material_category : null);
+  let details = po.category_details ?? null;
+  if (b.category_details !== undefined) {
+    const o = b.category_details && typeof b.category_details === 'object' ? b.category_details : {};
+    const clean = Object.fromEntries(Object.entries(o).slice(0, 20).map(([k, v]) => [String(k).slice(0, 40), String(v == null ? '' : v).trim().slice(0, 200)]).filter(([, v]) => v));
+    details = Object.keys(clean).length ? JSON.stringify(clean) : null;
+  }
+  const chGst = b.charges_gst_bp === undefined ? (po.charges_gst_bp ?? null) : (b.charges_gst_bp === '' || b.charges_gst_bp == null ? null : Math.round(Number(b.charges_gst_bp)));
+  if (chGst != null && !(chGst >= 0 && chGst <= 5000)) return { error: 'Check the GST on charges.' };
+  if (b.delivery_date && !/^\d{4}-\d{2}-\d{2}$/.test(b.delivery_date)) return { error: 'Check the delivery date.' };
+  const charges = CHARGE_KEYS.reduce((x, k) => x + ch[k], 0);
+  const gstBp = Number(po.gst_bp) || 0;
+  const amount = goods + charges;
+  const gst = Math.round(goods * gstBp / 10000) + Math.round(charges * (chGst == null ? gstBp : chGst) / 10000);
+  return { stmt: env.DB.prepare(`UPDATE pro_pos SET material_category = ?, transport_paise = ?, loading_paise = ?, packing_paise = ?, insurance_paise = ?, other_charges_paise = ?, other_charges_label = ?, charges_gst_bp = ?,
+      price_basis = ?, delivery_date = ?, delivery_address = ?, payment_terms = ?, warranty = ?, penalty_clause = ?, category_details = ?, terms = ?, amount_paise = ?, gst_paise = ?, total_paise = ? WHERE id = ?`)
+    .bind(cat, ch.transport_paise, ch.loading_paise, ch.packing_paise, ch.insurance_paise, ch.other_charges_paise, t('other_charges_label', 60), chGst, t('price_basis', 80),
+      b.delivery_date === undefined ? (po.delivery_date ?? null) : (b.delivery_date || null), t('delivery_address', 300), t('payment_terms', 300), t('warranty', 200), t('penalty_clause', 300), details, t('terms', 2000), amount, gst, amount + gst, po.id),
+    amount, gst, total: amount + gst };
+}
+
 export function registerProcurement2(router, h) {
-  const { withAuth, json, serverError, visibleProjectIds, nowStr, csvBom, getCurrentUser, userCan, grnStockStatements } = h;
+  const { withAuth, json, serverError, visibleProjectIds, nowStr, csvBom, getCurrentUser, userCan, grnStockStatements, stockItemExists } = h;
 
   // Site engineers hold Create (not View) on procurement. Screens they need to fill in must still be readable by them.
   const viewOrCreate = async (req, env, fn) => {
@@ -257,11 +292,28 @@ export function registerProcurement2(router, h) {
       if (!po) return json({ ok: false, error: 'PO not found.' }, 404);
       if (!(await visibleProjectIds(env, req.user)).includes(po.project_id)) return json({ ok: false, error: 'Not allowed.' }, 403);
       // No rates or amounts: the site engineer sees quantities only.
-      const items = await env.DB.prepare(`SELECT i.id, i.description, i.qty AS ordered, i.unit,
+      const items = await env.DB.prepare(`SELECT i.id, i.description, i.qty AS ordered, i.unit, i.stock_item_id,
         COALESCE((SELECT SUM(gi.qty_received) FROM pro_grn_items gi JOIN pro_grns g ON g.id = gi.grn_id WHERE gi.po_item_id = i.id AND g.deleted_at IS NULL), 0) AS received
         FROM pro_po_items i WHERE i.po_id = ? ORDER BY i.id`).bind(po.id).all();
       return json({ ok: true, data: { po, items: items.results } });
     } catch (e) { return serverError(e, 'po-lines'); }
+  }));
+
+
+  // Charges and terms on a PO that is still a draft (or was sent back). Totals are worked out again.
+  router.put('/api/procurement/pos/:id/terms', async (req, env) => withAuth(req, env, 'procurement', 'E', async (req, env) => {
+    try {
+      const po = await env.DB.prepare('SELECT * FROM pro_pos WHERE id = ? AND deleted_at IS NULL').bind(Number(req.params.id)).first();
+      if (!po || !(await visibleProjectIds(env, req.user)).includes(po.project_id)) return json({ ok: false, error: 'PO not found.' }, 404);
+      if (!['draft', 'rejected'].includes(po.status)) return json({ ok: false, error: 'Only a draft PO can be changed. An approved PO is final.' }, 400);
+      const b = await req.json();
+      const it = await env.DB.prepare('SELECT COUNT(*) AS n, COALESCE(SUM(amount_paise), 0) AS goods FROM pro_po_items WHERE po_id = ?').bind(po.id).first();
+      const oldCharges = ['transport_paise', 'loading_paise', 'packing_paise', 'insurance_paise', 'other_charges_paise'].reduce((x, k) => x + (po[k] || 0), 0);
+      const goods = it.n ? it.goods : po.amount_paise - oldCharges;
+      const r = poTermsStatement(env, po, goods, b); if (r.error) return json({ ok: false, error: r.error }, 400);
+      await env.DB.batch([r.stmt, env.DB.prepare('INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, ?, ?, ?, ?, ?)').bind(req.user.user_id, 'edit', 'pro_pos', po.id, `PO ${po.po_no}: charges and terms updated (total now Rs ${(r.total / 100).toFixed(2)})`, nowStr())]);
+      return json({ ok: true, data: { amount_paise: r.amount, gst_paise: r.gst, total_paise: r.total } });
+    } catch (e) { return serverError(e, 'po-terms'); }
   }));
 
   router.post('/api/procurement/pos/:id/grn-lines', async (req, env) => withAuth(req, env, 'procurement', 'C', async (req, env) => {
@@ -276,15 +328,19 @@ export function registerProcurement2(router, h) {
       if (dup) return json({ ok: true, data: { id: dup.id, duplicate: true } });
       const stockOf = Object.fromEntries((await env.DB.prepare('SELECT id, stock_item_id FROM pro_po_items WHERE po_id = ?').bind(po.id).all()).results.map((r) => [r.id, r.stock_item_id]));
       const valid = new Set(Object.keys(stockOf).map(Number));
-      const lines = (Array.isArray(b.lines) ? b.lines : []).map((l) => ({ id: Number(l.po_item_id), qty: num(l.qty_received) })).filter((l) => l.qty > 0);
+      const lines = (Array.isArray(b.lines) ? b.lines : []).map((l) => ({ id: Number(l.po_item_id), qty: num(l.qty_received), link: Number(l.stock_item_id) || 0 })).filter((l) => l.qty > 0);
       if (!lines.length) return json({ ok: false, error: 'Enter a quantity for at least one item.' }, 400);
       if (lines.some((l) => !valid.has(l.id))) return json({ ok: false, error: 'An item does not belong to this PO.' }, 400);
+      // A line not yet tied to a store item can be tied now, so what arrives is counted in the store.
+      const links = lines.filter((l) => l.link && !stockOf[l.id]);
+      for (const l of links) { if (!(await stockItemExists(env, l.link))) return json({ ok: false, error: 'That store item does not exist.' }, 400); stockOf[l.id] = l.link; }
       const now = nowStr();
       const summary = String(b.qty_note || '').slice(0, 300);
       // One batch: receipt, its lines, and the PO status computed from the totals. All or nothing.
       await env.DB.batch([
         env.DB.prepare('INSERT INTO pro_grns (po_id, received_on, qty_note, challan_no, received_by, client_uuid, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
           .bind(po.id, b.received_on || now.substring(0, 10), summary, String(b.challan_no || '').slice(0, 40), req.user.user_id, uuid, now),
+        ...links.map((l) => env.DB.prepare('UPDATE pro_po_items SET stock_item_id = ? WHERE id = ? AND stock_item_id IS NULL').bind(l.link, l.id)),
         ...lines.map((l) => env.DB.prepare('INSERT INTO pro_grn_items (grn_id, po_item_id, qty_received, created_at) VALUES ((SELECT id FROM pro_grns WHERE client_uuid = ?), ?, ?, ?)').bind(uuid, l.id, l.qty, now)),
         // Items tied to a stock item also go into the store, in this same batch.
         ...grnStockStatements(env, now, po.project_id, req.user.user_id, uuid, lines.map((l) => ({ po_item_id: l.id, stock_item_id: stockOf[l.id], qty: l.qty }))),

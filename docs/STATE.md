@@ -152,3 +152,6 @@ Hardening checks pass (docs/HARDENING.md). NOT deployed beyond what Dhaval has a
 
 ## Brand kit
 Nirman brand kit applied (docs/BRAND.md). No migration. Product name on screen is now "Nirman" (kit spelling); revert is one string per page if Dhaval prefers "NirmaanCRM".
+
+## Owner's 16 changes (migration 0033)
+Code complete on branch claude/clever-franklin-rjqgdp: 29 API suites (new: projectplus, 63 checks) and the new phone walkthrough (17 checks) pass locally. Migration 0033 NOT applied to production yet (applied by the deploy workflow after merge). Busiest new routes: stores/receive 28 statements (notification fan-out, capped at 20 people), approval steps 14, project quick view 13, tasks 8; all under 50. Officer titles for the approval drop-downs could not be checked against the BMC website (site unavailable to the research agent): they are an editable setting with a "check with your architect" note. PDFs on Android open in the phone's PDF viewer (Chrome on Android cannot show a PDF inside a page without an extra library).

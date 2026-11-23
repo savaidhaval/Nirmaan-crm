@@ -366,3 +366,15 @@ id TEXT PK, source TEXT, seen_at TEXT
 
 ## 0032 additions (WP-20 dashboard)
 - dash_snapshot (key, value_json, updated_at): a derived cache of each project's budget status (how many heads are over or close to their budget), refreshed one project per hour by the sweep. It holds nothing that is not in the budget screens, so it is NOT in the backup list: it rebuilds itself within a few hours of a restore.
+
+## 0033 additions (Owner's 16 changes)
+- projects: members_count, plot_area_sqm (square metres), planning_authority, other_authorities (JSON list), cts_no, village, property_card_details, property_card_doc_id, conveyance_details, conveyance_doc_id (optional scanned copies, documents.id), maps_url (Google Maps link; lat/lng are read from it), extra_info, autodcr_url, autodcr_set_by, autodcr_set_at.
+- prj_autodcr_history (project_id, url, reason, set_by, set_at): every value the AutoDCR link has had. Append-only. In the backup list.
+- apr_items: target_date (expected completion), holder_designation / holder_name (officer holding the file now), next_designation / next_name (officer it goes to next), file_moved_at. owner_user_id is the person in charge. Names are stored in capitals from now on (older rows are shown in capitals).
+- apr_steps (item_id, project_id, seq, title, responsible_designation, responsible_name, assigned_to, target_date, status pending|in_progress|done|na, done_on, note, created_by, created_at, deleted_at): sub-steps of an approval. In the backup list.
+- site_milestones.assigned_to: person in charge (planned_date is the expected completion date). site_snags already had assigned_to and due_date.
+- red_members: rent_basis (per_sqft = paise per sq ft per month | monthly = paise per month), rent_y1_paise to rent_y5_paise, corpus_paise, car_parks, shifting_paise, extra_area_bp (3500 = 35%), new_rera_sqft (worked out: carpet_sqft x (1 + extra %)), buys_extra (0/1), buys_extra_sqft. member_type may now be 'residential'.
+- red_meeting_attendees (meeting_id, member_id): who was present; attendees_count is worked out from it. In the backup list. red_meetings.next_action_owner: person in charge of the next action.
+- pro_pos: material_category, transport_paise, loading_paise, packing_paise, insurance_paise, other_charges_paise, other_charges_label, charges_gst_bp (NULL = same as the PO's GST), price_basis, delivery_date, delivery_address, payment_terms, warranty, penalty_clause, category_details (JSON of the material's usual lines). amount_paise = material + charges; gst_paise = material x gst_bp + charges x charges_gst_bp. pro_po_items.hsn.
+- Setting apr.designations: officer titles offered in the approval drop-downs, separated by ; or new lines (empty = the built-in list).
+- stk_moves: kind 'receipt' rows can now also come from "Stock received" (note says where from); a site engineer's receipt is 'pending' until a PM or the Owner approves it.
