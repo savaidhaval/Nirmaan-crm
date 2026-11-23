@@ -337,6 +337,7 @@ export function registerSales3(router, h) {
       const unit = await env.DB.prepare('SELECT * FROM sal_inventory WHERE id = ? AND deleted_at IS NULL').bind(Number(b.unit_id)).first();
       if (!unit || !(await visibleProjectIds(env, req.user)).includes(unit.project_id)) return json({ ok: false, error: 'Pick a flat.' }, 400);
       if (unit.category === 'rehab') return json({ ok: false, error: 'Rehab flats are not sold.' }, 400);
+      if (unit.category === 'landowner') return json({ ok: false, error: 'Landowner-share flats are not sold from here.' }, 400);
       { const blk = await saleBlock(env, unit.project_id); if (blk) return json({ ok: false, error: blk, code: 'rera' }, 409); }
       { const held = await holdFor(env, unit.project_id, unit.wing); if (held) return json({ ok: false, error: held + '. No cost sheets until the hold is released.', code: 'hold' }, 409); }
       const leadId = b.lead_id ? Number(b.lead_id) : null;

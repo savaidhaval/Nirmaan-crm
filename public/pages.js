@@ -622,6 +622,8 @@ const SETTING_LABELS = {
   'apr.designations': ['Approvals: officer titles offered in the drop-downs (separate them with ; ). Leave empty to use the built-in list. Check the exact titles on your letters with your architect', 'text'],
   'red.member_doc_checklist': ['Redevelopment: documents to collect from each society member (type the items separated by ; , for example: Share certificate; Photo ID). Leave empty until you decide', 'text'],
   'red.rent_due_day': ['Redevelopment: day of the month transit rent is due (1 to 28)', 'number'],
+  'red.oc_grace_days': ['Redevelopment: days after the OC date when transit rent stops (default 30). Confirm the PAAA wording with your advocate', 'number'],
+  'apr.alert_days': ['Approvals: days before an expiry when everyone is reminded, separated by commas (default 30,15,7). Confirm renewal lead times with your architect', 'text'],
   'bank.keep_days': ['Bank statement lines that nobody matched are deleted after this many days (default 90)', 'number'],
   'drawing.ack_hours': ['Remind site users who have not confirmed a new drawing after this many hours (default 24)', 'number'],
   'fea.review_days': ['Remind the Owner and PM to refresh a project\'s feasibility study after this many days (default 90)', 'number'],

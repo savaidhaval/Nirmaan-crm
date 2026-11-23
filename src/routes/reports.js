@@ -26,6 +26,7 @@ export function registerReports(router, h) {
       const units = rows.results.map((u) => {
         let state = 'available';
         if (u.category === 'rehab') state = 'rehab';
+        else if (u.category === 'landowner') state = 'landowner';
         else if (u.status === 'possessed') state = 'possessed';
         else if (u.booking_id) state = u.registration_date ? 'registered' : 'booked';
         else if (u.status === 'held') state = 'token_locked';
@@ -35,7 +36,7 @@ export function registerReports(router, h) {
           booking_id: seeNames ? u.booking_id : null, customer: seeNames && state !== 'available' ? u.customer_name : null, agreed_paise: seeNames ? u.agreed_price_paise : null };
       });
       const counts = {}; let value = 0; let soldValue = 0;
-      for (const u of units) { counts[u.state] = (counts[u.state] || 0) + 1; if (u.state !== 'rehab') { value += u.list_paise; if (['booked', 'registered', 'possessed'].includes(u.state)) soldValue += u.agreed_paise || u.list_paise; } }
+      for (const u of units) { counts[u.state] = (counts[u.state] || 0) + 1; if (u.state !== 'rehab' && u.state !== 'landowner') { value += u.list_paise; if (['booked', 'registered', 'possessed'].includes(u.state)) soldValue += u.agreed_paise || u.list_paise; } }
       return json({ ok: true, data: { units, counts, total_list_value_paise: value, sold_value_paise: soldValue } });
     } catch (e) { return serverError(e, 'stacking'); }
   }));

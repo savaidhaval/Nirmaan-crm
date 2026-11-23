@@ -35,7 +35,7 @@ export function registerImporter(router, h) {
           for (const [i, r] of rows.entries()) {
             const pid = byCode[String(r.project_code || '').trim().toLowerCase()];
             const price = rup(r.price); const rise = rup(r.floor_rise);
-            const category = String(r.category || 'sale').toLowerCase() === 'rehab' ? 'rehab' : 'sale';
+            const catRaw = String(r.category || 'sale').toLowerCase(); const category = ['rehab', 'landowner'].includes(catRaw) ? catRaw : 'sale';
             const unit = str(r.unit_no, 20);
             let error = null;
             if (!pid) error = 'Unknown project code.'; else if (!unit) error = 'Flat number is required.'; else if (Number.isNaN(price) || Number.isNaN(rise)) error = 'Price must be a number.'; else if (category === 'sale' && !(price > 0)) error = 'A flat for sale needs a price.';
@@ -51,7 +51,7 @@ export function registerImporter(router, h) {
             for (const v of valid) { if (ex.has(`${v.pid}|${v.wing || ''}|${v.unit}`)) { results[v.idx] = { ...results[v.idx], ok: false, error: 'This flat already exists.' }; } else toInsert.push(v); }
             if (!dry && toInsert.length) {
               await env.DB.batch(toInsert.map((v) => env.DB.prepare('INSERT INTO sal_inventory (project_id, wing, floor, unit_no, type, carpet_sqft, rera_carpet_sqft, price_paise, floor_rise_paise, category, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-                .bind(v.pid, v.wing, Number.isFinite(v.floor) ? v.floor : null, v.unit, v.type, v.carpet, v.rera, v.price, v.rise || 0, v.category, v.category === 'rehab' ? 'rehab' : 'available', nowStr())));
+                .bind(v.pid, v.wing, Number.isFinite(v.floor) ? v.floor : null, v.unit, v.type, v.carpet, v.rera, v.price, v.rise || 0, v.category, v.category === 'rehab' ? 'rehab' : v.category === 'landowner' ? 'landowner' : 'available', nowStr())));
               created = toInsert.length;
             } else created = toInsert.length;
           }

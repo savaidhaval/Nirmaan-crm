@@ -559,7 +559,7 @@ const EDITABLE_SETTINGS = ['po.pm_approval_limit_paise', 'access.allow_second_ow
   'demand.due_days_after_milestone', 'share.default_expiry_days', 'share.default_max_views', 'files.brochure_max_mb', 'branding.apply_colours_to_app',
   'brochure.price_list_default_audience', 'storage.warn_percent', 'sales.max_holds_per_user', 'sales.max_discount_bp', 'sales.pm_max_discount_bp',
   'interest.rate_bp', 'interest.grace_days', 'interest.enabled', 'security.require_mfa_roles', 'tax.stamp_duty_bp', 'tax.metro_cess_bp', 'tax.women_concession_bp', 'tax.registration_bp', 'tax.registration_cap_paise', 'tax.gst_bp',
-  'con.enabled', 'con.pm_approval_limit_paise', 'con.gst_bp', 'con.tds_bp', 'budget.gst_basis', 'petty.low_balance_paise', 'ai.enabled', 'ai.daily_limit', 'ai.model', 'rera.designated_pct_bp', 'fea.review_days', 'red.member_doc_checklist', 'red.rent_due_day', 'bank.keep_days', 'drawing.ack_hours', 'sales.bulk_daily_limit', 'sales.bulk_chunk', 'sales.demand_link_days', 'sales.visit_objections', 'sales.visit_radius_m',
+  'con.enabled', 'con.pm_approval_limit_paise', 'con.gst_bp', 'con.tds_bp', 'budget.gst_basis', 'petty.low_balance_paise', 'ai.enabled', 'ai.daily_limit', 'ai.model', 'rera.designated_pct_bp', 'fea.review_days', 'red.member_doc_checklist', 'red.rent_due_day', 'red.oc_grace_days', 'apr.alert_days', 'bank.keep_days', 'drawing.ack_hours', 'sales.bulk_daily_limit', 'sales.bulk_chunk', 'sales.demand_link_days', 'sales.visit_objections', 'sales.visit_radius_m',
   'sales.receipt_approval_limit_paise', 'sales.discount_pm_limit_paise', 'sales.handover_template', 'apr.designations', 'con.variation_owner_limit_paise', 'con.advance_recovery_bp', 'con.dlp_months', 'pro.tolerance_bp', 'tax.tds_no_pan_bp', 'rera.cert_valid_days', 'qa.pour_checklist', 'qa.cube_7day_pct_bp', 'dpr.activities', 'dpr.safety_checks', 'bd.vacate_to_plinth_months', 'bd.completion_months', 'bd.steps_79a'];
 
 router.post('/api/settings/:key', async (req, env) => {
@@ -3309,23 +3309,34 @@ function makeId(len = 16) {
 // 08:00 IST: tell Owner/PM about approvals expiring soon and queries nobody has answered for 5+ days (once per item per day).
 async function approvalReminders(env) {
   const today = new Date(Date.now() + 19800000).toISOString().substring(0, 10);
-  const due = await env.DB.prepare(`SELECT i.id, i.name, i.valid_till, i.reminder_days, p.name AS project FROM apr_items i JOIN projects p ON p.id = i.project_id
+  // Alert steps: days before expiry when everyone is reminded (setting apr.alert_days, default 30,15,7). Each step is sent once per expiry date.
+  const raw = await getSetting(env, 'apr.alert_days');
+  const parsed = String(raw == null ? '' : raw).split(/[,;\s]+/).map(Number).filter((n) => Number.isInteger(n) && n > 0 && n <= 365);
+  const steps = [...new Set(parsed.length ? parsed : [30, 15, 7])].sort((a, b) => a - b);
+  const widest = Math.max(...steps);
+  const due = await env.DB.prepare(`SELECT i.id, i.name, i.valid_till, i.owner_user_id, p.name AS project FROM apr_items i JOIN projects p ON p.id = i.project_id
     WHERE i.deleted_at IS NULL AND p.deleted_at IS NULL AND COALESCE(p.status,'') != 'archived' AND i.valid_till IS NOT NULL AND i.status NOT IN ('na', 'rejected')
-    AND date(i.valid_till) <= date('now', '+' || COALESCE(i.reminder_days, 30) || ' days')`).all();
+    AND date(i.valid_till) <= date('now', '+' || ? || ' days')`).bind(widest).all();
   const stale = await env.DB.prepare(`SELECT i.id, i.name, p.name AS project FROM apr_items i JOIN projects p ON p.id = i.project_id WHERE i.deleted_at IS NULL AND p.deleted_at IS NULL AND i.status = 'query'
     AND COALESCE((SELECT MAX(created_at) FROM apr_events e WHERE e.item_id = i.id), i.created_at) < datetime('now', '-5 days')`).all();
   const users = await env.DB.prepare("SELECT id FROM users WHERE active = 1 AND deleted_at IS NULL AND role IN ('owner', 'pm')").all();
-  const note = async (title, body, key) => {
-    for (const u of users.results) {
-      const dup = await env.DB.prepare("SELECT id FROM notifications WHERE user_id = ? AND link = ? AND date(created_at) = ?").bind(u.id, key, today).first();
-      if (!dup) await env.DB.prepare('INSERT INTO notifications (user_id, title, body, link, created_at) VALUES (?, ?, ?, ?, ?)').bind(u.id, title, body, key, nowStr()).run();
+  const note = async (title, body, key, extraUser, once) => {
+    const ids = [...new Set([...users.results.map((u) => u.id), ...(extraUser ? [extraUser] : [])])];
+    for (const uid of ids) {
+      const dup = once
+        ? await env.DB.prepare('SELECT id FROM notifications WHERE user_id = ? AND link = ?').bind(uid, key).first()
+        : await env.DB.prepare('SELECT id FROM notifications WHERE user_id = ? AND link = ? AND date(created_at) = ?').bind(uid, key, today).first();
+      if (!dup) await env.DB.prepare('INSERT INTO notifications (user_id, title, body, link, created_at) VALUES (?, ?, ?, ?, ?)').bind(uid, title, body, key, nowStr()).run();
     }
   };
   for (const r of due.results) {
     const days = Math.round((new Date(r.valid_till) - new Date(today)) / 86400000);
-    await note(days < 0 ? `Expired: ${r.name}` : `Expiring in ${days} days: ${r.name}`, `${r.project} — valid till ${r.valid_till}. Confirm renewal dates with your CA/architect.`, `approvals#${r.id}`);
+    if (days < 0) { await note(`Expired: ${r.name}`, `${r.project} — valid till ${r.valid_till}. Confirm renewal dates with your CA/architect.`, `approvals#${r.id}`, r.owner_user_id, false); continue; }
+    // the tightest step reached (for example 12 days left = the 15-day step); sent once for each expiry date
+    const step = steps.find((s) => days <= s);
+    if (step) await note(`Expiring in ${days} days: ${r.name}`, `${r.project} — valid till ${r.valid_till}. Confirm renewal dates with your CA/architect.`, `approvals#${r.id}@${String(r.valid_till).slice(0, 10)}:T${step}`, r.owner_user_id, true);
   }
-  for (const r of stale.results) await note(`Query unanswered 5+ days: ${r.name}`, r.project, `approvals#q${r.id}`);
+  for (const r of stale.results) await note(`Query unanswered 5+ days: ${r.name}`, r.project, `approvals#q${r.id}`, null, false);
 }
 
 // Hourly: a new lead nobody touched in 1 hour nudges its owner; after 4 hours the Owner/PM hear about it. Business hours only (09:00-19:00 IST).

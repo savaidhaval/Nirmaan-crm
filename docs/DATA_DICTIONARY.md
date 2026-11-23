@@ -426,3 +426,9 @@ id TEXT PK, source TEXT, seen_at TEXT
 - documents.module = 'bd': deal papers (feasibility reports, 79A papers, signed DA); only roles with Business Development view can open them.
 - Settings: bd.vacate_to_plinth_months (default 7), bd.completion_months (default 36), bd.steps_79a (blank = built-in list).
 
+## Module 1 gaps, step 1 (migration 0040)
+- projects: dcpr_regulation (text, as typed on the approvals; confirm with the architect), sanctioned_fsi, fungible_fsi, tdr_purchased (numbers, same unit).
+- red_members: certified_area_sqft (architect-certified Annexure-II area; set once, then locked; per-sq-ft rent uses it, with carpet_sqft only as a fallback for rows priced before this existed), certified_by, certified_at.
+- sal_inventory.category now takes sale | rehab | landowner (no schema change). A landowner flat has status 'landowner', is never priced or sold, and its bucket cannot be changed once set.
+- Settings: red.oc_grace_days (days after the OC date when transit rent stops, default 30), apr.alert_days (expiry alert steps, default 30,15,7).
+- Rules: transit-rent escalation years count from red_members.vacated_on (month granularity; vacated after the 1st = one month later); red_transit_schedule rows with no payment row beyond the OC date + grace days are removed by the hourly sweep. Notifications for approval expiry use link approvals#<id>@<valid_till>:T<step>, once per step.

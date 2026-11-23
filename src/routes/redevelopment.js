@@ -19,23 +19,38 @@ const checklistOf = (v) => String(v || '').split(/[\n;]+/).map((x) => x.trim()).
 // Year-wise rent from the member's terms (year 1 to 5; later years use year 5). NULL when not set, so the term's monthly rent is used.
 // nExpr is the month number counted from the first rent month (0 = first month).
 const YEAR_RENT = (nExpr) => `NULLIF(CAST(ROUND((CASE (${nExpr}) / 12 WHEN 0 THEN rm.rent_y1_paise WHEN 1 THEN rm.rent_y2_paise WHEN 2 THEN rm.rent_y3_paise WHEN 3 THEN rm.rent_y4_paise ELSE rm.rent_y5_paise END)
-  * (CASE WHEN rm.rent_basis = 'per_sqft' THEN COALESCE(rm.carpet_sqft, 0) ELSE 1 END)) AS INTEGER), 0)`;
-const FILL_SQL = (one) => `INSERT OR IGNORE INTO red_transit_schedule (member_id, period, due_paise, due_on)
+  * (CASE WHEN rm.rent_basis = 'per_sqft' THEN COALESCE(rm.certified_area_sqft, rm.carpet_sqft, 0) ELSE 1 END)) AS INTEGER), 0)`;
+// Escalation is counted in 12-month blocks from the month the flat was vacated (not from PAAA signing). A flat vacated after the 1st
+// moves up one month later, so a rise never starts early. Months are whole months: confirm anniversaries against the PAAA.
+// OFFSET = how many months the first rent month is after the vacating month (needs t = red_transit_terms and rm = red_members).
+const VAC_ANCHOR = 'COALESCE(rm.vacated_on, t.start_date)';
+const OFFSET = `((CAST(substr(t.start_date, 1, 4) AS INTEGER) - CAST(substr(${VAC_ANCHOR}, 1, 4) AS INTEGER)) * 12 + CAST(substr(t.start_date, 6, 2) AS INTEGER) - CAST(substr(${VAC_ANCHOR}, 6, 2) AS INTEGER) - (CASE WHEN rm.vacated_on IS NOT NULL AND CAST(substr(rm.vacated_on, 9, 2) AS INTEGER) > 1 THEN 1 ELSE 0 END))`;
+// The date rent must stop: the OC date of the member's wing (or of the whole project) plus the grace days. NULL = no OC yet. Needs rm.
+const OC_STOP = (grace) => `(SELECT date(MIN(COALESCE(a.letter_date, a.approved_on)), '+${Math.max(0, Math.min(365, Math.round(Number(grace) || 0)))} days') FROM apr_items a JOIN red_societies so ON so.id = rm.society_id
+    WHERE a.project_id = so.project_id AND a.gate_key = 'oc' AND a.status = 'approved' AND a.deleted_at IS NULL AND (a.wing IS NULL OR a.wing = '' OR a.wing = rm.wing))`;
+// Grace days after the OC before rent stops (setting red.oc_grace_days, default 30). Confirm the PAAA wording with your advocate.
+export const ocGrace = async (env, getSetting) => { const v = await getSetting(env, 'red.oc_grace_days'); const n = Number(v); return v === null || v === '' || !Number.isFinite(n) ? 30 : Math.max(0, Math.min(365, Math.round(n))); };
+const FILL_SQL = (one, grace) => `INSERT OR IGNORE INTO red_transit_schedule (member_id, period, due_paise, due_on)
   WITH RECURSIVE m(n) AS (SELECT 0 UNION ALL SELECT n + 1 FROM m WHERE n < 119)
-  SELECT t.member_id, strftime('%Y-%m', date(t.start_date, 'start of month', '+' || m.n || ' months')), COALESCE(${YEAR_RENT('m.n')}, t.monthly_rent_paise),
+  SELECT t.member_id, strftime('%Y-%m', date(t.start_date, 'start of month', '+' || m.n || ' months')), COALESCE(${YEAR_RENT(`(m.n + ${OFFSET})`)}, t.monthly_rent_paise),
     date(t.start_date, 'start of month', '+' || m.n || ' months', '+' || (?1 - 1) || ' days')
   FROM red_transit_terms t JOIN m LEFT JOIN red_members rm ON rm.id = t.member_id
   WHERE date(t.start_date, 'start of month', '+' || m.n || ' months') <= date('now', 'start of month', '+12 months')
-    AND (t.end_date IS NULL OR date(t.start_date, 'start of month', '+' || m.n || ' months') <= t.end_date)${one ? ' AND t.member_id = ?2' : ''}`;
+    AND (t.end_date IS NULL OR date(t.start_date, 'start of month', '+' || m.n || ' months') <= t.end_date)
+    AND (${OC_STOP(grace)} IS NULL OR date(t.start_date, 'start of month', '+' || m.n || ' months') <= ${OC_STOP(grace)})${one ? ' AND t.member_id = ?2' : ''}`;
 // Months with no payment yet take the year-wise rent (when set). Bind: member id.
 const MONTHS_FROM_START = `((CAST(substr(red_transit_schedule.period, 1, 4) AS INTEGER) - CAST(substr(t.start_date, 1, 4) AS INTEGER)) * 12 + CAST(substr(red_transit_schedule.period, 6, 2) AS INTEGER) - CAST(substr(t.start_date, 6, 2) AS INTEGER))`;
-const REPRICE_SQL = `UPDATE red_transit_schedule SET due_paise = COALESCE((SELECT ${YEAR_RENT(MONTHS_FROM_START)} FROM red_transit_terms t JOIN red_members rm ON rm.id = t.member_id WHERE t.member_id = red_transit_schedule.member_id), due_paise)
+const REPRICE_SQL = `UPDATE red_transit_schedule SET due_paise = COALESCE((SELECT ${YEAR_RENT(`(${MONTHS_FROM_START} + ${OFFSET})`)} FROM red_transit_terms t JOIN red_members rm ON rm.id = t.member_id WHERE t.member_id = red_transit_schedule.member_id), due_paise)
   WHERE member_id = ? AND NOT EXISTS (SELECT 1 FROM red_transit_payments p WHERE p.schedule_id = red_transit_schedule.id AND p.reversed_at IS NULL)`;
 
 export async function redevSweep(env, getSetting) {
   const day = Math.min(28, Math.max(1, Math.round(Number(await getSetting(env, 'red.rent_due_day')) || 1)));
-  await env.DB.prepare(FILL_SQL(false)).bind(day).run();
+  const grace = await ocGrace(env, getSetting);
+  await env.DB.prepare(FILL_SQL(false, grace)).bind(day).run();
   await env.DB.batch([
+    // OC hard stop: unpaid future months past the OC date plus grace days are removed (months with any payment row are never touched)
+    env.DB.prepare(`DELETE FROM red_transit_schedule WHERE NOT EXISTS (SELECT 1 FROM red_transit_payments p WHERE p.schedule_id = red_transit_schedule.id)
+      AND (period || '-01') > (SELECT ${OC_STOP(grace)} FROM red_members rm WHERE rm.id = red_transit_schedule.member_id)`),
     // rent falling due in 3 days: Accounts, one line per society
     env.DB.prepare(`INSERT INTO notifications (user_id, title, body, link, created_at)
       SELECT u.id, 'Transit rent due soon: ' || x.name, x.n || ' member(s) have rent due within 3 days.', 'redevelopment', datetime('now')
@@ -403,7 +418,7 @@ export function registerRedevelopment(router, h) {
   router.get('/api/redev/members/:id/terms', async (req, env) => withAuth(req, env, 'transit', 'V', async (req, env) => {
     try {
       const { mem, err } = await loadMember(env, req, Number(req.params.id)); if (err) return err;
-      const t = await env.DB.prepare(`SELECT id, member_name, unit_label, wing, member_type, carpet_sqft, ${TERM_COLS} FROM red_members WHERE id = ?`).bind(mem.id).first();
+      const t = await env.DB.prepare(`SELECT id, member_name, unit_label, wing, member_type, carpet_sqft, certified_area_sqft, ${TERM_COLS} FROM red_members WHERE id = ?`).bind(mem.id).first();
       return json({ ok: true, data: { terms: t } });
     } catch (e) { return serverError(e, 'red-terms'); }
   }));
@@ -419,7 +434,14 @@ export function registerRedevelopment(router, h) {
       if (rents.some((v) => v != null) && !basis) return bad('Say whether the rent is per sq ft or a monthly amount.');
       const area = b.carpet_sqft === '' || b.carpet_sqft == null ? mem.carpet_sqft : num(b.carpet_sqft);
       if (area != null && !(area >= 0 && area <= 100000)) return bad('Check the current flat area.');
-      if (basis === 'per_sqft' && rents.some((v) => v != null) && !(area > 0)) return bad('Enter the current flat area to work out rent per sq ft.');
+      // The architect-certified (Annexure-II) area is set once and then locked; per-sq-ft rent uses only this figure.
+      let cert = mem.certified_area_sqft;
+      if (b.certified_area_sqft !== undefined && b.certified_area_sqft !== '' && b.certified_area_sqft !== null) {
+        const c = num(b.certified_area_sqft); if (!(c > 0 && c <= 100000)) return bad('Check the certified area.');
+        if (cert != null && Math.abs(cert - c) > 0.0001) return bad(`The certified area (${cert} sq ft) is locked to the architect's Annexure-II list and cannot be changed here.`, 409);
+        cert = c;
+      }
+      if (basis === 'per_sqft' && rents.some((v) => v != null) && !(cert > 0)) return bad('Enter the architect-certified area (from the Annexure-II list) to work out rent per sq ft.');
       const cars = b.car_parks === '' || b.car_parks == null ? null : Math.round(num(b.car_parks)); if (cars != null && !(cars >= 0 && cars <= 50)) return bad('Check the number of car parkings.');
       const pct = b.extra_area_pct === '' || b.extra_area_pct == null ? null : num(b.extra_area_pct); if (pct != null && !(pct >= 0 && pct <= 500)) return bad('Check the extra area %.');
       const bp = pct == null ? null : Math.round(pct * 100);
@@ -427,8 +449,8 @@ export function registerRedevelopment(router, h) {
       const buys = b.buys_extra ? 1 : 0; const buysSqft = buys && b.buys_extra_sqft !== '' && b.buys_extra_sqft != null ? num(b.buys_extra_sqft) : null;
       if (buysSqft != null && !(buysSqft > 0 && buysSqft <= 100000)) return bad('Check the extra area being bought.');
       await env.DB.batch([
-        env.DB.prepare(`UPDATE red_members SET carpet_sqft = ?, rent_basis = ?, rent_y1_paise = ?, rent_y2_paise = ?, rent_y3_paise = ?, rent_y4_paise = ?, rent_y5_paise = ?, corpus_paise = ?, car_parks = ?, shifting_paise = ?, extra_area_bp = ?, new_rera_sqft = ?, buys_extra = ?, buys_extra_sqft = ? WHERE id = ?`)
-          .bind(area, basis, ...rents, corpus, cars, shifting, bp, newArea, buys, buysSqft, mem.id),
+        env.DB.prepare(`UPDATE red_members SET certified_area_sqft = ?, certified_by = CASE WHEN certified_area_sqft IS NULL AND ? IS NOT NULL THEN ? ELSE certified_by END, certified_at = CASE WHEN certified_area_sqft IS NULL AND ? IS NOT NULL THEN ? ELSE certified_at END, carpet_sqft = ?, rent_basis = ?, rent_y1_paise = ?, rent_y2_paise = ?, rent_y3_paise = ?, rent_y4_paise = ?, rent_y5_paise = ?, corpus_paise = ?, car_parks = ?, shifting_paise = ?, extra_area_bp = ?, new_rera_sqft = ?, buys_extra = ?, buys_extra_sqft = ? WHERE id = ?`)
+          .bind(cert ?? null, cert ?? null, req.user.user_id, cert ?? null, nowStr(), area, basis, ...rents, corpus, cars, shifting, bp, newArea, buys, buysSqft, mem.id),
         env.DB.prepare(REPRICE_SQL).bind(mem.id),
         audit(env, req.user, 'update', 'red_members', mem.id, `Terms for ${mem.member_name}: ${basis ? 'rent set year-wise' : 'no rent'}${bp != null ? `, extra area ${pct}% (new RERA carpet ${newArea} sq ft)` : ''}${buys ? ', buying extra area' : ''}`),
       ]);
@@ -454,7 +476,7 @@ export function registerRedevelopment(router, h) {
         env.DB.prepare(`INSERT INTO red_transit_terms (member_id, monthly_rent_paise, start_date, end_date, deposit_paise, bg_ref, bg_amount_paise, bg_expiry, notes, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(member_id) DO UPDATE SET monthly_rent_paise = excluded.monthly_rent_paise, end_date = excluded.end_date, deposit_paise = excluded.deposit_paise, bg_ref = excluded.bg_ref, bg_amount_paise = excluded.bg_amount_paise, bg_expiry = excluded.bg_expiry, notes = excluded.notes`)
           .bind(mem.id, rent, b.start_date, b.end_date || null, Math.max(0, Math.round(num(b.deposit_paise) || 0)), txt(b.bg_ref, 60), b.bg_amount_paise ? Math.round(num(b.bg_amount_paise)) : null, b.bg_expiry || null, txt(b.notes, 300), req.user.user_id, nowStr()),
-        env.DB.prepare(FILL_SQL(true)).bind(await dueDay(env), mem.id),
+        env.DB.prepare(FILL_SQL(true, await ocGrace(env, getSetting))).bind(await dueDay(env), mem.id),
         // a changed rent applies to months that have no payment against them yet
         env.DB.prepare('UPDATE red_transit_schedule SET due_paise = ? WHERE member_id = ? AND NOT EXISTS (SELECT 1 FROM red_transit_payments p WHERE p.schedule_id = red_transit_schedule.id AND p.reversed_at IS NULL)').bind(rent, mem.id),
         env.DB.prepare(REPRICE_SQL).bind(mem.id),

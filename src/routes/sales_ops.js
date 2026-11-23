@@ -114,11 +114,11 @@ export function registerSalesOps(router, h) {
       if (!MANAGER.includes(req.user.role)) return json({ ok: false, error: 'Only the Owner or PM can add flats.' }, 403);
       const b = await req.json();
       if (!(await visibleProjectIds(env, req.user)).includes(Number(b.project_id)) || !b.unit_no) return json({ ok: false, error: 'Project and flat number are required.' }, 400);
-      const category = b.category === 'rehab' ? 'rehab' : 'sale';
+      const category = ['rehab', 'landowner'].includes(b.category) ? b.category : 'sale';
       const price = Math.round(Number(b.price_paise) || 0);
       if (category === 'sale' && !(price > 0)) return json({ ok: false, error: 'A flat for sale needs a price.' }, 400);
       const r = await env.DB.prepare('INSERT INTO sal_inventory (project_id, wing, floor, unit_no, type, carpet_sqft, rera_carpet_sqft, price_paise, floor_rise_paise, category, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
-        .bind(Number(b.project_id), b.wing || null, b.floor ?? null, String(b.unit_no).slice(0, 20), String(b.type || '').slice(0, 20), b.carpet_sqft || null, b.rera_carpet_sqft || null, price, Math.round(Number(b.floor_rise_paise) || 0), category, category === 'rehab' ? 'rehab' : 'available', nowStr()).run();
+        .bind(Number(b.project_id), b.wing || null, b.floor ?? null, String(b.unit_no).slice(0, 20), String(b.type || '').slice(0, 20), b.carpet_sqft || null, b.rera_carpet_sqft || null, price, Math.round(Number(b.floor_rise_paise) || 0), category, category === 'rehab' ? 'rehab' : category === 'landowner' ? 'landowner' : 'available', nowStr()).run();
       return json({ ok: true, data: { id: r.meta.last_row_id } });
     } catch (e) {
       if (/UNIQUE/.test(String(e.message))) return json({ ok: false, error: 'That unit already exists in this wing.' }, 400);
@@ -132,6 +132,8 @@ export function registerSalesOps(router, h) {
       if (!u) return json({ ok: false, error: 'Unit not found.' }, 404);
       if (!(await visibleProjectIds(env, req.user)).includes(u.project_id)) return json({ ok: false, error: 'Not allowed.' }, 403);
       const b = await req.json();
+      // The bucket (sale / rehab / landowner) is fixed once set: sales staff cannot move a flat between buckets.
+      if (b.category !== undefined && b.category !== u.category) return json({ ok: false, error: 'The flat\'s bucket (free sale, rehab or landowner) is locked once it is set.' }, 400);
       if (u.status === 'booked' && (b.price_paise !== undefined || b.floor_rise_paise !== undefined || b.category)) return json({ ok: false, error: 'A booked flat\'s price cannot be changed. Cancel or transfer the booking first.' }, 400);
       if (String(b.reason || '').trim().length < 5) return json({ ok: false, error: 'Give a reason for the change.' }, 400);
       const price = b.price_paise !== undefined ? Math.round(Number(b.price_paise)) : u.price_paise;
@@ -228,6 +230,7 @@ export function registerSalesOps(router, h) {
       if (!unit) return json({ ok: false, error: 'Unit not found.' }, 404);
       if (!(await visibleProjectIds(env, user)).includes(unit.project_id)) return json({ ok: false, error: 'Not allowed.' }, 403);
       if (unit.category === 'rehab') return json({ ok: false, error: 'Rehab flats are allotted to existing members and cannot be sold.' }, 400);
+      if (unit.category === 'landowner') return json({ ok: false, error: 'This flat belongs to the landowner or partner share and cannot be sold from here.' }, 400);
       { const blk = await saleBlock(env, unit.project_id); if (blk) return json({ ok: false, error: blk, code: 'rera' }, 409); }
       { const held = await holdFor(env, unit.project_id, unit.wing); if (held) return json({ ok: false, error: held + '. Flats in it cannot be booked until the hold is released.', code: 'hold' }, 409); }
       const name = String(b.customer_name || '').trim().slice(0, 150);
@@ -501,7 +504,7 @@ export function registerSalesOps(router, h) {
       const b = await req.json();
       if (String(b.reason || '').trim().length < 5) return json({ ok: false, error: 'Give a reason for the transfer.' }, 400);
       const to = await env.DB.prepare('SELECT * FROM sal_inventory WHERE id = ? AND project_id = ? AND deleted_at IS NULL').bind(Number(b.to_unit_id), booking.project_id).first();
-      if (!to || to.category === 'rehab') return json({ ok: false, error: 'Pick an available flat in the same project.' }, 400);
+      if (!to || to.category !== 'sale') return json({ ok: false, error: 'Pick an available flat in the same project.' }, 400);
       const claim = await env.DB.prepare("UPDATE sal_inventory SET status = 'booked' WHERE id = ? AND status = 'available'").bind(to.id).run();
       if (!claim.meta.changes) return json({ ok: false, error: 'That flat is not available.' }, 409);
       await env.DB.batch([
