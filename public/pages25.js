@@ -39,7 +39,7 @@ async function qaPours(el) {
       ${p.cubes.length ? `<p class="muted">${p.cubes.map((c) => `${c.age_days}-day: ${c.status === 'pending' ? 'due ' + esc(c.due_date) : esc(c.result_mpa) + ' N/mm² ' + (c.status === 'pass' ? '✓' : '✗ FAIL')}`).join(' · ')}</p>` : ''}</div>${chip(...(POUR_CHIP[p.status] || [p.status, '']))}</div>
       <div class="row-btns">${p.status === 'requested' && qaPm() && (p.requested_by !== currentUser.id || currentUser.role === 'owner') ? `<button class="btn small btn-primary" data-pap="${p.id}">Check and approve</button>` : ''}
       ${p.status === 'approved' && qaCanAdd() ? `<button class="btn small btn-primary" data-pdone="${p.id}">Poured</button>` : ''}${['requested', 'approved'].includes(p.status) && qaPm() ? `<button class="btn small" data-pcan="${p.id}">Cancel</button>` : ''}
-      ${p.photo_doc_id ? `<a class="btn small" href="/api/files/download/${p.photo_doc_id}">Photo</a>` : ''}</div></div>`; }).join('') || '<div class="empty-state"><p>No pour cards yet.</p></div>'}`;
+      ${p.photo_doc_id ? `<a class="btn small" href="/api/files/download/${p.photo_doc_id}">Photo</a>` : ''}${waBtn(`Pour card (${(POUR_CHIP[p.status] || [p.status])[0]}): ${p.element} ${p.grade}, ${p.qty_cum} cum${p.wing ? ', wing ' + p.wing : ''}${p.floor != null ? ', floor ' + p.floor : ''}${p.planned_date ? ', planned ' + p.planned_date : ''}.`, 'quality')}</div></div>`; }).join('') || '<div class="empty-state"><p>No pour cards yet.</p></div>'}`;
   if ($('qa-new')) $('qa-new').onclick = async () => {
     const v = await openForm({ title: 'Pour card', intro: 'Tick what is checked. The PM checks the rest and approves before the pour.', fields: [
       { name: 'element', label: 'What is being poured', type: 'select', options: m.elements.map((x) => [x, x[0].toUpperCase() + x.slice(1)]) },
@@ -86,7 +86,7 @@ async function qaCubes(el) {
   el.innerHTML = cubes.map((c) => `<div class="card${c.status === 'fail' ? ' task-row late' : ''}"><div class="row"><div><b>${c.age_days}-day cube</b> · <span style="text-transform:capitalize">${qaWhere(c.pour)}</span>
       <p class="muted">Poured ${esc(c.pour.poured_on || '')} · due ${esc(c.due_date)} · must reach ${esc(c.required_mpa)} N/mm²${c.result_mpa != null ? ` · result <b>${esc(c.result_mpa)}</b>${c.lab ? ' (' + esc(c.lab) + ')' : ''}` : ''}</p></div>
       ${c.status === 'pending' ? (c.due_date < t0 ? chip('Overdue', 'bad') : c.due_date === t0 ? chip('Due today', 'warn') : chip('Waiting', '')) : chip(c.status === 'pass' ? 'Pass' : 'FAIL', c.status === 'pass' ? 'good' : 'bad')}</div>
-      ${c.status === 'pending' && qaCanAdd() && c.due_date <= t0 ? `<button class="btn small btn-primary" data-cres="${c.id}">Enter result</button>` : ''}${c.report_doc_id ? `<a class="btn small" href="/api/files/download/${c.report_doc_id}">Lab report</a>` : ''}</div>`).join('')
+      ${c.status === 'pending' && qaCanAdd() && c.due_date <= t0 ? `<button class="btn small btn-primary" data-cres="${c.id}">Enter result</button>` : ''}${c.report_doc_id ? `<a class="btn small" href="/api/files/download/${c.report_doc_id}">Lab report</a>` : ''}${c.status === 'fail' || (c.status === 'pending' && c.due_date <= t0) ? waBtn(`${c.age_days}-day cube ${c.status === 'fail' ? 'FAILED (' + c.result_mpa + ' against ' + c.required_mpa + ' N/mm²)' : 'test due ' + c.due_date}: ${c.pour.element} ${c.pour.grade}${c.pour.wing ? ', wing ' + c.pour.wing : ''}${c.pour.floor != null ? ', floor ' + c.pour.floor : ''}.`, 'quality') : ''}</div>`).join('')
     || '<div class="empty-state"><p>No cube tests yet. They appear when a pour is recorded.</p></div>';
   el.querySelectorAll('[data-cres]').forEach((b) => { b.onclick = async () => {
     const c = cubes.find((x) => String(x.id) === b.dataset.cres);
@@ -111,7 +111,7 @@ async function qaNcrs(el) {
       <p class="muted">${esc(SRC[n.source] || n.source)}${n.wing ? ' · wing ' + esc(n.wing) : ''}${n.floor != null ? ' · floor ' + esc(n.floor) : ''} · in charge: ${esc(n.assigned_name || 'not set')}${n.due_date ? ' · by ' + esc(n.due_date) : ''}</p>
       ${n.details ? `<p class="muted">${esc(n.details)}</p>` : ''}${n.correction ? `<p>Correction: ${esc(n.correction)} <span class="muted">(${esc(n.closed_by_name || '')}, ${esc(String(n.closed_at || '').slice(0, 10))})</span></p>` : ''}</div>${chip(n.status === 'open' ? 'Open' : 'Closed', n.status === 'open' ? 'bad' : 'good')}</div>
       <div class="row-btns">${n.status === 'open' && qaPm() ? `<button class="btn small" data-assign="ncr:${n.id}" data-uid="${n.assigned_to || ''}" data-due="${esc(n.due_date || '')}">Set in charge</button><button class="btn small btn-primary" data-ncl="${n.id}">Close</button>` : ''}
-      ${n.photo_doc_id ? `<a class="btn small" href="/api/files/download/${n.photo_doc_id}">Photo</a>` : ''}${n.closing_doc_id ? `<a class="btn small" href="/api/files/download/${n.closing_doc_id}">Closing proof</a>` : ''}</div></div>`).join('') || '<div class="empty-state"><p>No NCRs.</p></div>'}`;
+      ${n.photo_doc_id ? `<a class="btn small" href="/api/files/download/${n.photo_doc_id}">Photo</a>` : ''}${n.closing_doc_id ? `<a class="btn small" href="/api/files/download/${n.closing_doc_id}">Closing proof</a>` : ''}${waBtn(`NCR (${n.status}): ${n.title}${n.wing ? ', wing ' + n.wing : ''}${n.floor != null ? ', floor ' + n.floor : ''}. In charge: ${n.assigned_name || 'not set'}${n.due_date ? ', by ' + n.due_date : ''}.`, 'quality')}</div></div>`).join('') || '<div class="empty-state"><p>No NCRs.</p></div>'}`;
   if ($('ncr-new')) $('ncr-new').onclick = async () => {
     const ch = typeof ppChoices === 'function' ? await ppChoices() : { people: [] };
     const v = await openForm({ title: 'Non-conformance (NCR)', fields: [
@@ -159,6 +159,9 @@ newDpr = async function () {
     <div class="field"><label>Weather</label><div class="row-btns" id="dpr-weather">${['Clear', 'Cloudy', 'Rain'].map((w) => `<button type="button" class="btn small" data-wx="${w}">${w}</button>`).join('')}</div></div>
     <div class="grid2"><div class="field"><label>Hours lost</label><input id="dpr-lost" type="number" step="any" inputmode="decimal" placeholder="0"></div>
     <div class="field"><label>Because of</label><select id="dpr-lostwhy"><option value="">—</option>${[['rain', 'Rain'], ['material', 'Material'], ['labour', 'Labour'], ['power', 'Power'], ['approvals', 'Approvals'], ['other', 'Other']].map(([v, l]) => `<option value="${v}">${l}</option>`).join('')}</select></div></div>
+    <h3>Safety today</h3><div class="multi-box" id="dpr-safety">${(m.safety || []).map((c, i) => `<label class="check multi-item"><input type="checkbox" data-sf="${i}"> ${esc(c)}</label>`).join('')}</div>
+    <div class="field"><label>Any incident?</label><div class="row-btns" id="dpr-inc">${[['none', 'None'], ['near_miss', 'Near miss'], ['injury', 'Injury'], ['dangerous', 'Dangerous occurrence']].map(([v, l]) => `<button type="button" class="btn small${v === 'none' ? ' btn-primary' : ''}" data-inc="${v}">${l}</button>`).join('')}</div></div>
+    <div class="field" id="dpr-incbox" hidden><label>What happened? (who, where, what was done)</label><textarea id="dpr-incident" rows="2"></textarea></div>
     <div class="field"><label>Labour on site</label><div id="dpr-labour"></div></div>
     <div class="field"><label>Problems / delays</label><textarea id="dpr-issues" rows="2"></textarea></div>
     <div class="field"><label>Photos</label><input id="dpr-photos" type="file" accept="image/*" multiple><p class="help">Optional. Kept on the phone until sent.</p></div>
@@ -168,6 +171,8 @@ newDpr = async function () {
   let weather = '';
   ov.querySelectorAll('[data-wx]').forEach((b) => { b.onclick = () => { weather = b.dataset.wx; ov.querySelectorAll('[data-wx]').forEach((x) => x.classList.toggle('btn-primary', x === b)); if (weather === 'Rain' && !$('dpr-lostwhy').value) $('dpr-lostwhy').value = 'rain'; }; });
   $('dpr-addline').onclick = () => $('dpr-lines').insertAdjacentHTML('beforeend', line());
+  let incident = 'none';
+  ov.querySelectorAll('[data-inc]').forEach((b) => { b.onclick = () => { incident = b.dataset.inc; ov.querySelectorAll('[data-inc]').forEach((x) => x.classList.toggle('btn-primary', x === b)); $('dpr-incbox').hidden = incident === 'none'; }; });
   let contractors = [];
   const stepper = (c, n) => `<div class="row" style="align-items:center;gap:8px;margin-bottom:8px" data-con="${c.id}" data-trade="${esc(c.trade || '')}"><div style="flex:1"><b>${esc(c.name)}</b>${c.trade ? `<div class="muted">${esc(c.trade)}</div>` : ''}</div>
     <button type="button" class="btn" data-step="-1" aria-label="Fewer" style="min-width:48px">−</button><input data-n inputmode="numeric" value="${n}" style="width:64px;text-align:center" aria-label="Headcount"><button type="button" class="btn" data-step="1" aria-label="More" style="min-width:48px">+</button></div>`;
@@ -186,7 +191,9 @@ newDpr = async function () {
     const work = [...ov.querySelectorAll('.dpr-line')].map((l) => Object.fromEntries([...l.querySelectorAll('[data-w]')].map((i) => [i.dataset.w, i.value.trim()]))).filter((w) => w.activity);
     const summary = $('dpr-summary').value.trim();
     if (!work.length && !summary) { const er = $('dpr-err'); er.textContent = 'Pick at least one activity (or write what happened).'; er.style.display = 'block'; return; }
-    const v = { project_id: Number($('dpr-project').value), report_date: $('dpr-date').value, work_summary: summary, work, weather, hours_lost: $('dpr-lost').value, lost_reason: $('dpr-lostwhy').value, issues: $('dpr-issues').value.trim(), client_uuid: crypto.randomUUID() };
+    if (incident !== 'none' && !$('dpr-incident').value.trim()) { const er = $('dpr-err'); er.textContent = 'Describe the incident: who, where, what was done.'; er.style.display = 'block'; return; }
+    const safety = Object.fromEntries((m.safety || []).map((c, i) => [c, !!(ov.querySelector(`[data-sf="${i}"]`) || {}).checked]));
+    const v = { project_id: Number($('dpr-project').value), report_date: $('dpr-date').value, work_summary: summary, work, weather, hours_lost: $('dpr-lost').value, lost_reason: $('dpr-lostwhy').value, issues: $('dpr-issues').value.trim(), safety, incident_kind: incident, safety_incident: incident !== 'none' ? $('dpr-incident').value.trim() : '', client_uuid: crypto.randomUUID() };
     if (contractors.length) v.labour = [...$('dpr-labour').querySelectorAll('[data-con]')].map((r) => ({ contractor_id: Number(r.dataset.con), trade: r.dataset.trade, headcount: Number(r.querySelector('[data-n]').value) || 0 })).filter((x) => x.headcount > 0);
     else v.labour_count = Number(($('dpr-total') || {}).value) || 0;
     const files = [...$('dpr-photos').files];

@@ -9,6 +9,7 @@ export const DEFAULT_CHECKLIST = [
   'Cover blocks in place', 'Electrical and plumbing sleeves / conduits in place', 'Vibrator, standby vibrator and lighting ready',
   'Cube moulds ready (a set of 3 for each test age)', 'Curing arranged',
 ];
+export const DEFAULT_SAFETY = ['Toolbox talk held', 'Helmets, shoes and harnesses worn (PPE)', 'Edge protection and railings in place', 'Scaffolding checked and tagged', 'Site clean, walkways clear', 'First-aid kit stocked'];
 export const DEFAULT_ACTIVITIES = ['Excavation', 'PCC', 'Footing / raft', 'Column', 'Beam', 'Slab', 'Staircase', 'Blockwork', 'Plaster (internal)', 'Plaster (external)',
   'Waterproofing', 'Electrical', 'Plumbing', 'Flooring / tiling', 'Doors and windows', 'Painting', 'Other'];
 const listSetting = (v, dflt) => { const l = String(v || '').split(/\n|;/).map((x) => x.trim()).filter(Boolean); return l.length ? l : dflt; };
@@ -42,7 +43,7 @@ export function registerQuality(router, h) {
 
   router.get('/api/qa/meta', async (req, env) => withAuth(req, env, 'site', 'V', async (req, env) => {
     try {
-      return json({ ok: true, data: { checklist: await checklist(env), elements: ELEMENTS, activities: listSetting(await getSetting(env, 'dpr.activities'), DEFAULT_ACTIVITIES), seven_day_pct: (await sevenDayBp(env)) / 100 } });
+      return json({ ok: true, data: { checklist: await checklist(env), elements: ELEMENTS, activities: listSetting(await getSetting(env, 'dpr.activities'), DEFAULT_ACTIVITIES), safety: listSetting(await getSetting(env, 'dpr.safety_checks'), DEFAULT_SAFETY), seven_day_pct: (await sevenDayBp(env)) / 100 } });
     } catch (e) { return serverError(e, 'qa-meta'); }
   }));
 

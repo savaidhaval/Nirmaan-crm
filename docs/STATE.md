@@ -164,3 +164,6 @@ Built after Dhaval's answer (architect, engineer and CA certificates before any 
 
 ## Quality and daily report (migration 0036, audit priority 3)
 31 API suites pass on a clean database (new: quality, 34 checks) and a phone walkthrough (7 checks). Not deployed until Dhaval approves the PR. Still open from the audit: safety checks (B4), BOQ items (B2), debit notes and material reconciliation (A9), baseline/hold dates (B5), drawing links (B6), redevelopment vacating/PAAA (B7), WhatsApp share, voice notes, high-contrast mode, wing hold (D).
+
+## WhatsApp, high contrast, safety (migration 0037)
+31 API suites pass on a clean database (quality suite now 38 checks with safety) and a phone walkthrough (7 checks). Not deployed until Dhaval approves the PR.

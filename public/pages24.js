@@ -150,7 +150,7 @@ approvalDetail = async function (id) {
     const d = (await api(`/api/approvals/${id}/steps`)).data, a = d.item;
     box.innerHTML = `<div class="card"><p><b>Type:</b> ${esc(a.gate ? d.gate_labels[a.gate] : 'Other')}${a.wing ? ' · wing ' + esc(a.wing) : ''}</p>
       <p><b>Must come first:</b> ${d.depends_on.length ? d.depends_on.map((x) => `${esc(x.name)} ${x.status === 'approved' ? chip('approved', 'good') : chip(x.status.replace('_', ' '), 'warn')}`).join(', ') : 'nothing'}</p>
-      ${userCanClient('approvals', 'E') ? '<button class="btn small" id="ap-gate">Change type or order</button>' : ''}</div>`;
+      <div class="row-btns">${userCanClient('approvals', 'E') ? '<button class="btn small" id="ap-gate">Change type or order</button>' : ''}${typeof waBtn === 'function' ? waBtn(`Approval ${a.name}: ${String(a.status || '').replace('_', ' ')}.${a.holder_designation ? ' File with ' + a.holder_designation + (a.next_designation ? ', next ' + a.next_designation : '') + '.' : ''} In charge: ${a.owner_name || 'not set'}${a.target_date ? ', expected ' + a.target_date : ''}.`, 'approvals') : ''}</div></div>`;
     const btn = box.querySelector('#ap-gate'); if (!btn) return;
     btn.onclick = async () => {
       const v = await openForm({ title: 'Type and order', intro: 'The type lets the system stop work, sales and possession until the right approval is in place.', fields: [

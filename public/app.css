@@ -491,3 +491,24 @@ h3 { font-size: .75rem; letter-spacing: .07em; font-weight: 600; }
 .fact:last-child { border-bottom: 0; }
 @media (min-width: 700px) { .fact { grid-template-columns: 220px 1fr; align-items: baseline; } }
 .task-row.late { border-left: 4px solid #d92d20; }
+
+/* WhatsApp share button */
+.wa-btn { display: inline-flex; align-items: center; gap: 6px; color: #128C3E; border-color: #9fdcb3; }
+.wa-btn svg { flex: none; }
+
+/* High contrast for sunlight: black on white, heavy borders, bigger type, no see-through bars */
+body.hc { --text: #000; --muted: #1f2937; --border: #000; --surface: #fff; background: #fff !important; color: #000; font-size: 19px; }
+body.hc .main, body.hc .card, body.hc .modal, body.hc .empty-state { background: #fff !important; color: #000; }
+body.hc .card, body.hc .modal, body.hc .field input, body.hc .field select, body.hc .field textarea, body.hc .multi-box { border: 2px solid #000 !important; box-shadow: none !important; }
+body.hc .muted, body.hc .help, body.hc label, body.hc .tile-label { color: #111 !important; opacity: 1 !important; }
+body.hc .btn { border: 2px solid #000 !important; color: #000 !important; background: #fff !important; font-weight: 700; min-height: 52px; }
+body.hc .btn-primary { background: #000 !important; color: #fff !important; }
+body.hc .btn.small { min-height: 48px; }
+body.hc .topbar, body.hc .bottom-nav, body.hc .sub-nav { background: #fff !important; -webkit-backdrop-filter: none; backdrop-filter: none; border-color: #000 !important; border-width: 2px !important; }
+body.hc .sub-link { border: 2px solid #000; color: #000; }
+body.hc .sub-link.active, body.hc .nav-item.active { background: #000 !important; color: #fff !important; }
+body.hc .chip { border: 2px solid currentColor; font-weight: 700; }
+body.hc .wa-btn { color: #0b5d27 !important; }
+body.hc .modal-overlay { background: rgba(0, 0, 0, .7); }
+body.hc a { color: #000; text-decoration: underline; }
+body.hc .task-row.late { border-left-width: 8px !important; }

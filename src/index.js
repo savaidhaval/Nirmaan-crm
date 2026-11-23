@@ -558,7 +558,7 @@ const EDITABLE_SETTINGS = ['po.pm_approval_limit_paise', 'access.allow_second_ow
   'brochure.price_list_default_audience', 'storage.warn_percent', 'sales.max_holds_per_user', 'sales.max_discount_bp', 'sales.pm_max_discount_bp',
   'interest.rate_bp', 'interest.grace_days', 'interest.enabled', 'security.require_mfa_roles', 'tax.stamp_duty_bp', 'tax.metro_cess_bp', 'tax.women_concession_bp', 'tax.registration_bp', 'tax.registration_cap_paise', 'tax.gst_bp',
   'con.enabled', 'con.pm_approval_limit_paise', 'con.gst_bp', 'con.tds_bp', 'budget.gst_basis', 'petty.low_balance_paise', 'ai.enabled', 'ai.daily_limit', 'ai.model', 'rera.designated_pct_bp', 'fea.review_days', 'red.member_doc_checklist', 'red.rent_due_day', 'bank.keep_days', 'drawing.ack_hours', 'sales.bulk_daily_limit', 'sales.bulk_chunk', 'sales.demand_link_days', 'sales.visit_objections', 'sales.visit_radius_m',
-  'sales.receipt_approval_limit_paise', 'sales.discount_pm_limit_paise', 'sales.handover_template', 'apr.designations', 'con.variation_owner_limit_paise', 'con.advance_recovery_bp', 'con.dlp_months', 'pro.tolerance_bp', 'tax.tds_no_pan_bp', 'rera.cert_valid_days', 'qa.pour_checklist', 'qa.cube_7day_pct_bp', 'dpr.activities'];
+  'sales.receipt_approval_limit_paise', 'sales.discount_pm_limit_paise', 'sales.handover_template', 'apr.designations', 'con.variation_owner_limit_paise', 'con.advance_recovery_bp', 'con.dlp_months', 'pro.tolerance_bp', 'tax.tds_no_pan_bp', 'rera.cert_valid_days', 'qa.pour_checklist', 'qa.cube_7day_pct_bp', 'dpr.activities', 'dpr.safety_checks'];
 
 router.post('/api/settings/:key', async (req, env) => {
   return withAuth(req, env, 'users_settings', 'E', async (req, env) => {
@@ -953,6 +953,14 @@ router.post('/api/site/dprs', async (req, env) => {
       if (work.some((w) => (w.qty != null && !(w.qty >= 0 && w.qty < 1e6)) || (w.floor != null && !(w.floor >= -5 && w.floor <= 200)))) return json({ ok: false, error: 'Check the quantities and floors.' }, 400);
       const hoursLost = body.hours_lost === '' || body.hours_lost == null ? null : Number(body.hours_lost);
       if (hoursLost != null && !(hoursLost >= 0 && hoursLost <= 24)) return json({ ok: false, error: 'Hours lost must be between 0 and 24.' }, 400);
+      // Safety: the day's checks (from the setting dpr.safety_checks) and any incident. An incident needs a description and tells the PM and Owner at once.
+      const SAFETY_DEFAULT = ['Toolbox talk held', 'Helmets, shoes and harnesses worn (PPE)', 'Edge protection and railings in place', 'Scaffolding checked and tagged', 'Site clean, walkways clear', 'First-aid kit stocked'];
+      const safetyItems = String((await getSetting(env, 'dpr.safety_checks')) || '').split(/\n|;/).map((x) => x.trim()).filter(Boolean);
+      const sItems = safetyItems.length ? safetyItems : SAFETY_DEFAULT;
+      const safety = body.safety && typeof body.safety === 'object' ? JSON.stringify(Object.fromEntries(sItems.map((i) => [i, !!body.safety[i]]))) : null;
+      const INCIDENTS = ['none', 'near_miss', 'injury', 'dangerous'];
+      const incident = INCIDENTS.includes(body.incident_kind) ? body.incident_kind : null;
+      if (incident && incident !== 'none' && !String(safety_incident || '').trim()) return json({ ok: false, error: 'Describe what happened (who, where, what was done).' }, 400);
       const LOST = ['rain', 'material', 'labour', 'power', 'approvals', 'other'];
       const lostReason = LOST.includes(body.lost_reason) ? body.lost_reason : null;
       if (!String(body.work_summary || '').trim() && work.length) body.work_summary = work.map((w) => `${w.activity}${w.wing ? ' ' + w.wing : ''}${w.floor != null ? ' fl ' + w.floor : ''}${w.qty != null ? ' ' + w.qty + (w.unit ? ' ' + w.unit : '') : ''}`).join('; ').slice(0, 1000);
@@ -993,7 +1001,10 @@ router.post('/api/site/dprs', async (req, env) => {
           .bind(project_id, report_date, wing || '', work_summary, labourTotal, weather || '', materials_used || '', issues || '', safety_incident || '', user.user_id, uuid, now),
         ...lines.map((l) => env.DB.prepare('INSERT INTO site_dpr_labour (dpr_id, contractor_id, trade, headcount, created_at) VALUES ((SELECT id FROM site_dprs WHERE client_uuid = ?), ?, ?, ?, ?)').bind(uuid, l.id, l.trade, l.head, now)),
         ...work.map((w) => env.DB.prepare('INSERT INTO site_dpr_work (dpr_id, wing, floor, activity, qty, unit) VALUES ((SELECT id FROM site_dprs WHERE client_uuid = ?), ?, ?, ?, ?, ?)').bind(uuid, w.wing, w.floor, w.activity, w.qty, w.unit)),
-        env.DB.prepare('UPDATE site_dprs SET hours_lost = ?, lost_reason = ? WHERE client_uuid = ?').bind(hoursLost, lostReason, uuid),
+        env.DB.prepare('UPDATE site_dprs SET hours_lost = ?, lost_reason = ?, safety_checks = ?, incident_kind = ? WHERE client_uuid = ?').bind(hoursLost, lostReason, safety, incident, uuid),
+        ...(incident && incident !== 'none' ? [env.DB.prepare(`INSERT INTO notifications (user_id, title, body, link, created_at) SELECT id, ?, ?, 'site', ? FROM users WHERE role IN ('owner', 'pm') AND active = 1 AND deleted_at IS NULL
+          ORDER BY role = 'owner' DESC, id IN (SELECT user_id FROM project_members WHERE project_id = ?) DESC, id DESC LIMIT 20`)
+          .bind(`SAFETY: ${{ near_miss: 'Near miss', injury: 'Injury', dangerous: 'Dangerous occurrence' }[incident]} on site (${report_date})`, String(safety_incident).slice(0, 300), now, Number(project_id))] : []),
         env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, 'create', 'site_dprs', (SELECT id FROM site_dprs WHERE client_uuid = ?), ?, ?)`).bind(user.user_id, uuid, `DPR filed for ${report_date}`, now),
       ]);
       const result = { meta: { last_row_id: res[0].meta.last_row_id } };
