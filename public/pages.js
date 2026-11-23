@@ -644,6 +644,7 @@ const SETTING_LABELS = {
   'rera.cert_valid_days': ['RERA withdrawal: certificates older than this many days are not accepted. Confirm with your CA', 'number'],
   'qa.cube_7day_pct_bp': ['Cubes: the 7-day result must reach this share of the grade, in basis points (6500 = 65%). Confirm with your structural consultant', 'number'],
   'qa.pour_checklist': ['Pour card checks (separate them with ; ). Leave empty for the built-in list', 'text'],
+  'dpr.safety_checks': ['Daily report safety checks (separate them with ; ). Leave empty for the built-in list', 'text'],
   'dpr.activities': ['Daily report activities (separate them with ; ). Leave empty for the built-in list', 'text'],
   'con.tds_bp': ['TDS on contractor bills, in basis points (100 = 1%). Confirm with your CA', 'number'],
   'access.allow_second_owner': ['Allow a second Owner', 'onoff'],

@@ -403,3 +403,7 @@ id TEXT PK, source TEXT, seen_at TEXT
 - qa_ncrs (project_id, wing, floor, source cube7|cube28|site, pour_id, cube_id, title, details, contractor_id, assigned_to, due_date, status open|closed, correction, closed_by/at, closing_doc_id, photo_doc_id, created_by/at, client_uuid). An open cube28 NCR stops milestone certification at that wing, at its floor and above. In the backup list.
 - site_dpr_work (dpr_id, wing, floor, activity, qty, unit): the work-done lines of a daily report. In the backup list. site_dprs: hours_lost, lost_reason (rain | material | labour | power | approvals | other).
 - Settings: qa.pour_checklist (; separated, empty = built-in list), qa.cube_7day_pct_bp (6500), dpr.activities (; separated, empty = built-in list).
+
+## 0037 additions (safety in the daily report)
+- site_dprs: safety_checks (JSON { check: true/false } from the setting dpr.safety_checks), incident_kind (none | near_miss | injury | dangerous). safety_incident holds the description. An incident notifies the Owner and PMs.
+- Setting dpr.safety_checks (; separated, empty = built-in list). High-contrast choice is kept in the phone's local storage (nirmaan.contrast), not on the server.

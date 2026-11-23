@@ -98,7 +98,7 @@ function taskRows(tasks, mgr) {
   if (!tasks.length) return '<div class="empty-state"><p>Nothing open right now.</p></div>';
   return tasks.map((t) => `<div class="card task-row${t.late ? ' late' : ''}"><div class="row"><div><span class="muted">${esc(KIND_LABEL[t.kind] || t.kind)}</span><br><b class="${t.kind === 'approval' || t.kind === 'step' ? 'caps' : ''}">${esc(t.title || '')}</b>
     <p class="muted">In charge: <b>${esc(t.in_charge || 'not set')}</b> · Expected: ${esc(t.due || 'not set')}${t.detail && (t.kind === 'step' || t.kind === 'approval') ? ' · with ' + esc(t.detail) : ''}</p></div>${t.late ? chip('Late', 'bad') : (t.in_charge && t.due ? '' : chip('Needs a person and date', 'warn'))}</div>
-    ${mgr || (t.kind === 'snag' && currentUser.role !== 'viewer') ? `<button class="btn small" data-assign="${t.kind}:${t.id}" data-uid="${t.user_id || ''}" data-due="${esc(t.due || '')}">Set in charge</button>` : ''}</div>`).join('');
+    <div class="row-btns">${mgr || (t.kind === 'snag' && currentUser.role !== 'viewer') ? `<button class="btn small" data-assign="${t.kind}:${t.id}" data-uid="${t.user_id || ''}" data-due="${esc(t.due || '')}">Set in charge</button>` : ''}${typeof waBtn === 'function' ? waBtn(`${KIND_LABEL[t.kind] || t.kind}: ${t.title || ''}. In charge: ${t.in_charge || 'not set'}. Expected: ${t.due || 'not set'}${t.late ? ' (LATE)' : ''}.`, 'tasks') : ''}</div></div>`).join('');
 }
 
 // ======================= Tasks page =======================

@@ -1,0 +1,65 @@
+import { createRequire } from 'node:module';
+const { chromium } = createRequire(import.meta.url)('/opt/node-tools/node_modules/playwright');
+const BASE = process.env.BASE || 'http://localhost:8787', SHOTS = '/tmp/claude-0/scratch/shots';
+const run = Date.now().toString(36);
+let pass = 0, fail = 0; const ok = (n, c, x = '') => { c ? pass++ : fail++; console.log(`${c ? 'PASS' : 'FAIL'}  ${n}${c ? '' : '  ' + x}`); };
+class C { constructor() { this.cookie = ''; } async call(m, p, b) { const h = { 'X-NirmaanCRM': '1' }; if (this.cookie) h.cookie = this.cookie; let body; if (b) { h['Content-Type'] = 'application/json'; body = JSON.stringify(b); }
+  const r = await fetch(BASE + p, { method: m, headers: h, body }); const sc = r.headers.get('set-cookie'); if (sc) this.cookie = sc.split(';')[0]; let d = null; try { d = await r.json(); } catch (e) {} return { status: r.status, data: d && d.data, err: d && d.error }; } }
+const o = new C(); await o.call('POST', '/api/auth/login', { email: 'owner@test.local', password: 'CiStrongPass-12345' });
+const pid = (await o.call('POST', '/api/projects', { rera_no: 'P518000TEST', name: 'UI Tower ' + run, code: 'UI' + run.toUpperCase().slice(-5), budget_paise: 5e9 })).data.id;
+await o.call('POST', '/api/settings/con.enabled', { value: 'on' });
+await o.call('POST', '/api/settings/con.pm_approval_limit_paise', { value: 50000000 });
+const users = {};
+for (const role of ['site', 'pm', 'purchase', 'accounts', 'sales', 'viewer']) {
+  const email = `ui-${role}-${run}@test.local`; const r = await o.call('POST', '/api/users', { name: 'UI ' + role + ' ' + run, email, role, projects: role === 'site' ? [pid] : [] });
+  const c = new C(); await c.call('POST', '/api/auth/login', { email, password: r.data.temporaryPassword }); const pw = 'UiStrongPass-' + run;
+  await c.call('POST', '/api/auth/change-password', { currentPassword: r.data.temporaryPassword, newPassword: pw }); users[role] = { email, pw };
+}
+const browser = await chromium.launch();
+const ctxs = {};
+async function page(role) {
+  if (!ctxs[role]) {
+    const ctx = await browser.newContext({ viewport: { width: 390, height: 800 } });
+    const email = role === 'owner' ? 'owner@test.local' : users[role].email, password = role === 'owner' ? 'CiStrongPass-12345' : users[role].pw;
+    const r = await ctx.request.post(BASE + '/api/auth/login', { headers: { 'X-NirmaanCRM': '1', 'Content-Type': 'application/json' }, data: { email, password } });
+    if (!r.ok()) throw new Error('login ' + role + ' ' + r.status());
+    ctxs[role] = ctx;
+  }
+  const p = await ctxs[role].newPage(); p.on('dialog', (d) => d.accept()); p.on('pageerror', (e) => console.log('PAGEERROR', role, e.message));
+  await p.goto(BASE + '/'); await p.waitForFunction(() => typeof navigate === 'function' && typeof currentUser !== 'undefined' && currentUser, null, { timeout: 15000 }); return p;
+}
+const go = async (p, route) => { await p.evaluate((r) => navigate(r), route); await p.waitForTimeout(800); };
+const toastText = async (p) => { await p.waitForTimeout(500); return p.evaluate(() => (document.getElementById('toast') || {}).textContent || ''); };
+const submit = (p) => p.click('#modal-form button[type=submit]');
+const pick = (p, sel, label) => p.selectOption(sel, { label });
+const shot = (p, n) => p.screenshot({ path: `${SHOTS}/${n}.png` });
+
+const iso = (d) => new Date(Date.now() + 19800000 + d * 86400000).toISOString().slice(0, 10);
+// ===== high contrast =====
+const sp = await page('site'); await go(sp, 'site'); await sp.waitForTimeout(800);
+ok('the site engineer gets high contrast by default (black text, white ground, heavy borders)', await sp.evaluate(() => document.body.classList.contains('hc') && getComputedStyle(document.body).backgroundColor === 'rgb(255, 255, 255)'));
+await shot(sp, '240-high-contrast');
+const op = await page('owner'); await go(op, 'site'); await op.waitForTimeout(600);
+ok('other roles start without it', await op.evaluate(() => !document.body.classList.contains('hc')));
+await op.click('#btn-user-menu'); await op.waitForSelector('#menu-contrast'); await op.click('#menu-contrast'); await op.waitForTimeout(400);
+ok('anyone can switch it on from the account menu', await op.evaluate(() => document.body.classList.contains('hc')));
+await op.reload(); await op.waitForFunction(() => typeof currentUser !== 'undefined' && currentUser, null, { timeout: 15000 }); await go(op, 'site'); await op.waitForTimeout(600);
+ok('the choice is remembered on this phone', await op.evaluate(() => document.body.classList.contains('hc')));
+await op.click('#btn-user-menu'); await op.click('#menu-contrast'); await op.waitForTimeout(300);
+
+// ===== daily report with safety, then WhatsApp =====
+await go(sp, 'site'); await sp.evaluate(() => newDpr()); await sp.waitForSelector('[data-sf]');
+await sp.selectOption('[data-w="activity"]', 'Slab'); await sp.fill('[data-w="wing"]', 'A');
+const sf = await sp.$$('[data-sf]'); for (const x of sf.slice(0, 5)) await x.check();
+await sp.click('[data-inc="near_miss"]'); await sp.waitForSelector('#dpr-incident:visible');
+await sp.fill('#dpr-incident', 'Plank slipped from 3rd floor, nobody hurt, area cordoned');
+await shot(sp, '241-dpr-safety'); await sp.click('#dpr-form button[type=submit]'); await sp.waitForTimeout(1800);
+const txt = await sp.textContent('#site-list');
+ok('the report card shows Safety 5/6, what was missed, and the near miss', txt.includes('Safety 5/6') && txt.includes('Not done') && txt.includes('Near miss'), txt.slice(0, 300));
+let opened = null; await sp.exposeFunction('__wa', (u) => { opened = u; }); await sp.evaluate(() => { window.open = (u) => { window.__wa(u); return null; }; });
+await sp.click('#site-list .wa-btn'); await sp.waitForTimeout(400);
+const msg = opened ? decodeURIComponent(opened.split('text=')[1] || '') : '';
+ok('WhatsApp opens with a ready message and a link back into the app', /^https:\/\/wa\.me\/\?text=/.test(opened || '') && msg.includes('Daily report') && msg.includes('SAFETY: near miss') && msg.includes(BASE.replace(/\/$/, '') + '/#site'), msg);
+await shot(sp, '242-dpr-card');
+ok('the Owner is told about the near miss', JSON.stringify((await o.call('GET', '/api/notifications')).data).includes('SAFETY: Near miss'));
+await browser.close(); console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);

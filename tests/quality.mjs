@@ -88,5 +88,14 @@ ok('a report with activity lines needs no typed summary; one is written from the
 ok('hours lost above 24 are refused', (await site.call('POST', '/api/site/dprs', { project_id: pid, report_date: iso(0), work: [{ activity: 'Slab' }], hours_lost: 30 })).status === 400);
 ok('a report with nothing done is refused', (await site.call('POST', '/api/site/dprs', { project_id: pid, report_date: iso(0), work: [] })).status === 400);
 
+// ============ safety in the daily report ============
+ok('the safety checklist comes with a built-in list', Array.isArray(meta.safety) && meta.safety.includes('Toolbox talk held'));
+const safe = Object.fromEntries(meta.safety.map((c, i) => [c, i !== 2]));
+ok('an incident needs a description', (await site.call('POST', '/api/site/dprs', { project_id: pid, report_date: iso(0), work: [{ activity: 'Slab' }], safety: safe, incident_kind: 'injury' })).status === 400);
+const inj = await site.call('POST', '/api/site/dprs', { project_id: pid, report_date: iso(0), work: [{ activity: 'Column', wing: 'A', floor: 6 }], safety: safe, incident_kind: 'injury', safety_incident: 'Helper cut hand on binding wire, first aid given ' + run });
+const saved = (await o.call('GET', `/api/site/dprs?project_id=${pid}`)).data.dprs.find((d) => (d.safety_incident || '').includes(run));
+ok('the checks and the incident are saved with the report', inj.status === 200 && saved && saved.incident_kind === 'injury' && JSON.parse(saved.safety_checks)[meta.safety[2]] === false && JSON.parse(saved.safety_checks)[meta.safety[0]] === true, JSON.stringify(saved || {}));
+ok('the PM and Owner are told at once', JSON.stringify((await o.call('GET', '/api/notifications')).data).includes('SAFETY: Injury'));
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
