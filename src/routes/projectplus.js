@@ -444,4 +444,105 @@ export function registerProjectPlus(router, h) {
         society: soc.results[0] || null, sales: sales.results[0] || null, holds: holds.results, tasks: tasks.slice(0, 40) } });
     } catch (e) { return serverError(e, 'pp-overview'); }
   }));
+
+  // ---------- Project life cycle: from the registered DA to the OC, in the usual Mumbai order ----------
+  // Read from approvals, society members, site milestones, bookings and the Business Development deal; the few steps that live nowhere else
+  // (designs finalised, vacating notice, demolition...) are ticked here. Targets: plinth CC = vacating + N months; OC = plinth CC + M months (settings).
+  const addMonths = (d, m) => { if (!d) return null; const x = new Date(d.slice(0, 10) + 'T00:00:00Z'); const day = x.getUTCDate(); x.setUTCDate(1); x.setUTCMonth(x.getUTCMonth() + m); const last = new Date(Date.UTC(x.getUTCFullYear(), x.getUTCMonth() + 1, 0)).getUTCDate(); x.setUTCDate(Math.min(day, last)); return x.toISOString().slice(0, 10); };
+  const LC_MANUAL = { da_registered: 'Development agreement registered', designs: 'Designs finalised', vacating_notice: 'Vacating notice issued', vacating: 'Vacating complete', demolition: 'Old building demolished' };
+  const d10 = (v) => (v ? String(v).slice(0, 10) : null);
+  async function lifecycle(env, pid) {
+    const [pr, apr, mem, ms, bk, bd, man] = await env.DB.batch([
+      env.DB.prepare('SELECT id, name, type, rera_no FROM projects WHERE id = ? AND deleted_at IS NULL').bind(pid),
+      env.DB.prepare('SELECT id, name, category, gate_key, status, approved_on, letter_date FROM apr_items WHERE project_id = ? AND deleted_at IS NULL').bind(pid),
+      env.DB.prepare(`SELECT COUNT(m.id) AS total, COALESCE(SUM(m.paaa_reg_date IS NOT NULL), 0) AS paaa, MAX(m.paaa_reg_date) AS paaa_last, COALESCE(SUM(m.vacated_on IS NOT NULL), 0) AS gone, MAX(m.vacated_on) AS gone_last
+        FROM red_societies s JOIN red_members m ON m.society_id = s.id AND m.deleted_at IS NULL WHERE s.project_id = ? AND s.deleted_at IS NULL`).bind(pid),
+      env.DB.prepare("SELECT name, floor, status, actual_date FROM site_milestones WHERE project_id = ? AND deleted_at IS NULL AND (floor IS NULL OR floor <= 0)").bind(pid),
+      env.DB.prepare("SELECT MIN(COALESCE(booking_date, substr(created_at, 1, 10))) AS first FROM sal_bookings WHERE project_id = ? AND deleted_at IS NULL AND status != 'cancelled'").bind(pid),
+      env.DB.prepare('SELECT id, name, da_registered_on, da_reg_no FROM bd_opportunities WHERE project_id = ? LIMIT 1').bind(pid),
+      env.DB.prepare('SELECT step, done_on, note, override_note FROM prj_lifecycle WHERE project_id = ?').bind(pid),
+    ]);
+    const p = pr.results[0]; if (!p) return null;
+    const society = p.type === 'redevelopment';
+    const items = apr.results.map((i) => ({ ...i, gate: gateOf(i), on: d10(i.letter_date || i.approved_on) }));
+    const manual = Object.fromEntries(man.results.map((r) => [r.step, r]));
+    const m = mem.results[0] || { total: 0 };
+    const deal = bd.results[0] || null;
+    const today = todayIST();
+    const vacMonths = Number(await getSetting(env, 'bd.vacate_to_plinth_months')) || 7;
+    const doneMonths = Number(await getSetting(env, 'bd.completion_months')) || 36;
+    // one approval kind: done when every matching item is approved (date = the last approval)
+    const apr1 = (test) => { const l = items.filter((i) => i.status !== 'na' && test(i)); if (!l.length) return { missing: true }; const ok = l.filter((i) => i.status === 'approved'); return { done: ok.length === l.length, on: ok.length === l.length ? ok.map((i) => i.on).filter(Boolean).sort().pop() || null : null, detail: l.length > 1 ? `${ok.length} of ${l.length} approved` : null }; };
+    const msOf = (re) => { const l = ms.results.filter((x) => re.test(x.name || '')); if (!l.length) return { missing: true }; const ok = l.filter((x) => x.status === 'done'); return { done: ok.length === l.length, on: ok.length === l.length ? ok.map((x) => d10(x.actual_date)).filter(Boolean).sort().pop() || null : null, detail: l.length > 1 ? `${ok.length} of ${l.length} done` : null }; };
+    const man1 = (k) => (manual[k] && manual[k].done_on ? { done: true, on: manual[k].done_on, detail: manual[k].note || null } : { done: false, manual: true });
+    const isCfo = (i) => /\bcfo\b|fire noc|fire brigade/i.test(i.name) && i.gate !== 'fire_final';
+    const plinthCc = apr1((i) => i.gate === 'cc'); // in Mumbai the first CC covers work up to plinth
+    const steps = [];
+    const add = (key, label, st, extra = {}) => steps.push({ key, label, ...st, ...extra });
+    add('da_registered', 'Development agreement registered', deal && deal.da_registered_on ? { done: true, on: deal.da_registered_on, detail: deal.da_reg_no } : man1('da_registered'), { phase: 'Business development' });
+    add('designs', 'Designs finalised', man1('designs'), { phase: 'Design and approvals' });
+    add('cfo', 'CFO (fire) NOC', apr1(isCfo), { phase: 'Design and approvals' });
+    add('concessions', 'Concessions', apr1((i) => /concession/i.test(i.name)), { phase: 'Design and approvals' });
+    add('iod', 'IOD', apr1((i) => i.gate === 'iod'), { phase: 'Design and approvals' });
+    if (society) {
+      add('paaa', 'PAAA signed with all members', m.total ? { done: m.paaa === m.total, on: m.paaa === m.total ? d10(m.paaa_last) : null, detail: `${m.paaa} of ${m.total} registered` } : { missing: true }, { phase: 'Members and vacating' });
+      add('vacating_notice', 'Vacating notice issued', man1('vacating_notice'), { phase: 'Members and vacating' });
+      add('vacating', 'Vacating complete', m.total ? { done: m.gone === m.total, on: m.gone === m.total ? d10(m.gone_last) : null, detail: `${m.gone} of ${m.total} vacated` } : { missing: true }, { phase: 'Members and vacating' });
+    } else add('vacating', 'Site vacant / possession of land', man1('vacating'), { phase: 'Members and vacating' });
+    add('demolition', 'Old building demolished', man1('demolition'), { phase: 'Members and vacating', optional: !society });
+    add('nocs', 'NOCs for plinth CC', apr1((i) => i.category === 'noc' && !isCfo(i) && i.gate !== 'fire_final' && !/completion|occupa|lift|electric/i.test(i.name)), { phase: 'Commencement' });
+    const vac = steps.find((x) => x.key === 'vacating');
+    add('plinth_cc', 'Plinth CC (commencement)', plinthCc, { phase: 'Commencement', target: vac && vac.on ? addMonths(vac.on, vacMonths) : null, target_note: `${vacMonths} months from vacating` });
+    add('rera', 'MahaRERA registration', p.rera_no && String(p.rera_no).trim() ? { done: true, on: apr1((i) => i.gate === 'rera_reg').on || null, detail: p.rera_no } : { done: false }, { phase: 'Commencement', note: 'Apply after the CC' });
+    add('sales', 'Sales and marketing started', bk.results[0] && bk.results[0].first ? { done: true, on: d10(bk.results[0].first), detail: 'first booking' } : { done: false }, { phase: 'Commencement' });
+    add('excavation', 'Excavation', msOf(/excavat/i), { phase: 'Construction' });
+    add('foundation', 'Foundation', msOf(/foundation|footing|piling|raft/i), { phase: 'Construction' });
+    const base = msOf(/basement/i); if (!base.missing) add('basement', 'Basement', base, { phase: 'Construction' });
+    add('plinth', 'Plinth', msOf(/plinth/i), { phase: 'Construction' });
+    add('further_cc', 'Further CC (above plinth)', apr1((i) => i.gate === 'plinth_cc' || i.gate === 'further_cc'), { phase: 'Construction' });
+    add('oc', 'Occupation certificate (OC)', apr1((i) => i.gate === 'oc'), { phase: 'Completion', target: plinthCc.on ? addMonths(plinthCc.on, doneMonths) : null, target_note: `${doneMonths} months from plinth CC` });
+    for (const x of steps) { x.done = !!x.done; x.late = !!(x.target && !x.done && x.target < today); if (x.manual === undefined) x.manual = !!LC_MANUAL[x.key] && !(x.key === 'da_registered' && deal) && !(x.key === 'vacating' && society); }
+    const next = steps.find((x) => !x.done && !x.optional);
+    return { project: { id: p.id, name: p.name, society }, steps, next: next ? next.key : null, deal: deal ? { id: deal.id, name: deal.name } : null, settings: { vacate_to_plinth_months: vacMonths, completion_months: doneMonths } };
+  }
+  router.get('/api/projects/:id/lifecycle', async (req, env) => withAuth(req, env, 'projects', 'V', async (req, env) => {
+    try {
+      const pid = Number(req.params.id);
+      if (!(await visibleProjectIds(env, req.user)).includes(pid)) return json({ ok: false, error: 'Not allowed.' }, 403);
+      const out = await lifecycle(env, pid); if (!out) return json({ ok: false, error: 'Project not found.' }, 404);
+      return json({ ok: true, data: out });
+    } catch (e) { return serverError(e, 'lifecycle'); }
+  }));
+  // Tick (or clear) a life-cycle step that has no other record. Demolition waits for every member to vacate unless the Owner writes why.
+  router.post('/api/projects/:id/lifecycle/:step', async (req, env) => withAuth(req, env, 'projects', 'E', async (req, env) => {
+    try {
+      const pid = Number(req.params.id); const step = req.params.step;
+      if (!(await visibleProjectIds(env, req.user)).includes(pid)) return json({ ok: false, error: 'Not allowed.' }, 403);
+      if (!LC_MANUAL[step]) return json({ ok: false, error: 'This step is recorded elsewhere (Approvals, Redevelopment or Site).' }, 400);
+      const cur = await lifecycle(env, pid); if (!cur) return json({ ok: false, error: 'Project not found.' }, 404);
+      const row = cur.steps.find((x) => x.key === step);
+      if (!row || !row.manual) return json({ ok: false, error: 'This step is recorded elsewhere (Business Development or Redevelopment).' }, 400);
+      const b = await req.json();
+      const done = b.done_on === '' || b.done_on == null ? null : String(b.done_on);
+      if (done && (!isDate(done) || done > todayIST())) return json({ ok: false, error: 'Enter the date (not in the future).' }, 400);
+      let override = null;
+      if (done && step === 'demolition' && cur.project.society) {
+        const v = cur.steps.find((x) => x.key === 'vacating');
+        if (!v.done) {
+          override = str(b.override_note, 300);
+          if (req.user.role !== 'owner' || !override) return json({ ok: false, error: `Not everyone has vacated (${v.detail || 'no members listed'}).${req.user.role === 'owner' ? ' As the Owner you can go ahead only with a written reason.' : ''}`, code: 'vacating' }, 409);
+        }
+      }
+      const doc = Number(b.document_id) || null;
+      if (doc && !(await env.DB.prepare('SELECT 1 AS x FROM documents WHERE id = ? AND deleted_at IS NULL AND (project_id = ? OR project_id IS NULL)').bind(doc, pid).first())) return json({ ok: false, error: 'That file was not found.' }, 400);
+      const now = nowStr();
+      await env.DB.batch([
+        env.DB.prepare(`INSERT INTO prj_lifecycle (project_id, step, done_on, note, document_id, override_note, done_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(project_id, step) DO UPDATE SET done_on = excluded.done_on, note = excluded.note, document_id = COALESCE(excluded.document_id, document_id), override_note = excluded.override_note, done_by = excluded.done_by`)
+          .bind(pid, step, done, str(b.note, 300) || null, doc, override, req.user.user_id, now),
+        env.DB.prepare("INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, 'lifecycle', 'projects', ?, ?, ?)").bind(req.user.user_id, pid, `${LC_MANUAL[step]}: ${done || 'cleared'}${override ? ' (Owner went ahead: ' + override + ')' : ''}`, now),
+      ]);
+      return json({ ok: true });
+    } catch (e) { return serverError(e, 'lifecycle-step'); }
+  }));
 }

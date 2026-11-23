@@ -65,6 +65,11 @@ export async function redevSweep(env, getSetting) {
   ]);
 }
 
+// Statement that opens the society record of a new redevelopment project (used when a Business Development opportunity becomes a project).
+export function societyForProject(env, projectId, name, address, userId, now) {
+  return env.DB.prepare('INSERT INTO red_societies (project_id, name, address, created_by, created_at) SELECT ?, ?, ?, ?, ? WHERE NOT EXISTS (SELECT 1 FROM red_societies WHERE project_id = ? AND deleted_at IS NULL)').bind(projectId, name, address || '', userId, now, projectId);
+}
+
 export function registerRedevelopment(router, h) {
   const { withAuth, json, serverError, visibleProjectIds, nowStr, getSetting, csvBom, onConsent } = h;
   const audit = (env, user, action, entity, id, summary) => env.DB.prepare('INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, ?, ?, ?, ?, ?)').bind(user.user_id, action, entity, id || 0, String(summary).slice(0, 300), nowStr());

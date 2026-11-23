@@ -19,8 +19,8 @@ import { registerProcurement2, boqProgressPo, poTermsStatement } from './routes/
 import { csvBom } from './core/util.js';
 import { registerPetty } from './routes/petty.js';
 import { registerProfile } from './routes/profile.js';
-import { registerFeasibility, feasibilitySweep } from './routes/feasibility.js';
-import { registerRedevelopment, redevSweep } from './routes/redevelopment.js';
+import { registerFeasibility, feasibilitySweep, feasibilityFromStudy } from './routes/feasibility.js';
+import { registerRedevelopment, redevSweep, societyForProject } from './routes/redevelopment.js';
 import { registerBank, bankSweep } from './routes/bank.js';
 import { registerTally } from './routes/tally.js';
 import { registerEnquiry } from './routes/enquiry.js';
@@ -29,6 +29,7 @@ import { registerDashExtras, dashSnapshotSweep } from './routes/dash_extras.js';
 import { registerDrawingAcks, drawingAckSweep } from './routes/drw_acks.js';
 import { registerVisits, visitOptions, cleanFeedback } from './routes/visits.js';
 import { registerProjectPlus } from './routes/projectplus.js';
+import { registerBd, bdSweep } from './routes/bd.js';
 import { registerQuality, cubeSweep } from './routes/quality.js';
 import { registerRera, reraSweep } from './routes/rera.js';
 import { registerAi } from './routes/ai.js';
@@ -545,7 +546,7 @@ router.get('/api/settings', async (req, env) => {
         try { settings[r.key] = await getSetting(env, r.key); } catch (e) { settings[r.key] = '[unreadable]'; }
       }
       // Values the code uses when nothing is saved yet, so the screen shows what is really in force.
-      const DEFAULTS = { 'con.variation_owner_limit_paise': 50000000, 'con.advance_recovery_bp': 1000, 'con.dlp_months': 60, 'pro.tolerance_bp': 300, 'tax.tds_no_pan_bp': 2000, 'rera.cert_valid_days': 90, 'qa.cube_7day_pct_bp': 6500 };
+      const DEFAULTS = { 'con.variation_owner_limit_paise': 50000000, 'con.advance_recovery_bp': 1000, 'con.dlp_months': 60, 'pro.tolerance_bp': 300, 'tax.tds_no_pan_bp': 2000, 'rera.cert_valid_days': 90, 'qa.cube_7day_pct_bp': 6500, 'bd.vacate_to_plinth_months': 7, 'bd.completion_months': 36 };
       for (const [k, v] of Object.entries(DEFAULTS)) if (settings[k] == null || settings[k] === '') settings[k] = v;
       return json({ ok: true, data: { settings } });
     } catch (e) {
@@ -559,7 +560,7 @@ const EDITABLE_SETTINGS = ['po.pm_approval_limit_paise', 'access.allow_second_ow
   'brochure.price_list_default_audience', 'storage.warn_percent', 'sales.max_holds_per_user', 'sales.max_discount_bp', 'sales.pm_max_discount_bp',
   'interest.rate_bp', 'interest.grace_days', 'interest.enabled', 'security.require_mfa_roles', 'tax.stamp_duty_bp', 'tax.metro_cess_bp', 'tax.women_concession_bp', 'tax.registration_bp', 'tax.registration_cap_paise', 'tax.gst_bp',
   'con.enabled', 'con.pm_approval_limit_paise', 'con.gst_bp', 'con.tds_bp', 'budget.gst_basis', 'petty.low_balance_paise', 'ai.enabled', 'ai.daily_limit', 'ai.model', 'rera.designated_pct_bp', 'fea.review_days', 'red.member_doc_checklist', 'red.rent_due_day', 'bank.keep_days', 'drawing.ack_hours', 'sales.bulk_daily_limit', 'sales.bulk_chunk', 'sales.demand_link_days', 'sales.visit_objections', 'sales.visit_radius_m',
-  'sales.receipt_approval_limit_paise', 'sales.discount_pm_limit_paise', 'sales.handover_template', 'apr.designations', 'con.variation_owner_limit_paise', 'con.advance_recovery_bp', 'con.dlp_months', 'pro.tolerance_bp', 'tax.tds_no_pan_bp', 'rera.cert_valid_days', 'qa.pour_checklist', 'qa.cube_7day_pct_bp', 'dpr.activities', 'dpr.safety_checks'];
+  'sales.receipt_approval_limit_paise', 'sales.discount_pm_limit_paise', 'sales.handover_template', 'apr.designations', 'con.variation_owner_limit_paise', 'con.advance_recovery_bp', 'con.dlp_months', 'pro.tolerance_bp', 'tax.tds_no_pan_bp', 'rera.cert_valid_days', 'qa.pour_checklist', 'qa.cube_7day_pct_bp', 'dpr.activities', 'dpr.safety_checks', 'bd.vacate_to_plinth_months', 'bd.completion_months', 'bd.steps_79a'];
 
 router.post('/api/settings/:key', async (req, env) => {
   return withAuth(req, env, 'users_settings', 'E', async (req, env) => {
@@ -1279,8 +1280,9 @@ const MUMBAI_TEMPLATE = [
   ['Site survey & layout plan', 'Licensed surveyor', 'compliance', null, 0, 'Survey plan, boundary demarcation'],
   ['Society consent & DA/development agreement registration', 'Society / Advocate', 'compliance', null, 1, 'Society resolution, registered DA'],
   ["Existing tenants' transit-rent & bank guarantee arrangements", 'Internal / Bank', 'compliance', 30, 1, 'Permanent alternate accommodation agreements, BG copies'],
+  ['Provisional CFO / Fire NOC', 'Chief Fire Officer, Mumbai Fire Brigade (MCGM)', 'noc', 30, 0, 'Fire layout drawings, CFO application receipt'],
+  ['Concessions (premium / fungible FSI, open space deficiency — confirm items with your architect)', 'MCGM', 'approval', 30, 0, 'Concession drawings, premium challans'],
   ['IOD application (BMC building-proposal system / AutoDCR — confirm current portal with your architect)', 'MCGM', 'approval', null, 0, 'AutoDCR submission receipt, approved plan, title documents'],
-  ['Provisional Fire NOC', 'Chief Fire Officer, Mumbai Fire Brigade (MCGM)', 'noc', 30, 0, 'Fire layout drawings, application receipt'],
   ['Height NOC (AAI colour coding)', 'Airports Authority of India', 'noc', 30, 0, 'Colour-coded zoning map, NOCAS application'],
   ['Environment clearance / SEIAA (if built-up >= 20,000 sqm — confirm with your environment consultant)', 'SEIAA / MoEFCC', 'noc', 45, 0, 'EC application, consultant report'],
   ['Tree authority permission', 'MCGM Tree Authority', 'noc', 30, 0, 'Tree survey, application receipt'],
@@ -1304,25 +1306,35 @@ const MUMBAI_TEMPLATE = [
   ['Society formation / conveyance (as applicable)', 'Registrar / Advocate', 'compliance', 45, 0, 'Society registration documents, conveyance deed draft'],
 ];
 
+// Load the Mumbai approvals checklist into a project with no approvals yet: one statement for the items (json_each), one for their usual order.
+async function loadMumbaiTemplate(env, projectId, redevelopment, userId, extra = []) {
+  const have = await env.DB.prepare('SELECT COUNT(*) AS n FROM apr_items WHERE project_id = ? AND deleted_at IS NULL').bind(projectId).first();
+  if (Number(have.n) > 0) return { error: 'This project already has approval items. Template can only be loaded into an empty list.' };
+  const rows = [...MUMBAI_TEMPLATE.filter((r) => redevelopment || !r[4]), ...extra].map((r, i) => ({ name: r[0].toUpperCase(), authority: r[1], category: r[2], stage: r[6] || (i + 1) * 10, remind: r[3] || 30,
+    renew: r[2] === 'renewal' ? (r[0].startsWith('RERA quarterly') ? 3 : 12) : null, notes: r[5], gate: gateOf({ name: r[0] }) }));
+  const now = nowStr();
+  const pairs = Object.entries(GATE_DEPS).flatMap(([g, needs]) => needs.map((n) => [g, n]));
+  await env.DB.batch([
+    env.DB.prepare(`INSERT INTO apr_items (project_id, name, authority, category, stage_order, status, reminder_days, renew_months, notes, created_at, gate_key)
+      SELECT ?1, json_extract(value, '$.name'), json_extract(value, '$.authority'), json_extract(value, '$.category'), json_extract(value, '$.stage'), 'not_started', json_extract(value, '$.remind'),
+        json_extract(value, '$.renew'), json_extract(value, '$.notes'), ?2, json_extract(value, '$.gate') FROM json_each(?3)`).bind(projectId, now, JSON.stringify(rows)),
+    // The usual order: CC needs the IOD, plinth CC needs the CC, and so on (editable on each approval).
+    env.DB.prepare(`INSERT OR IGNORE INTO apr_deps (item_id, depends_on_id, created_by, created_at) SELECT a.id, b.id, ?2, ?3 FROM apr_items a JOIN apr_items b ON b.project_id = a.project_id AND b.deleted_at IS NULL
+      JOIN json_each(?4) p ON json_extract(p.value, '$[0]') = a.gate_key AND json_extract(p.value, '$[1]') = b.gate_key WHERE a.project_id = ?1 AND a.deleted_at IS NULL`).bind(projectId, userId, now, JSON.stringify(pairs)),
+    env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, 'create', 'apr_items', ?, ?, ?)`).bind(userId, projectId, `Loaded Mumbai approvals template (${rows.length} items)`, now),
+  ]);
+  return { count: rows.length };
+}
+
 router.post('/api/approvals/load-template', async (req, env) => {
   return withAuth(req, env, 'approvals', 'C', async (req, env) => {
     try {
       const { project_id, redevelopment } = await req.json();
       const ids = await visibleProjectIds(env, req.user);
       if (!project_id || !ids.includes(Number(project_id))) return json({ ok: false, error: 'Not allowed.' }, 403);
-      const have = await env.DB.prepare('SELECT COUNT(*) AS n FROM apr_items WHERE project_id = ? AND deleted_at IS NULL').bind(Number(project_id)).first();
-      if (Number(have.n) > 0) return json({ ok: false, error: 'This project already has approval items. Template can only be loaded into an empty list.' }, 400);
-      const rows = MUMBAI_TEMPLATE.filter((r) => redevelopment || !r[4]);
-      const now = nowStr();
-      const stmts = rows.map((r, i) => env.DB.prepare(`INSERT INTO apr_items (project_id, name, authority, category, stage_order, status, reminder_days, renew_months, notes, created_at, gate_key) VALUES (?, ?, ?, ?, ?, 'not_started', ?, ?, ?, ?, ?)`)
-        .bind(Number(project_id), r[0].toUpperCase(), r[1], r[2], (i + 1) * 10, r[3] || 30, r[2] === 'renewal' ? (r[0].startsWith('RERA quarterly') ? 3 : 12) : null, r[5], now, gateOf({ name: r[0] })));
-      // The usual order: CC needs the IOD, plinth CC needs the CC, and so on (editable on each approval).
-      const pairs = Object.entries(GATE_DEPS).flatMap(([g, needs]) => needs.map((n) => [g, n]));
-      stmts.push(env.DB.prepare(`INSERT OR IGNORE INTO apr_deps (item_id, depends_on_id, created_by, created_at) SELECT a.id, b.id, ?2, ?3 FROM apr_items a JOIN apr_items b ON b.project_id = a.project_id AND b.deleted_at IS NULL
-        JOIN json_each(?4) p ON json_extract(p.value, '$[0]') = a.gate_key AND json_extract(p.value, '$[1]') = b.gate_key WHERE a.project_id = ?1 AND a.deleted_at IS NULL`).bind(Number(project_id), req.user.user_id, now, JSON.stringify(pairs)));
-      await env.DB.batch(stmts);
-      await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, 'create', 'apr_items', ?, ?, ?)`).bind(req.user.user_id, Number(project_id), `Loaded Mumbai approvals template (${rows.length} items)`, now).run();
-      return json({ ok: true, data: { count: rows.length } });
+      const r = await loadMumbaiTemplate(env, Number(project_id), redevelopment, req.user.user_id);
+      if (r.error) return json({ ok: false, error: r.error }, 400);
+      return json({ ok: true, data: { count: r.count } });
     } catch (e) {
       return serverError(e, 'apr-template');
     }
@@ -1680,7 +1692,7 @@ const EXPORT_TABLES = ['projects', 'apr_items', 'apr_events', 'drw_drawings', 'd
     'sal_leads', 'sal_activities', 'sal_visits', 'sal_inventory', 'sal_partners', 'sal_bookings', 'sal_plan_stages', 'sal_demands', 'sal_receipts', 'documents', 'audit_log',
     'pro_grn_items', 'pro_payments', 'ppl_staff', 'ppl_hiring', 'ppl_candidates', 'sal_brokerage_payments', 'sal_refunds', 'sal_interest_waivers', 'mkt_spend', 'brands', 'counters',
     'pro_indents', 'pro_indent_items', 'pro_rfq_items', 'pro_quote_items',
-    'site_dpr_labour', 'bud_heads', 'stk_items', 'stk_balance', 'stk_moves', 'pro_party_docs', 'pro_professionals', 'ai_log', 'sal_receipt_requests', 'sal_adjustments', 'sal_booking_parties', 'sal_cost_sheets', 'sal_cost_sheet_lines', 'sal_handover', 'sal_handover_items', 'sal_booking_loans', 'rera_account_entries', 'eng_kudos', 'fea_versions', 'sal_bulk_runs', 'sal_bulk_items', 'drw_acks', 'tally_export_log', 'brand_profiles', 'project_members', 'drive_folders', 'bank_profiles', 'bank_import_batches', 'bank_import_rows', 'red_societies', 'red_members', 'red_consent_events', 'red_member_docs', 'red_rehab_allotments', 'red_transit_terms', 'red_transit_schedule', 'red_transit_payments', 'red_corpus_entries', 'red_meetings', 'red_meeting_attendees', 'prj_autodcr_history', 'apr_steps', 'apr_deps', 'con_variations', 'con_measurements', 'rera_certificates', 'qa_pours', 'qa_cubes', 'qa_ncrs', 'site_dpr_work', 'site_ms_changes', 'prj_holds', 'con_debit_notes', 'bud_items', 'pty_funds', 'pty_entries', 'con_contractors', 'con_work_orders', 'con_wo_items', 'con_ra_bills', 'con_ra_lines', 'con_payments', 'con_ledger'];
+    'site_dpr_labour', 'bud_heads', 'stk_items', 'stk_balance', 'stk_moves', 'pro_party_docs', 'pro_professionals', 'ai_log', 'sal_receipt_requests', 'sal_adjustments', 'sal_booking_parties', 'sal_cost_sheets', 'sal_cost_sheet_lines', 'sal_handover', 'sal_handover_items', 'sal_booking_loans', 'rera_account_entries', 'eng_kudos', 'fea_versions', 'sal_bulk_runs', 'sal_bulk_items', 'drw_acks', 'tally_export_log', 'brand_profiles', 'project_members', 'drive_folders', 'bank_profiles', 'bank_import_batches', 'bank_import_rows', 'red_societies', 'red_members', 'red_consent_events', 'red_member_docs', 'red_rehab_allotments', 'red_transit_terms', 'red_transit_schedule', 'red_transit_payments', 'red_corpus_entries', 'red_meetings', 'red_meeting_attendees', 'prj_autodcr_history', 'apr_steps', 'apr_deps', 'con_variations', 'con_measurements', 'rera_certificates', 'qa_pours', 'qa_cubes', 'qa_ncrs', 'site_dpr_work', 'site_ms_changes', 'prj_holds', 'con_debit_notes', 'bud_items', 'bd_opportunities', 'bd_followups', 'bd_studies', 'bd_steps', 'prj_lifecycle', 'pty_funds', 'pty_entries', 'con_contractors', 'con_work_orders', 'con_wo_items', 'con_ra_bills', 'con_ra_lines', 'con_payments', 'con_ledger'];
 const EXPORT_PARTS = 3;
 
 async function buildExport(env, part = 1) {
@@ -2263,6 +2275,7 @@ registerProfile(router, { withAuth, json, serverError, visibleProjectIds, nowStr
 registerFeasibility(router, { withAuth, json, serverError, visibleProjectIds, nowStr });
 registerVisits(router, { withAuth, json, serverError, visibleProjectIds, getSetting, nowStr, leadAccess, csvBom });
 registerProjectPlus(router, { withAuth, json, serverError, visibleProjectIds, nowStr, getSetting });
+registerBd(router, { withAuth, json, serverError, nowStr, getSetting, defaultBrandId, loadMumbaiTemplate, feasibilityFromStudy, societyForProject });
 registerQuality(router, { withAuth, json, serverError, visibleProjectIds, nowStr, getSetting, userCan });
 registerRera(router, { withAuth, json, serverError, visibleProjectIds, nowStr, getSetting, csvBom });
 registerAi(router, { withAuth, json, serverError, visibleProjectIds, nowStr, getSetting, userCan, checkRateLimit });
@@ -2666,6 +2679,7 @@ router.get('/api/files/download/:docId', async (req, env) => {
         return json({ ok: false, error: 'Not allowed.' }, 403);
       }
 
+      if (doc.module === 'bd' && !userCan(req.user, 'bd', 'V')) return json({ ok: false, error: 'Not allowed.' }, 403); // deal papers stay with the deal team
       if (doc.module === 'brochure' && doc.audience !== 'customer' && !['owner', 'pm'].includes(req.user.role)) return json({ ok: false, error: 'Not allowed.' }, 403); // internal brochures stay internal
       if (!docVisible(req.user, doc)) return json({ ok: false, error: 'Not allowed.' }, 403);
       // Site works only from the current issued-for-construction sheet: superseded and draft drawing files stay with the office.
@@ -3368,6 +3382,7 @@ async function runCron(cron, env) {
     await drawingAckSweep(env, getSetting);
     await dashSnapshotSweep(env, getSetting);
     await cubeSweep(env);
+    await bdSweep(env);
   } else if (cron === '30 2 * * *') {
     // 08:00 IST digest to every active Owner
     const owners = await env.DB.prepare("SELECT email FROM users WHERE role = 'owner' AND active = 1 AND deleted_at IS NULL").all();

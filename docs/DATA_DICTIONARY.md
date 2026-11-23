@@ -416,3 +416,13 @@ id TEXT PK, source TEXT, seen_at TEXT
 - con_debit_notes (wo_id, reason, description, qty, unit, rate_paise, amount_paise, photo_doc_id, status pending|approved|rejected|recovered, ra_id, created_by/at, approved_by/at, decision_note). In the backup list.
 - bud_items (project_id, head_id, code, description, unit, qty, rate_paise, amount_paise, created_by/at, deleted_at). In the backup list.
 - Uploads now also accept audio/webm, audio/ogg, audio/mp4, audio/x-m4a, audio/aac, audio/mpeg (voice notes), checked by their first bytes.
+
+## 0039 additions (Business Development and project life cycle)
+- bd_opportunities (name, kind society|land|jv|other, society_name, address, ward, plot_area_sqm, members_count, source, contact_name, contact_phone +91, owner_user_id, stage identified|follow_up|feasibility|process_79a|da_signed|da_registered, status open|won|lost|dropped, next_followup, lost_reason, da_signed_on, da_doc_id, da_registered_on, da_reg_no, override_note, project_id, notes, created_by/at, closed_at). Never deleted: closed with a reason. In the backup list.
+- bd_followups (opportunity_id, on_date, kind call|meeting|site_visit|email|other, note, next_date, created_by/at). In the backup list.
+- bd_studies (opportunity_id, version, study_date, title, est_cost_paise, est_revenue_paise, saleable_sqft, completion_months, document_id, notes, created_by/at; unique opportunity + version). The latest is copied to fea_versions v1 when the deal becomes a project. In the backup list.
+- bd_steps (opportunity_id, step text from setting bd.steps_79a, done_on, note, document_id, done_by, created_at; unique opportunity + step). In the backup list.
+- prj_lifecycle (project_id, step da_registered|designs|vacating_notice|vacating|demolition, done_on, note, document_id, override_note, done_by, created_at; unique project + step). Only steps with no other record; everything else in the life cycle is read from apr_items, red_members, site_milestones, sal_bookings and bd_opportunities. In the backup list.
+- documents.module = 'bd': deal papers (feasibility reports, 79A papers, signed DA); only roles with Business Development view can open them.
+- Settings: bd.vacate_to_plinth_months (default 7), bd.completion_months (default 36), bd.steps_79a (blank = built-in list).
+

@@ -512,3 +512,10 @@ body.hc .wa-btn { color: #0b5d27 !important; }
 body.hc .modal-overlay { background: rgba(0, 0, 0, .7); }
 body.hc a { color: #000; text-decoration: underline; }
 body.hc .task-row.late { border-left-width: 8px !important; }
+
+/* project life cycle (pages28.js) */
+.lc-phase { margin: 14px 0 4px; font-weight: 700; color: var(--muted, #475569); text-transform: uppercase; font-size: 0.8em; letter-spacing: .04em; }
+.lc-step { border-left: 4px solid #cbd5e1; padding: 8px 0 8px 12px; margin: 4px 0; }
+.lc-step.done { border-left-color: #16a34a; }
+.lc-step.next { border-left-color: #1d4ed8; background: rgba(29, 78, 216, .05); }
+.set-group summary { cursor: pointer; min-height: 48px; }
