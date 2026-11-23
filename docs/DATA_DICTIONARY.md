@@ -391,3 +391,8 @@ id TEXT PK, source TEXT, seen_at TEXT
 - pro_grns.excess_note: why more than the PO (+ tolerance) was accepted.
 - sal_handover.override_note: why possession went ahead with dues, snags or checklist items open.
 - Settings: con.variation_owner_limit_paise (default 50000000 = Rs 5 lakh), pro.tolerance_bp (300 = 3%), con.dlp_months (60, counted from the OC letter date), con.advance_recovery_bp (1000 = 10%), tax.tds_no_pan_bp (2000 = 20%, confirm with CA).
+
+## 0035 additions (RERA withdrawal certificates)
+- rera_certificates (project_id, kind architect | engineer | ca, cert_no, cert_date, issued_by, pct_complete_bp (architect/engineer, 6500 = 65%), amount_paise (CA: amount that may be withdrawn), document_id (required), note, created_by/at, cancelled_at/by, cancel_note). Never deleted. In the backup list.
+- rera_account_entries: architect_cert_id, engineer_cert_id, ca_cert_id — the three certificates a withdrawal relied on (required for every new withdrawal).
+- Setting rera.cert_valid_days (default 90): a certificate older than this on the withdrawal date is not accepted. Confirm with your CA.

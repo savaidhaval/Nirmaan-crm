@@ -41,23 +41,43 @@ ok('the percentage is a setting: at 60% the requirement is Rs 6,00,000', (await 
 const cf = (await o.call('GET', `/api/reports/cashflow?project_id=${pid}`)).data.escrow;
 ok('the existing escrow report follows the same setting (no hard-coded 70%)', cf.required_pct === 60 && cf.required_designated_paise === 60000000, JSON.stringify(cf));
 await setSetting('rera.designated_pct_bp', 7000);
-// withdrawals
-const big = await acc.call('POST', '/api/rera/entries', { project_id: pid, kind: 'withdrawal', amount_paise: 50000001 });
-ok('a withdrawal cannot exceed what is in the account', big.status === 400 && /Only ₹5,00,000/.test(big.err), big.err);
-const w1 = await acc.call('POST', '/api/rera/entries', { project_id: pid, kind: 'withdrawal', amount_paise: 10000000, ref_no: 'W1' + run });
-ok('a withdrawal without a certificate warns (not blocked) about the certificate, the completion and the recorded cost', w1.status === 200 && w1.data.warnings.length === 3 && /certificate reference/.test(w1.data.warnings[0]) && /completion/.test(w1.data.warnings[1]) && /project cost/.test(w1.data.warnings[2]), JSON.stringify(w1.data));
-sql(`UPDATE projects SET percent_complete = 50 WHERE id = ${pid}`);
-const w2 = await acc.call('POST', '/api/rera/entries', { project_id: pid, kind: 'withdrawal', amount_paise: 5000000, cert_ref: 'CA cert ' + run });
-ok('a withdrawal with a certificate and within 50% of the deposit raises only the cost warning', w2.status === 200 && w2.data.warnings.length === 1 && /project cost/.test(w2.data.warnings[0]), JSON.stringify(w2.data));
-const s2 = await sum(); ok('withdrawn and balance are exact', s2.withdrawn_paise === 15000000 && s2.balance_paise === 35000000 && s2.completion_estimate_paise === 25000000, JSON.stringify(s2));
-const [wa, wb] = await Promise.all([1, 2].map((i) => acc.call('POST', '/api/rera/entries', { project_id: pid, kind: 'withdrawal', amount_paise: 20000000, ref_no: `C${i}${run}` })));
-ok('two withdrawals at once from Rs 3,50,000: only one of Rs 2,00,000 can pass', [wa.status, wb.status].sort().join() === '200,400' && (await sum()).balance_paise === 15000000, `${wa.status},${wb.status}`);
+// withdrawals: need the architect's, engineer's and CA's certificates
+const upload = async (title) => { const fd = new FormData(); fd.append('file', new Blob(['%PDF-1.4 test'], { type: 'application/pdf' }), title + '.pdf'); fd.append('title', title); fd.append('project_id', String(pid)); fd.append('category', 'certificate'); fd.append('module', 'rera');
+  const r = await fetch(BASE + '/api/files/upload', { method: 'POST', headers: { 'X-NirmaanCRM': '1', cookie: acc.cookie }, body: fd }); return (await r.json()).data.id; };
+const today = new Date(Date.now() + 19800000).toISOString().slice(0, 10), daysAgo = (n) => new Date(Date.now() + 19800000 - n * 86400000).toISOString().slice(0, 10);
+const noCert = await acc.call('POST', '/api/rera/entries', { project_id: pid, kind: 'withdrawal', amount_paise: 1000000 });
+ok('a withdrawal without the three certificates is refused', noCert.status === 400 && /three certificates/.test(noCert.err), noCert.err);
+const cert = async (body) => acc.call('POST', '/api/rera/certificates', { project_id: pid, cert_date: today, ...body });
+ok('a certificate needs its file', (await cert({ kind: 'architect', cert_no: 'A0', pct_complete: 60 })).status === 400);
+ok('a certificate cannot be dated in the future', (await cert({ kind: 'architect', cert_no: 'A0', pct_complete: 60, cert_date: daysAgo(-2), document_id: await upload('a0') })).status === 400);
+const A1 = (await cert({ kind: 'architect', cert_no: 'ARCH/1', pct_complete: 60, issued_by: 'Ar. Mehta', document_id: await upload('arch1') })).data.id;
+const E1 = (await cert({ kind: 'engineer', cert_no: 'ENG/1', pct_complete: 50, document_id: await upload('eng1') })).data.id;
+const EOLD = (await cert({ kind: 'engineer', cert_no: 'ENG/OLD', pct_complete: 50, cert_date: daysAgo(100), document_id: await upload('engold') })).data.id;
+const CA1 = (await cert({ kind: 'ca', cert_no: 'CA/1', amount_paise: 20000000, document_id: await upload('ca1') })).data.id;
+ok('the same certificate number cannot be entered twice', (await cert({ kind: 'ca', cert_no: 'ca/1', amount_paise: 1, document_id: await upload('dup') })).status === 409);
+ok("the architect's certificate becomes the project's certified completion (60%)", (await sum()).percent_complete === 60);
+const W = (amount, extra) => acc.call('POST', '/api/rera/entries', { project_id: pid, kind: 'withdrawal', amount_paise: amount, architect_cert_id: A1, engineer_cert_id: E1, ca_cert_id: CA1, ...extra });
+ok('an engineer certificate older than 90 days is refused', /older than 90 days/.test((await W(1000000, { engineer_cert_id: EOLD })).err || ''));
+ok('two architect certificates (wrong kind) are refused', (await W(1000000, { engineer_cert_id: A1 })).status === 400);
+const big = await W(20000001);
+ok('a withdrawal cannot go beyond what the CA certified (Rs 2,00,000)', big.status === 400 && /CA's certificate CA\/1 allows/.test(big.err), big.err);
+const w1 = await W(10000000, { ref_no: 'W1' + run });
+ok('with the three certificates, Rs 1,00,000 is withdrawn; the certificates are written on the entry', w1.status === 200 && (await acc.call('GET', `/api/rera/entries?project_id=${pid}`)).data.entries.find((e) => e.ref_no === 'W1' + run).cert_ref.includes('CA CA/1'), JSON.stringify(w1));
+const w2 = await W(5000000);
+const s2 = await sum(); ok('withdrawn and balance are exact; certified work done is the lower of architect and engineer (50%)', s2.withdrawn_paise === 15000000 && s2.balance_paise === 35000000 && s2.certified_pct_bp === 5000 && s2.can_withdraw_paise === 10000000, JSON.stringify(s2));
+const CA2 = (await cert({ kind: 'ca', cert_no: 'CA/2', amount_paise: 30000000, document_id: await upload('ca2') })).data.id;
+const over = await W(15000000, { ca_cert_id: CA2 });
+ok('total withdrawn cannot pass deposits x certified work done (50% of Rs 5,00,000)', over.status === 400 && /certified work done/.test(over.err), over.err);
+const [wa, wb] = await Promise.all([1, 2].map((i) => W(10000000, { ca_cert_id: CA2, ref_no: `C${i}${run}` })));
+ok('two withdrawals at once with Rs 1,00,000 room: only one passes', [wa.status, wb.status].sort().join() === '200,400' && (await sum()).balance_paise === 25000000, `${wa.status},${wb.status}`);
+ok('only the Owner can cancel a certificate, and not one a withdrawal relies on', (await acc.call('POST', `/api/rera/certificates/${CA1}/cancel`, { reason: 'x' })).status === 403 && (await o.call('POST', `/api/rera/certificates/${CA1}/cancel`, { reason: 'x' })).status === 409
+  && (await o.call('POST', `/api/rera/certificates/${EOLD}/cancel`, { reason: 'superseded' })).status === 200);
 // reversal
 const depId = (await acc.call('GET', `/api/rera/entries?project_id=${pid}`)).data.entries.find((e) => e.kind === 'deposit').id;
 ok('reversal needs a reason', (await acc.call('POST', `/api/rera/entries/${depId}/reverse`, {})).status === 400);
 ok('a deposit cannot be reversed while withdrawals depend on it', (await acc.call('POST', `/api/rera/entries/${depId}/reverse`, { reason: 'wrong account' })).status === 409);
 const w1Id = (await acc.call('GET', `/api/rera/entries?project_id=${pid}`)).data.entries.find((e) => e.kind === 'withdrawal' && e.ref_no === 'W1' + run).id;
-ok('a withdrawal can be reversed with a reason: balance comes back', (await acc.call('POST', `/api/rera/entries/${w1Id}/reverse`, { reason: 'entered twice' })).status === 200 && (await sum()).balance_paise === 25000000);
+ok('a withdrawal can be reversed with a reason: balance comes back', (await acc.call('POST', `/api/rera/entries/${w1Id}/reverse`, { reason: 'entered twice' })).status === 200 && (await sum()).balance_paise === 35000000);
 ok('cannot reverse twice; PM cannot reverse', (await acc.call('POST', `/api/rera/entries/${w1Id}/reverse`, { reason: 'x' })).status === 409 && (await pm.call('POST', `/api/rera/entries/${w1Id}/reverse`, { reason: 'x' })).status === 403);
 const csv = await viewer.call('GET', `/api/rera/entries?project_id=${pid}&csv=1`, null, true); const txt = await csv.text();
 ok('statement CSV for the CA, with the requirement and balance', csv.status === 200 && txt.includes('Required deposit') && txt.includes('Balance in account') && txt.includes('UTR1' + run) && txt.includes('Reversed: entered twice'));

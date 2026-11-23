@@ -1,0 +1,50 @@
+import { createRequire } from 'node:module';
+const { chromium } = createRequire(import.meta.url)('/opt/node-tools/node_modules/playwright');
+const BASE = process.env.BASE || 'http://localhost:8787', SHOTS = '/tmp/claude-0/scratch/shots';
+const run = Date.now().toString(36);
+let pass = 0, fail = 0; const ok = (n, c, x = '') => { c ? pass++ : fail++; console.log(`${c ? 'PASS' : 'FAIL'}  ${n}${c ? '' : '  ' + x}`); };
+class C { constructor() { this.cookie = ''; } async call(m, p, b) { const h = { 'X-NirmaanCRM': '1' }; if (this.cookie) h.cookie = this.cookie; let body; if (b) { h['Content-Type'] = 'application/json'; body = JSON.stringify(b); }
+  const r = await fetch(BASE + p, { method: m, headers: h, body }); const sc = r.headers.get('set-cookie'); if (sc) this.cookie = sc.split(';')[0]; let d = null; try { d = await r.json(); } catch (e) {} return { status: r.status, data: d && d.data, err: d && d.error }; } }
+const o = new C(); await o.call('POST', '/api/auth/login', { email: 'owner@test.local', password: 'CiStrongPass-12345' });
+const pid = (await o.call('POST', '/api/projects', { rera_no: 'P518000TEST', name: 'UI Tower ' + run, code: 'UI' + run.toUpperCase().slice(-5), budget_paise: 5e9 })).data.id;
+await o.call('POST', '/api/settings/con.enabled', { value: 'on' });
+await o.call('POST', '/api/settings/con.pm_approval_limit_paise', { value: 50000000 });
+const users = {};
+for (const role of ['site', 'pm', 'purchase', 'accounts', 'sales', 'viewer']) {
+  const email = `ui-${role}-${run}@test.local`; const r = await o.call('POST', '/api/users', { name: 'UI ' + role + ' ' + run, email, role, projects: role === 'site' ? [pid] : [] });
+  const c = new C(); await c.call('POST', '/api/auth/login', { email, password: r.data.temporaryPassword }); const pw = 'UiStrongPass-' + run;
+  await c.call('POST', '/api/auth/change-password', { currentPassword: r.data.temporaryPassword, newPassword: pw }); users[role] = { email, pw };
+}
+const browser = await chromium.launch();
+const ctxs = {};
+async function page(role) {
+  if (!ctxs[role]) {
+    const ctx = await browser.newContext({ viewport: { width: 390, height: 800 } });
+    const email = role === 'owner' ? 'owner@test.local' : users[role].email, password = role === 'owner' ? 'CiStrongPass-12345' : users[role].pw;
+    const r = await ctx.request.post(BASE + '/api/auth/login', { headers: { 'X-NirmaanCRM': '1', 'Content-Type': 'application/json' }, data: { email, password } });
+    if (!r.ok()) throw new Error('login ' + role + ' ' + r.status());
+    ctxs[role] = ctx;
+  }
+  const p = await ctxs[role].newPage(); p.on('dialog', (d) => d.accept()); p.on('pageerror', (e) => console.log('PAGEERROR', role, e.message));
+  await p.goto(BASE + '/'); await p.waitForFunction(() => typeof navigate === 'function' && typeof currentUser !== 'undefined' && currentUser, null, { timeout: 15000 }); return p;
+}
+const go = async (p, route) => { await p.evaluate((r) => navigate(r), route); await p.waitForTimeout(800); };
+const toastText = async (p) => { await p.waitForTimeout(500); return p.evaluate(() => (document.getElementById('toast') || {}).textContent || ''); };
+const submit = (p) => p.click('#modal-form button[type=submit]');
+const pick = (p, sel, label) => p.selectOption(sel, { label });
+const shot = (p, n) => p.screenshot({ path: `${SHOTS}/${n}.png` });
+
+const accp = await page('accounts'); await go(accp, 'rera'); await accp.selectOption('#rera-project', String(pid)); await accp.waitForTimeout(1200);
+ok('the RERA screen lists certificates and asks for one of each', (await accp.textContent('#rera-body')).includes('A withdrawal needs one of each'));
+await accp.click('#rera-wd'); await accp.waitForTimeout(800);
+ok('withdrawal without certificates says which to record first', /architect's, engineer's, CA's certificate first/.test(await toastText(accp)));
+const fpath = '/tmp/claude-0/scratch/cert.pdf'; (await import('node:fs')).writeFileSync(fpath, '%PDF-1.4 test');
+for (const [k, extra] of [['architect', ['#f_pct_complete', '60']], ['engineer', ['#f_pct_complete', '55']], ['ca', ['#f_amount', '100000']]]) {
+  await accp.click('#rera-cert'); await accp.waitForSelector('#f_cert_no'); await accp.selectOption('#f_kind', k); await accp.fill('#f_cert_no', k.toUpperCase() + '/1'); await accp.fill(extra[0], extra[1]);
+  await accp.setInputFiles('#f_file', fpath); if (k === 'ca') await shot(accp, '220-rera-certificate'); await submit(accp); await accp.waitForTimeout(1500);
+}
+ok('three certificates are listed with % and amount', (await accp.textContent('#rera-body')).includes('Work done 55.00%') && (await accp.textContent('#rera-body')).includes('May withdraw'));
+await accp.click('#rera-wd'); await accp.waitForSelector('#f_ca_cert_id');
+ok('the withdrawal form picks the three certificates', !!(await accp.$('#f_architect_cert_id')) && !!(await accp.$('#f_engineer_cert_id')));
+await shot(accp, '221-rera-withdrawal');
+await browser.close(); console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);

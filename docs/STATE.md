@@ -158,3 +158,6 @@ Code complete on branch claude/clever-franklin-rjqgdp: 29 API suites (new: proje
 
 ## Controls package (migration 0034, audit priorities 1 and 2)
 Code complete: 30 API suites (new: controls, 59 checks) and phone walkthroughs (new: controls, 12 checks) pass locally on a clean database. Not deployed. Not built yet (waiting for Dhaval): RERA withdrawal certificates (A13, answer 4 pending), BOQ items (B2), debit notes and material reconciliation (A9), pour cards / cube register / NCR (B3), safety checks (B4), baseline/hold dates (B5), drawing links (B6), redevelopment vacating/PAAA (B7), structured DPR and other field items (D). Existing production data: approvals already marked approved keep working; projects with bookings but no MahaRERA number will refuse NEW bookings until the number is entered; old OC/CC approvals have no letter date, so retention release and CC-floor checks need the letter details entered once.
+
+## RERA withdrawal certificates (migration 0035)
+Built after Dhaval's answer (architect, engineer and CA certificates before any withdrawal). 30 API suites pass on a clean database (rera_visits rewritten for the new rule, 52 checks) and a phone walkthrough (4 checks). Not deployed until Dhaval approves the PR.
