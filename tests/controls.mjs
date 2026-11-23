@@ -167,6 +167,7 @@ const rd = (await o.call('POST', '/api/projects', { name: 'zz-ctl-rd ' + run, co
 const soc = (await o.call('POST', '/api/redev/societies', { project_id: rd, name: 'CHS ' + run })).data.id;
 const mem = (await o.call('POST', `/api/redev/societies/${soc}/members`, { member_name: 'M1', unit_label: '1' })).data.id;
 const d0 = new Date(Date.now() + 19800000); const start = new Date(Date.UTC(d0.getUTCFullYear(), d0.getUTCMonth() - 50, 1)).toISOString().slice(0, 10);
+await o.call('PUT', `/api/redev/members/${mem}/vacate`, { paaa_reg_no: 'PAAA-T', paaa_reg_date: '2020-01-01', vacated_on: '2020-01-01' });
 await o.call('POST', `/api/redev/members/${mem}/transit-term`, { monthly_rent_paise: 3000000, start_date: start });
 const months = (await o.call('GET', `/api/redev/members/${mem}/transit`)).data.months;
 ok('a rent term that started 50 months ago is scheduled past month 48', months.length > 50, String(months.length));

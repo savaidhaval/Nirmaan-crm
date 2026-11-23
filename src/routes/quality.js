@@ -1,6 +1,6 @@
 // routes/quality.js — pour cards (checked and approved before concrete goes in), cube tests at 7 and 28 days, non-conformance reports (NCR).
 // A failed cube raises an NCR by itself; an open 28-day cube NCR stops the PM certifying that floor (see the milestone route).
-import { approvalState, isDate, todayIST } from '../core/gates.js';
+import { approvalState, isDate, todayIST, holdFor } from '../core/gates.js';
 
 const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
 const ELEMENTS = ['slab', 'beam', 'column', 'footing', 'raft', 'wall', 'staircase', 'other'];
@@ -77,6 +77,13 @@ export function registerQuality(router, h) {
       const qty = num(b.qty_cum); if (!(qty > 0 && qty < 10000)) return json({ ok: false, error: 'Enter the quantity in cubic metres.' }, 400);
       const floor = b.floor === '' || b.floor == null ? null : Math.round(num(b.floor));
       if (b.planned_date && !isDate(b.planned_date)) return json({ ok: false, error: 'Check the planned date.' }, 400);
+      let drawingId = Number(b.drawing_id) || null, drawingRev = null, drawingRef = String(b.drawing_ref || '').slice(0, 80) || null;
+      if (drawingId) {
+        const dr = await env.DB.prepare("SELECT d.code, r.id AS rev_id, r.rev_no FROM drw_drawings d LEFT JOIN drw_revisions r ON r.drawing_id = d.id AND r.status = 'ifc' WHERE d.id = ? AND d.project_id = ? AND d.deleted_at IS NULL ORDER BY r.id DESC LIMIT 1").bind(drawingId, pid).first();
+        if (!dr) return json({ ok: false, error: 'That drawing is not in this project.' }, 400);
+        if (!dr.rev_id) return json({ ok: false, error: `Drawing ${dr.code} has no issued-for-construction revision. Do not pour from a draft.`, code: 'drawing' }, 409);
+        drawingRev = dr.rev_id; drawingRef = `${dr.code} ${dr.rev_no}`;
+      }
       const items = await checklist(env);
       const ticks = Object.fromEntries(items.map((i) => [i, !!(b.checklist && b.checklist[i])]));
       const photo = Number(b.photo_doc_id) || null; if (!(await docOk(env, photo, pid))) return json({ ok: false, error: 'That photo was not found.' }, 400);
@@ -84,10 +91,11 @@ export function registerQuality(router, h) {
       const res = await env.DB.batch([
         env.DB.prepare(`INSERT INTO qa_pours (project_id, wing, floor, element, location, grade, qty_cum, planned_date, drawing_ref, rmc_supplier, checklist, photo_doc_id, status, requested_by, created_at, client_uuid)
           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'requested', ?, ?, ?)`).bind(pid, String(b.wing || '').trim().slice(0, 20) || null, floor, element, String(b.location || '').slice(0, 120) || null, grade, qty,
-          b.planned_date || null, String(b.drawing_ref || '').slice(0, 80) || null, String(b.rmc_supplier || '').slice(0, 80) || null, JSON.stringify(ticks), photo, req.user.user_id, now, uuid),
+          b.planned_date || null, drawingRef, String(b.rmc_supplier || '').slice(0, 80) || null, JSON.stringify(ticks), photo, req.user.user_id, now, uuid),
         audit(env, req.user, 'create', 'qa_pours', 0, `Pour card: ${element} ${grade} ${qty} cum${b.wing ? ' wing ' + b.wing : ''}${floor != null ? ' floor ' + floor : ''}`),
         notifyPm(env, pid, `Pour card to approve`, `${element} ${grade}, ${qty} cum${b.wing ? ', wing ' + b.wing : ''}${floor != null ? ', floor ' + floor : ''}${b.planned_date ? ', on ' + b.planned_date : ''}.`),
       ]);
+      if (drawingId) await env.DB.prepare('UPDATE qa_pours SET drawing_id = ?, drawing_rev_id = ? WHERE id = ?').bind(drawingId, drawingRev, res[0].meta.last_row_id).run();
       return json({ ok: true, data: { id: res[0].meta.last_row_id, unticked: items.filter((i) => !ticks[i]) } });
     } catch (e) { return serverError(e, 'qa-pour-add'); }
   }));
@@ -103,6 +111,12 @@ export function registerQuality(router, h) {
       if (b.checklist && typeof b.checklist === 'object') for (const k of Object.keys(ticks)) if (b.checklist[k]) ticks[k] = true;
       const open = Object.keys(ticks).filter((k) => !ticks[k]);
       if (open.length) return json({ ok: false, error: `Not checked yet: ${open.join('; ')}.`, code: 'checklist', open }, 409);
+      { const held = await holdFor(env, p.project_id, p.wing); if (held) return json({ ok: false, error: held + '. No pours until the hold is released.', code: 'hold' }, 409); }
+      // The drawing must not have been revised since the card was made.
+      if (p.drawing_id) {
+        const cur = await env.DB.prepare("SELECT id, rev_no FROM drw_revisions WHERE drawing_id = ? AND status = 'ifc' ORDER BY id DESC LIMIT 1").bind(p.drawing_id).first();
+        if (cur && p.drawing_rev_id && cur.id !== p.drawing_rev_id) return json({ ok: false, error: `The drawing was revised to ${cur.rev_no} after this card was made. Check the reinforcement and quantities against ${cur.rev_no}, cancel this card and make a new one.`, code: 'drawing' }, 409);
+      }
       const st = await approvalState(env, p.project_id);
       const upto = st.ccUpto(p.wing);
       let block = null;

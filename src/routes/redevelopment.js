@@ -183,7 +183,7 @@ export function registerRedevelopment(router, h) {
       const like = term ? `%${term}%` : '';
       const where = `society_id = ?1 AND deleted_at IS NULL AND (?2 = '' OR consent_status = ?2) AND (?3 = '' OR member_name LIKE ?3 OR unit_label LIKE ?3 OR wing LIKE ?3)`;
       const total = (await env.DB.prepare(`SELECT COUNT(*) AS n FROM red_members WHERE ${where}`).bind(soc.id, st, like).first()).n;
-      const rows = (await env.DB.prepare(`SELECT id, wing, unit_label, member_name, phone, member_type, carpet_sqft, consent_status, consent_date, notes, extra_area_bp, new_rera_sqft, buys_extra, buys_extra_sqft, car_parks FROM red_members WHERE ${where} ORDER BY wing, unit_label, id LIMIT ${PAGE} OFFSET ?4`).bind(soc.id, st, like, (page - 1) * PAGE).all()).results;
+      const rows = (await env.DB.prepare(`SELECT id, wing, unit_label, member_name, phone, member_type, carpet_sqft, consent_status, consent_date, notes, extra_area_bp, new_rera_sqft, buys_extra, buys_extra_sqft, car_parks, paaa_reg_no, paaa_reg_date, paaa_doc_id, vacated_on, keys_received, utilities_disconnected FROM red_members WHERE ${where} ORDER BY wing, unit_label, id LIMIT ${PAGE} OFFSET ?4`).bind(soc.id, st, like, (page - 1) * PAGE).all()).results;
       if (!canPhone(req.user)) for (const r of rows) delete r.phone;
       return json({ ok: true, data: { members: rows, total, page, page_size: PAGE } });
     } catch (e) { return serverError(e, 'red-members'); }
@@ -361,6 +361,38 @@ export function registerRedevelopment(router, h) {
     } catch (e) { return serverError(e, 'red-rehab-set'); }
   }));
 
+  // ======================= PAAA and vacating =======================
+  router.put('/api/redev/members/:id/vacate', async (req, env) => withAuth(req, env, 'redevelopment', 'E', async (req, env) => {
+    try {
+      const { mem, err } = await loadMember(env, req, Number(req.params.id)); if (err) return err;
+      const b = await req.json().catch(() => ({}));
+      const reg = b.paaa_reg_no !== undefined ? txt(b.paaa_reg_no, 60) || null : mem.paaa_reg_no;
+      const regDate = b.paaa_reg_date !== undefined ? (b.paaa_reg_date || null) : mem.paaa_reg_date;
+      if (regDate && !dateOk(regDate)) return bad('Check the PAAA registration date.');
+      if (reg && !regDate) return bad('Enter the PAAA registration date too.');
+      const vac = b.vacated_on !== undefined ? (b.vacated_on || null) : mem.vacated_on;
+      if (vac && (!dateOk(vac) || vac > today())) return bad('The vacating date cannot be in the future.');
+      if (vac && !reg) return bad('Record the registered PAAA before marking the flat vacated.');
+      let doc = b.paaa_doc_id !== undefined ? (Number(b.paaa_doc_id) || null) : mem.paaa_doc_id;
+      if (doc && b.paaa_doc_id !== undefined && !(await env.DB.prepare("SELECT 1 AS x FROM documents WHERE id = ? AND deleted_at IS NULL AND project_id = ?").bind(doc, mem.project_id).first())) return bad('That file was not found.');
+      const keys = b.keys_received !== undefined ? (b.keys_received ? 1 : 0) : mem.keys_received;
+      const util = b.utilities_disconnected !== undefined ? (b.utilities_disconnected ? 1 : 0) : mem.utilities_disconnected;
+      await env.DB.batch([
+        env.DB.prepare('UPDATE red_members SET paaa_reg_no = ?, paaa_reg_date = ?, paaa_doc_id = ?, vacated_on = ?, keys_received = ?, utilities_disconnected = ? WHERE id = ?').bind(reg, regDate, doc, vac, keys, util, mem.id),
+        audit(env, req.user, 'update', 'red_members', mem.id, `${mem.member_name} (${mem.unit_label}): PAAA ${reg || 'not registered'}${vac ? ', vacated ' + vac : ''}${keys ? ', keys received' : ''}${util ? ', utilities off' : ''}`),
+      ]);
+      return json({ ok: true });
+    } catch (e) { return serverError(e, 'red-vacate'); }
+  }));
+  router.get('/api/redev/societies/:id/vacating', async (req, env) => withAuth(req, env, 'redevelopment', 'V', async (req, env) => {
+    try {
+      const { soc, err } = await loadSociety(env, req, Number(req.params.id)); if (err) return err;
+      const r = await env.DB.prepare(`SELECT COUNT(*) AS total, COALESCE(SUM(paaa_reg_no IS NOT NULL), 0) AS paaa, COALESCE(SUM(vacated_on IS NOT NULL), 0) AS vacated,
+        COALESCE(SUM(keys_received), 0) AS keys, COALESCE(SUM(utilities_disconnected), 0) AS utilities FROM red_members WHERE society_id = ? AND deleted_at IS NULL`).bind(soc.id).first();
+      return json({ ok: true, data: { ...r, ready_for_demolition: r.total > 0 && r.vacated === r.total && r.keys === r.total && r.utilities === r.total } });
+    } catch (e) { return serverError(e, 'red-vacating'); }
+  }));
+
   // ======================= member terms: year-wise rent, corpus, parking, shifting, area =======================
   const TERM_COLS = 'rent_basis, rent_y1_paise, rent_y2_paise, rent_y3_paise, rent_y4_paise, rent_y5_paise, corpus_paise, car_parks, shifting_paise, extra_area_bp, new_rera_sqft, buys_extra, buys_extra_sqft';
   router.get('/api/redev/members/:id/terms', async (req, env) => withAuth(req, env, 'transit', 'V', async (req, env) => {
@@ -406,6 +438,9 @@ export function registerRedevelopment(router, h) {
       const { mem, err } = await loadMember(env, req, Number(req.params.id)); if (err) return err;
       const b = await req.json().catch(() => ({})); const rent = Math.round(num(b.monthly_rent_paise) || 0);
       if (!(rent > 0)) return bad('Enter the monthly rent.'); if (!dateOk(b.start_date)) return bad('Enter the first month of rent.');
+      // Transit rent starts only once the member has vacated, and not for months before that.
+      if (!mem.vacated_on) return bad('Record that the member has vacated (with the registered PAAA) before starting transit rent.', 409);
+      if (b.start_date.slice(0, 7) < mem.vacated_on.slice(0, 7)) return bad(`Rent cannot start before the month the flat was vacated (${mem.vacated_on}).`);
       if (b.end_date && (!dateOk(b.end_date) || b.end_date < b.start_date)) return bad('The end date must be after the start date.');
       if (b.bg_expiry && !dateOk(b.bg_expiry)) return bad('Check the guarantee expiry date.');
       const old = await env.DB.prepare('SELECT monthly_rent_paise, start_date FROM red_transit_terms WHERE member_id = ?').bind(mem.id).first();

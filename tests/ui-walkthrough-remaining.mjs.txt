@@ -1,0 +1,67 @@
+import { createRequire } from 'node:module';
+const { chromium } = createRequire(import.meta.url)('/opt/node-tools/node_modules/playwright');
+const BASE = process.env.BASE || 'http://localhost:8787', SHOTS = '/tmp/claude-0/scratch/shots';
+const run = Date.now().toString(36);
+let pass = 0, fail = 0; const ok = (n, c, x = '') => { c ? pass++ : fail++; console.log(`${c ? 'PASS' : 'FAIL'}  ${n}${c ? '' : '  ' + x}`); };
+class C { constructor() { this.cookie = ''; } async call(m, p, b) { const h = { 'X-NirmaanCRM': '1' }; if (this.cookie) h.cookie = this.cookie; let body; if (b) { h['Content-Type'] = 'application/json'; body = JSON.stringify(b); }
+  const r = await fetch(BASE + p, { method: m, headers: h, body }); const sc = r.headers.get('set-cookie'); if (sc) this.cookie = sc.split(';')[0]; let d = null; try { d = await r.json(); } catch (e) {} return { status: r.status, data: d && d.data, err: d && d.error }; } }
+const o = new C(); await o.call('POST', '/api/auth/login', { email: 'owner@test.local', password: 'CiStrongPass-12345' });
+const pid = (await o.call('POST', '/api/projects', { rera_no: 'P518000TEST', name: 'UI Tower ' + run, code: 'UI' + run.toUpperCase().slice(-5), budget_paise: 5e9 })).data.id;
+await o.call('POST', '/api/settings/con.enabled', { value: 'on' });
+await o.call('POST', '/api/settings/con.pm_approval_limit_paise', { value: 50000000 });
+const users = {};
+for (const role of ['site', 'pm', 'purchase', 'accounts', 'sales', 'viewer']) {
+  const email = `ui-${role}-${run}@test.local`; const r = await o.call('POST', '/api/users', { name: 'UI ' + role + ' ' + run, email, role, projects: role === 'site' ? [pid] : [] });
+  const c = new C(); await c.call('POST', '/api/auth/login', { email, password: r.data.temporaryPassword }); const pw = 'UiStrongPass-' + run;
+  await c.call('POST', '/api/auth/change-password', { currentPassword: r.data.temporaryPassword, newPassword: pw }); users[role] = { email, pw };
+}
+const browser = await chromium.launch();
+const ctxs = {};
+async function page(role) {
+  if (!ctxs[role]) {
+    const ctx = await browser.newContext({ viewport: { width: 390, height: 800 } });
+    const email = role === 'owner' ? 'owner@test.local' : users[role].email, password = role === 'owner' ? 'CiStrongPass-12345' : users[role].pw;
+    const r = await ctx.request.post(BASE + '/api/auth/login', { headers: { 'X-NirmaanCRM': '1', 'Content-Type': 'application/json' }, data: { email, password } });
+    if (!r.ok()) throw new Error('login ' + role + ' ' + r.status());
+    ctxs[role] = ctx;
+  }
+  const p = await ctxs[role].newPage(); p.on('dialog', (d) => d.accept()); p.on('pageerror', (e) => console.log('PAGEERROR', role, e.message));
+  await p.goto(BASE + '/'); await p.waitForFunction(() => typeof navigate === 'function' && typeof currentUser !== 'undefined' && currentUser, null, { timeout: 15000 }); return p;
+}
+const go = async (p, route) => { await p.evaluate((r) => navigate(r), route); await p.waitForTimeout(800); };
+const toastText = async (p) => { await p.waitForTimeout(500); return p.evaluate(() => (document.getElementById('toast') || {}).textContent || ''); };
+const submit = (p) => p.click('#modal-form button[type=submit]');
+const pick = (p, sel, label) => p.selectOption(sel, { label });
+const shot = (p, n) => p.screenshot({ path: `${SHOTS}/${n}.png` });
+
+const iso = (d) => new Date(Date.now() + 19800000 + d * 86400000).toISOString().slice(0, 10);
+await o.call('POST', '/api/settings/con.enabled', { value: 'on' });
+const head = (await o.call('POST', '/api/budget/heads', { project_id: pid, code: 'RC' + run.slice(-3), name: 'RCC frame', budget_paise: 500000000 })).data.id;
+await o.call('POST', '/api/site/milestones', { project_id: pid, name: 'Slab 3 ' + run, wing: 'A', floor: 3, planned_date: iso(10) });
+
+// ===== BOQ page =====
+const op = await page('owner'); await go(op, 'boq'); await op.selectOption('#boq-p', String(pid)); await op.waitForSelector('#boq-paste');
+ok('BOQ sits in the Money section next to Budget', await op.evaluate(() => !!document.querySelector('#sub-nav [data-route="boq"].active')));
+await op.click('#boq-paste'); await op.waitForSelector('#f_csv');
+await op.fill('#f_csv', 'C-01, RCC M25 slabs, cum, 100, 7200\nC-02, Cement for slabs, bags, 700, 400'); await submit(op); await op.waitForTimeout(1500);
+ok('pasting two lines adds the BOQ items with their amounts', (await op.textContent('#boq-body')).includes('RCC M25 slabs') && (await op.textContent('#boq-body')).includes('₹7,20,000'));
+await shot(op, '250-boq');
+
+// ===== milestone date change and baseline =====
+await go(op, 'site'); await op.waitForSelector('#ms-baseline'); await op.click('#ms-baseline'); await op.waitForSelector('#f_project_id'); await op.selectOption('#f_project_id', String(pid)); await submit(op); await op.waitForTimeout(1500);
+await op.waitForSelector('[data-msre]'); await op.click('[data-msre]'); await op.waitForSelector('#f_reason');
+await op.fill('#f_planned_date', iso(25)); await op.selectOption('#f_reason', 'monsoon'); await submit(op); await op.waitForTimeout(1500);
+ok('the milestone shows its baseline and "15 days late" with the reason kept', (await op.textContent('#site-list')).includes('15 days late'));
+await shot(op, '251-baseline');
+
+// ===== hold from the project quick view =====
+await go(op, 'projects'); await op.waitForSelector(`[data-pq="${pid}"]`); await op.click(`[data-pq="${pid}"]`); await op.waitForSelector('#pq-hold');
+await op.click('#pq-hold'); await op.waitForSelector('#f_reason'); await op.fill('#f_wing', 'B'); await op.fill('#f_reason', 'Redesign of floors 8-12'); await submit(op); await op.waitForTimeout(1500);
+ok('the project shows wing B on hold with a Release button', (await op.textContent('#pq-holds')).includes('Wing B on hold') && !!(await op.$('[data-hrel]')));
+await shot(op, '252-hold');
+
+// ===== voice note button in the daily report =====
+const sp = await page('site'); await go(sp, 'site'); await sp.evaluate(() => newDpr()); await sp.waitForSelector('#dpr-photos'); await sp.waitForTimeout(500);
+ok('the daily report offers "Record a voice note"', !!(await sp.$('[data-vrec]')));
+await shot(sp, '253-voice');
+await browser.close(); console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);

@@ -59,8 +59,29 @@ export async function wosTaggedCount(env, headId) {
   return (await env.DB.prepare('SELECT COUNT(*) AS n FROM con_work_orders WHERE budget_head_id = ?').bind(headId).first()).n;
 }
 
+// Work-order items built from a drawing (for the "drawing revised" alert in Drawings).
+export async function woItemsForDrawing(env, drawingId) {
+  return (await env.DB.prepare(`SELECT i.id, i.description, w.wo_no, w.id AS wo_id FROM con_wo_items i JOIN con_work_orders w ON w.id = i.wo_id
+    WHERE i.drawing_id = ? AND w.status IN ('approved', 'pending_approval', 'draft') LIMIT 50`).bind(drawingId).all()).results;
+}
+// An approved work order of this project (for issuing store material to it).
+export async function woInProject(env, woId, projectId) {
+  return env.DB.prepare("SELECT w.id, w.wo_no, c.name AS contractor FROM con_work_orders w JOIN con_contractors c ON c.id = w.contractor_id WHERE w.id = ? AND w.project_id = ? AND w.status = 'approved'").bind(woId, projectId).first();
+}
+export async function approvedWosForProject(env, projectId) {
+  return (await env.DB.prepare("SELECT w.id, w.wo_no, c.name AS contractor FROM con_work_orders w JOIN con_contractors c ON c.id = w.contractor_id WHERE w.project_id = ? AND w.status = 'approved' ORDER BY w.id DESC LIMIT 100").bind(projectId).all()).results;
+}
+// Per BOQ item of a project: quantity committed in approved work orders (with approved variations), measured and billed.
+export async function boqProgressCon(env, projectId) {
+  return (await env.DB.prepare(`SELECT i.boq_item_id AS boq, SUM(i.qty + COALESCE((SELECT SUM(v.qty) FROM con_variations v WHERE v.wo_item_id = i.id AND v.status = 'approved'), 0)) AS committed,
+      SUM(COALESCE((SELECT SUM(m.qty) FROM con_measurements m WHERE m.wo_item_id = i.id AND m.status = 'approved'), 0)) AS measured,
+      SUM(COALESCE((SELECT SUM(l.qty_this_bill) FROM con_ra_lines l JOIN con_ra_bills r ON r.id = l.ra_id WHERE l.wo_item_id = i.id AND r.status != 'cancelled'), 0)) AS billed,
+      SUM(i.amount_paise) AS committed_paise
+    FROM con_wo_items i JOIN con_work_orders w ON w.id = i.wo_id WHERE w.project_id = ? AND w.status IN ('approved', 'closed') AND i.boq_item_id IS NOT NULL GROUP BY i.boq_item_id`).bind(projectId).all()).results;
+}
+
 export function registerContractors(router, h) {
-  const { withAuth, json, serverError, visibleProjectIds, nowStr, getSetting, encryptSetting, decryptSetting, printBrand, csvBom, headBelongsToProject, onWoApproved } = h;
+  const { withAuth, json, serverError, visibleProjectIds, nowStr, getSetting, encryptSetting, decryptSetting, printBrand, csvBom, headBelongsToProject, onWoApproved, boqItemInProject, drawingInProject, stockItemExists, issuedForWo } = h;
 
   const guard = (action, fn) => (req, env) => withAuth(req, env, 'contractors', action, async (req, env) => {
     if (!(await conEnabled(env, getSetting))) return json({ ok: false, error: 'The Contractors module is switched off. The Owner can switch it on in Settings.' }, 403);
@@ -165,7 +186,15 @@ export function registerContractors(router, h) {
       const con = await env.DB.prepare('SELECT id FROM con_contractors WHERE id = ? AND active = 1 AND deleted_at IS NULL').bind(cid).first();
       if (!con) return json({ ok: false, error: 'Contractor not found or inactive.' }, 404);
       const items = (Array.isArray(b.items) ? b.items : []).filter((i) => i && String(i.description || '').trim() && num(i.qty) > 0 && num(i.rate_paise) > 0).slice(0, 60)
-        .map((i) => ({ description: String(i.description).trim().slice(0, 200), qty: num(i.qty), unit: String(i.unit || '').slice(0, 20), rate: Math.round(num(i.rate_paise)) }));
+        .map((i) => ({ description: String(i.description).trim().slice(0, 200), qty: num(i.qty), unit: String(i.unit || '').slice(0, 20), rate: Math.round(num(i.rate_paise)),
+          boq: Number(i.boq_item_id) || null, drawing: Number(i.drawing_id) || null, stock: Number(i.stock_item_id) || null, cons: i.consumption_per_unit === '' || i.consumption_per_unit == null ? null : num(i.consumption_per_unit), wast: i.wastage_bp === '' || i.wastage_bp == null ? null : Math.round(num(i.wastage_bp)) }));
+      for (const i of items) {
+        if (i.boq && !(await boqItemInProject(env, i.boq, pid))) return json({ ok: false, error: 'A BOQ item is not in this project.' }, 400);
+        if (i.drawing && !(await drawingInProject(env, i.drawing, pid))) return json({ ok: false, error: 'A drawing is not in this project.' }, 400);
+        if (i.stock && !(await stockItemExists(env, i.stock))) return json({ ok: false, error: 'A store item does not exist.' }, 400);
+        if (i.cons != null && !(i.cons > 0)) return json({ ok: false, error: 'Material per unit must be more than zero.' }, 400);
+        if (i.wast != null && !(i.wast >= 0 && i.wast <= 5000)) return json({ ok: false, error: 'Allowed wastage looks wrong.' }, 400);
+      }
       if (basis !== 'lump_sum' && !items.length) return json({ ok: false, error: 'Add the items with quantity and rate.' }, 400);
       const value = items.length ? items.reduce((t, i) => t + Math.round(i.qty * i.rate), 0) : Math.round(num(b.value_paise));
       if (!(value > 0)) return json({ ok: false, error: 'Enter the work order value.' }, 400);
@@ -184,7 +213,8 @@ export function registerContractors(router, h) {
         .bind(pid, cid, no, String(b.scope || '').slice(0, 1000), basis, value, ret, adv, req.user.user_id, nowStr(), headId, adv > 0 ? recBp : null).run();
       const id = r.meta.last_row_id;
       await env.DB.batch([
-        ...items.map((i) => env.DB.prepare('INSERT INTO con_wo_items (wo_id, description, qty, unit, rate_paise, amount_paise) VALUES (?, ?, ?, ?, ?, ?)').bind(id, i.description, i.qty, i.unit, i.rate, Math.round(i.qty * i.rate))),
+        ...items.map((i) => env.DB.prepare('INSERT INTO con_wo_items (wo_id, description, qty, unit, rate_paise, amount_paise, boq_item_id, drawing_id, stock_item_id, consumption_per_unit, wastage_bp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+          .bind(id, i.description, i.qty, i.unit, i.rate, Math.round(i.qty * i.rate), i.boq, i.drawing, i.stock, i.cons, i.wast)),
         audit(env, req.user, 'create', 'con_work_orders', id, `Work order ${no} drafted for ${rupees(value)}`),
       ]);
       return json({ ok: true, data: { id, wo_no: no, value_paise: value } });
@@ -441,6 +471,101 @@ export function registerContractors(router, h) {
   router.post('/api/contractors/measurements/:id/approve', decideMeas(true));
   router.post('/api/contractors/measurements/:id/reject', decideMeas(false));
 
+  // ---------- what a work-order item is linked to: BOQ item, drawing, store material it uses ----------
+  router.put('/api/contractors/wo-items/:id/links', guard('E', async (req, env) => {
+    try {
+      if (!['owner', 'pm', 'purchase'].includes(req.user.role)) return json({ ok: false, error: 'Only Purchase, the PM or the Owner can change this.' }, 403);
+      const it = await env.DB.prepare('SELECT i.*, w.project_id, w.wo_no FROM con_wo_items i JOIN con_work_orders w ON w.id = i.wo_id WHERE i.id = ?').bind(Number(req.params.id)).first();
+      if (!it || !(await visibleProjectIds(env, req.user)).includes(it.project_id)) return json({ ok: false, error: 'Item not found.' }, 404);
+      const b = await req.json();
+      const pick = (k) => (b[k] === undefined ? it[k] : (b[k] === '' || b[k] == null ? null : Number(b[k])));
+      const boq = pick('boq_item_id'), drw = pick('drawing_id'), stock = pick('stock_item_id'), cons = pick('consumption_per_unit'), wast = pick('wastage_bp');
+      if (boq && !(await boqItemInProject(env, boq, it.project_id))) return json({ ok: false, error: 'That BOQ item is not in this project.' }, 400);
+      if (drw && !(await drawingInProject(env, drw, it.project_id))) return json({ ok: false, error: 'That drawing is not in this project.' }, 400);
+      if (stock && !(await stockItemExists(env, stock))) return json({ ok: false, error: 'That store item does not exist.' }, 400);
+      if (cons != null && !(cons > 0)) return json({ ok: false, error: 'Material per unit must be more than zero.' }, 400);
+      if (wast != null && !(wast >= 0 && wast <= 5000)) return json({ ok: false, error: 'Allowed wastage looks wrong.' }, 400);
+      if (stock && cons == null) return json({ ok: false, error: 'Say how much of the store item one unit of work uses.' }, 400);
+      await env.DB.batch([
+        env.DB.prepare('UPDATE con_wo_items SET boq_item_id = ?, drawing_id = ?, stock_item_id = ?, consumption_per_unit = ?, wastage_bp = ? WHERE id = ?').bind(boq, drw, stock, cons, wast, it.id),
+        audit(env, req.user, 'edit', 'con_wo_items', it.id, `${it.wo_no} ${it.description}: links updated`),
+      ]);
+      return json({ ok: true });
+    } catch (e) { return serverError(e, 'wo-item-links'); }
+  }));
+
+  // ---------- debit notes (rework, wastage, damage, penalty, excess material) ----------
+  const DN_REASONS = ['rework', 'wastage', 'damage', 'penalty', 'excess_material', 'other'];
+  router.get('/api/contractors/work-orders/:id/debit-notes', guard('V', async (req, env) => {
+    try {
+      const { wo, err } = await loadWo(env, req); if (err) return err;
+      if (req.user.role === 'site') return json({ ok: true, data: { debit_notes: [] } });
+      const rows = (await env.DB.prepare(`SELECT d.*, u.name AS created_by_name, a.name AS approved_by_name, r.ra_no FROM con_debit_notes d LEFT JOIN users u ON u.id = d.created_by LEFT JOIN users a ON a.id = d.approved_by
+        LEFT JOIN con_ra_bills r ON r.id = d.ra_id WHERE d.wo_id = ? ORDER BY d.id DESC LIMIT 100`).bind(wo.id).all()).results;
+      return json({ ok: true, data: { debit_notes: rows } });
+    } catch (e) { return serverError(e, 'dn-list'); }
+  }));
+  router.post('/api/contractors/work-orders/:id/debit-notes', guard('V', async (req, env) => {
+    try {
+      if (!['owner', 'pm', 'purchase'].includes(req.user.role)) return json({ ok: false, error: 'Only Purchase, the PM or the Owner can raise a debit note.' }, 403);
+      const { wo, err } = await loadWo(env, req); if (err) return err;
+      if (!['approved', 'closed'].includes(wo.status)) return json({ ok: false, error: 'Debit notes are raised on an approved work order.' }, 409);
+      const b = await req.json();
+      if (!DN_REASONS.includes(b.reason)) return json({ ok: false, error: 'Pick the reason (rework, wastage, damage, penalty, excess material).' }, 400);
+      const desc = String(b.description || '').trim().slice(0, 300); if (!desc) return json({ ok: false, error: 'Describe what it is for.' }, 400);
+      const qty = b.qty === '' || b.qty == null ? null : num(b.qty), rate = b.rate_paise === '' || b.rate_paise == null ? null : Math.round(num(b.rate_paise));
+      const amount = qty != null && rate != null ? Math.round(qty * rate) : Math.round(num(b.amount_paise));
+      if (!(amount > 0)) return json({ ok: false, error: 'Enter the amount (or quantity and rate).' }, 400);
+      const photo = Number(b.photo_doc_id) || null;
+      if (photo && !(await env.DB.prepare('SELECT 1 AS x FROM documents WHERE id = ? AND deleted_at IS NULL').bind(photo).first())) return json({ ok: false, error: 'That photo was not found.' }, 400);
+      const res = await env.DB.batch([
+        env.DB.prepare("INSERT INTO con_debit_notes (wo_id, reason, description, qty, unit, rate_paise, amount_paise, photo_doc_id, status, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)")
+          .bind(wo.id, b.reason, desc, qty, String(b.unit || '').slice(0, 20) || null, rate, amount, photo, req.user.user_id, nowStr()),
+        audit(env, req.user, 'create', 'con_debit_notes', wo.id, `Debit note on ${wo.wo_no}: ${b.reason} ${rupees(amount)} — ${desc}`),
+      ]);
+      await notifyRoles(env, ['owner', 'pm'], `Debit note to approve: ${wo.wo_no}`, `${b.reason.replace('_', ' ')}: ${rupees(amount)}. ${desc}`, req.user.user_id);
+      return json({ ok: true, data: { id: res[0].meta.last_row_id, amount_paise: amount } });
+    } catch (e) { return serverError(e, 'dn-create'); }
+  }));
+  const decideDn = (approve) => guard('A', async (req, env) => {
+    try {
+      const d = await env.DB.prepare('SELECT d.*, w.project_id, w.wo_no FROM con_debit_notes d JOIN con_work_orders w ON w.id = d.wo_id WHERE d.id = ?').bind(Number(req.params.id)).first();
+      if (!d || !(await visibleProjectIds(env, req.user)).includes(d.project_id)) return json({ ok: false, error: 'Debit note not found.' }, 404);
+      if (d.created_by === req.user.user_id && req.user.role !== 'owner') return json({ ok: false, error: 'Someone else must approve a debit note you raised.' }, 403);
+      const b = await req.json().catch(() => ({}));
+      if (!approve && !String(b.note || '').trim()) return json({ ok: false, error: 'Please say why it is rejected.' }, 400);
+      const res = await env.DB.batch([
+        env.DB.prepare("UPDATE con_debit_notes SET status = ?, approved_by = ?, approved_at = ?, decision_note = ? WHERE id = ? AND status = 'pending'").bind(approve ? 'approved' : 'rejected', req.user.user_id, nowStr(), String(b.note || '').slice(0, 300), d.id),
+        audit(env, req.user, approve ? 'approve' : 'reject', 'con_debit_notes', d.id, `${req.user.name} ${approve ? 'approved' : 'rejected'} debit note on ${d.wo_no}: ${rupees(d.amount_paise)}`),
+      ]);
+      if (!res[0].meta.changes) return json({ ok: false, error: 'Already decided.' }, 409);
+      return json({ ok: true });
+    } catch (e) { return serverError(e, 'dn-decide'); }
+  });
+  router.post('/api/contractors/debit-notes/:id/approve', decideDn(true));
+  router.post('/api/contractors/debit-notes/:id/reject', decideDn(false));
+
+  // ---------- material reconciliation: free-issue material against what the measured work should have used ----------
+  router.get('/api/contractors/work-orders/:id/reconciliation', guard('V', async (req, env) => {
+    try {
+      const { wo, err } = await loadWo(env, req); if (err) return err;
+      const items = (await env.DB.prepare(`SELECT i.id, i.description, i.unit, i.stock_item_id, i.consumption_per_unit, COALESCE(i.wastage_bp, 0) AS wastage_bp,
+          COALESCE((SELECT SUM(m.qty) FROM con_measurements m WHERE m.wo_item_id = i.id AND m.status = 'approved'), 0) AS measured
+        FROM con_wo_items i WHERE i.wo_id = ? AND i.stock_item_id IS NOT NULL AND i.consumption_per_unit > 0`).bind(wo.id).all()).results;
+      const issued = await issuedForWo(env, wo.id, [...new Set(items.map((i) => i.stock_item_id))]);   // [{ item_id, name, unit, qty }] from the Store
+      const by = {};
+      for (const i of items) {
+        const r = (by[i.stock_item_id] = by[i.stock_item_id] || { stock_item_id: i.stock_item_id, theoretical: 0, allowed: 0, from: [] });
+        const t = i.measured * i.consumption_per_unit; r.theoretical += t; r.allowed += t * (10000 + i.wastage_bp) / 10000;
+        r.from.push(`${i.description}: ${+i.measured.toFixed(3)} ${i.unit || ''} x ${i.consumption_per_unit}`);
+      }
+      for (const x of issued) { const r = (by[x.item_id] = by[x.item_id] || { stock_item_id: x.item_id, theoretical: 0, allowed: 0, from: [] }); r.issued = x.qty; r.name = x.name; r.unit = x.unit; }
+      const rows = Object.values(by).map((r) => ({ ...r, issued: r.issued || 0, theoretical: Math.round(r.theoretical * 1000) / 1000, allowed: Math.round(r.allowed * 1000) / 1000,
+        excess: Math.max(0, Math.round(((r.issued || 0) - r.allowed) * 1000) / 1000) }));
+      return json({ ok: true, data: { rows, note: 'Issued = material the store issued to this work order. Theoretical = approved measured quantity x material per unit. Excess above the allowed wastage can be charged with a debit note.' } });
+    } catch (e) { return serverError(e, 'wo-recon'); }
+  }));
+
   // ---------- RA bills ----------
   // Limits: an item can be billed up to its work-order quantity plus approved variations, and never beyond what is measured and approved.
   // A lump-sum order can be billed up to its value plus approved variations. Advance is recovered at the order's rate unless a reason is given.
@@ -482,8 +607,11 @@ export function registerContractors(router, h) {
       }
       if (problems.length) return json({ ok: false, error: problems[0], code: 'over_limit', warnings: problems }, 409);
       const retention = Math.round((gross * wo.retention_bp) / 10000);
-      const other = Math.round(num(b.other_deductions_paise));
-      if (other < 0) return json({ ok: false, error: 'Deductions cannot be negative.' }, 400);
+      const typed = Math.round(num(b.other_deductions_paise));
+      if (typed < 0) return json({ ok: false, error: 'Deductions cannot be negative.' }, 400);
+      // approved debit notes not yet recovered are deducted on this bill
+      const dn = await env.DB.prepare("SELECT COUNT(*) AS n, COALESCE(SUM(amount_paise), 0) AS a FROM con_debit_notes WHERE wo_id = ? AND status = 'approved' AND ra_id IS NULL").bind(wo.id).first();
+      const other = typed + dn.a;
       // advance recovery: the order's share of this bill, up to what is still outstanding
       const bal = await woBalances(env, wo.id);
       const pend = await env.DB.prepare("SELECT COALESCE(SUM(advance_recovery_paise), 0) AS s FROM con_ra_bills WHERE wo_id = ? AND status IN ('draft', 'checked')").bind(wo.id).first();
@@ -500,9 +628,9 @@ export function registerContractors(router, h) {
       if (gstBp < 0 || gstBp > 2800 || tdsBp < 0 || tdsBp > 3000) return json({ ok: false, error: 'GST or TDS rate looks wrong.' }, 400);
       const gst = Math.round((gross * gstBp) / 10000), tds = Math.round((gross * tdsBp) / 10000);
       const net = gross - retention - rec - other + gst - tds;
-      if (!(net >= 0)) return json({ ok: false, error: 'Deductions are more than the bill.' }, 400);
+      if (!(net >= 0)) return json({ ok: false, error: dn.a ? `Deductions (including ${rupees(dn.a)} of debit notes) are more than the bill.` : 'Deductions are more than the bill.' }, 400);
       const key = `ra:${wo.id}`, now = nowStr();
-      const note = [String(b.note || '').trim(), rec < due ? `Advance recovery reduced from ${rupees(due)}: ${recReason}` : ''].filter(Boolean).join(' · ').slice(0, 300);
+      const note = [String(b.note || '').trim(), rec < due ? `Advance recovery reduced from ${rupees(due)}: ${recReason}` : '', dn.n ? `Debit notes ${rupees(dn.a)} deducted` : ''].filter(Boolean).join(' · ').slice(0, 300);
       const RA = '(SELECT id FROM con_ra_bills WHERE wo_id = ? AND ra_no = (SELECT value FROM counters WHERE key = ?))';
       // one batch: number, bill, lines and audit together (all or nothing)
       const res = await env.DB.batch([
@@ -513,10 +641,11 @@ export function registerContractors(router, h) {
         ...lines.map((l) => env.DB.prepare(`INSERT INTO con_ra_lines (ra_id, wo_item_id, qty_this_bill, rate_paise, amount_paise) VALUES (${RA}, ?, ?, ?, ?)`).bind(wo.id, key, l.item.id, l.q, l.item.rate_paise, l.amt)),
         env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) SELECT ?, 'create', 'con_ra_bills', id, ?, ? FROM con_ra_bills WHERE id = ${RA}`)
           .bind(req.user.user_id, `RA bill on ${wo.wo_no}: gross ${rupees(gross)}, net ${rupees(net)}`, now, wo.id, key),
+        env.DB.prepare(`UPDATE con_debit_notes SET status = 'recovered', ra_id = ${RA} WHERE wo_id = ? AND status = 'approved' AND ra_id IS NULL`).bind(wo.id, key, wo.id),
         env.DB.prepare(`SELECT id, ra_no FROM con_ra_bills WHERE id = ${RA}`).bind(wo.id, key),
       ]);
       const ra = res[res.length - 1].results[0];
-      return json({ ok: true, data: { id: ra.id, ra_no: ra.ra_no, gross_paise: gross, retention_paise: retention, advance_recovery_paise: rec, gst_paise: gst, tds_paise: tds, net_paise: net, warnings: [] } });
+      return json({ ok: true, data: { id: ra.id, ra_no: ra.ra_no, gross_paise: gross, retention_paise: retention, advance_recovery_paise: rec, debit_notes_paise: dn.a, other_deductions_paise: other, gst_paise: gst, tds_paise: tds, net_paise: net, warnings: [] } });
     } catch (e) { return serverError(e, 'ra-create'); }
   }));
 
@@ -565,6 +694,7 @@ export function registerContractors(router, h) {
       if (!String(b.reason || '').trim()) return json({ ok: false, error: 'Please say why.' }, 400);
       const r = await env.DB.prepare("UPDATE con_ra_bills SET status = 'cancelled', cancel_note = ? WHERE id = ? AND status IN ('draft', 'checked')").bind(String(b.reason).slice(0, 200), ra.id).run();
       if (!r.meta.changes) return json({ ok: false, error: 'Only a bill that is not yet approved can be cancelled.' }, 409);
+      await env.DB.prepare("UPDATE con_debit_notes SET status = 'approved', ra_id = NULL WHERE ra_id = ? AND status = 'recovered'").bind(ra.id).run();
       await audit(env, req.user, 'cancel', 'con_ra_bills', ra.id, `Cancelled ${ra.wo_no} / RA ${ra.ra_no}: ${String(b.reason).slice(0, 100)}`).run();
       return json({ ok: true });
     } catch (e) { return serverError(e, 'ra-cancel'); }

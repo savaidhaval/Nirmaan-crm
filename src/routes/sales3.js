@@ -5,7 +5,7 @@
 //   WP-14 handover / possession checklist, home-loan details
 // Money is integer paise. Tax and stamp-duty rates are inputs taken from Settings: nothing is hard-coded (confirm with your CA / advocate).
 import { emit } from '../core/events.js';
-import { saleBlock, approvalState } from '../core/gates.js';
+import { saleBlock, approvalState, holdFor } from '../core/gates.js';
 
 const rupees = (p) => '₹' + (Number(p) / 100).toLocaleString('en-IN');
 const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
@@ -338,6 +338,7 @@ export function registerSales3(router, h) {
       if (!unit || !(await visibleProjectIds(env, req.user)).includes(unit.project_id)) return json({ ok: false, error: 'Pick a flat.' }, 400);
       if (unit.category === 'rehab') return json({ ok: false, error: 'Rehab flats are not sold.' }, 400);
       { const blk = await saleBlock(env, unit.project_id); if (blk) return json({ ok: false, error: blk, code: 'rera' }, 409); }
+      { const held = await holdFor(env, unit.project_id, unit.wing); if (held) return json({ ok: false, error: held + '. No cost sheets until the hold is released.', code: 'hold' }, 409); }
       const leadId = b.lead_id ? Number(b.lead_id) : null;
       if (leadId) {
         const l = await env.DB.prepare('SELECT assigned_to FROM sal_leads WHERE id = ? AND deleted_at IS NULL').bind(leadId).first();

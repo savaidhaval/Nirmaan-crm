@@ -88,7 +88,7 @@ async function woDetail(id) {
     ${site ? '' : `<p><b>Value ${moneyP(w.value_paise)}</b> · retention ${(w.retention_bp / 100).toFixed(1)}% · advance agreed ${moneyP(w.advance_paise)}</p>
     <p class="muted">Advance paid ${moneyP(b.advance_paid || 0)}, recovered ${moneyP(b.advance_recovered || 0)} → <b>outstanding ${moneyP(b.advance_outstanding || 0)}</b><br>Retention held: <b>${moneyP(b.retention_held || 0)}</b></p>`}
     ${(d.items || []).length ? '<h3>Items</h3>' + d.items.map((i) => `<p>${esc(i.description)} — ${esc(i.qty)} ${esc(i.unit || '')} @ ${moneyP(i.rate_paise)}${i.variation_id ? ' ' + chip('variation', 'info') : ''}<br><span class="muted">allowed ${esc(+(i.allowed_qty ?? i.qty).toFixed(3))}${i.variation_qty ? ` (incl. ${esc(i.variation_qty)} by variation)` : ''} · measured ${esc(i.measured_qty || 0)} · billed ${esc(i.billed_qty)}</span></p>`).join('') : ''}
-    ${w.status === 'approved' ? `<div class="row-btns"><button class="btn" id="wo-meas">Measurements${d.pending_measurements ? ` (${d.pending_measurements} to approve)` : ''}</button>${site ? '' : `<button class="btn" id="wo-var">Variations${d.pending_variations ? ` (${d.pending_variations} to approve)` : ''}</button>`}</div>` : ''}
+    ${w.status === 'approved' ? `<div class="row-btns"><button class="btn" id="wo-meas">Measurements${d.pending_measurements ? ` (${d.pending_measurements} to approve)` : ''}</button>${site ? '' : `<button class="btn" id="wo-var">Variations${d.pending_variations ? ` (${d.pending_variations} to approve)` : ''}</button><button class="btn" id="wo-dn">Debit notes</button><button class="btn" id="wo-recon">Material check</button><button class="btn" id="wo-links">Item links</button>`}</div>` : ''}
     ${site ? '' : '<h3>RA bills</h3>' + (raHtml || '<p class="muted">No RA bills yet.</p>')}
     <div class="row-btns">${!site && ['draft', 'rejected'].includes(w.status) && canC ? '<button class="btn" id="wo-submit">Send for approval</button>' : ''}${w.status === 'pending_approval' && canA ? '<button class="btn btn-primary" id="wo-approve">Approve</button><button class="btn" id="wo-reject">Reject</button>' : ''}
     ${w.status === 'approved' && canC ? '<button class="btn btn-primary" id="wo-ra">+ New RA bill</button>' : ''}${w.status === 'approved' && money ? '<button class="btn" id="wo-adv">Pay advance</button><button class="btn" id="wo-ret">Release retention</button>' : ''}${w.status === 'approved' && canA ? '<button class="btn" id="wo-close">Close work order</button>' : ''}${!site ? '<button class="btn" id="wo-print">Print</button>' : ''}</div>
@@ -106,6 +106,9 @@ async function woDetail(id) {
   on('wo-ra', () => { ov.remove(); newRaBill(id, d); });
   on('wo-meas', () => { ov.remove(); woMeasurements(id, w); });
   on('wo-var', () => { ov.remove(); woVariations(id, w, d); });
+  on('wo-dn', () => { ov.remove(); woDebitNotes(id, w); });
+  on('wo-recon', () => { ov.remove(); woReconciliation(id, w); });
+  on('wo-links', () => { ov.remove(); woItemLinks(id, w, d); });
   const payForm = async (title, path, dflt) => {
     const v = await openForm({ title, fields: [{ name: 'amount_paise', label: 'Amount (₹)', type: 'money', required: true, value: dflt ? (dflt / 100).toFixed(2) : '' }, { name: 'paid_on', label: 'Paid on', type: 'date', value: today() },
       { name: 'mode', label: 'How', type: 'select', options: [['neft', 'NEFT / RTGS'], ['upi', 'UPI'], ['cheque', 'Cheque'], ['cash', 'Cash']] }, { name: 'ref_no', label: 'Reference / cheque no.' }] });

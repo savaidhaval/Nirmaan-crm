@@ -58,11 +58,86 @@ export async function headBelongsToProject(env, headId, projectId) {
 }
 export { headsOnPo };
 
+export async function boqItemInProject(env, id, projectId) {
+  return !!(await env.DB.prepare('SELECT 1 AS x FROM bud_items WHERE id = ? AND project_id = ? AND deleted_at IS NULL').bind(id, projectId).first());
+}
+
 export function registerBudget(router, h) {
-  const { withAuth, json, serverError, visibleProjectIds, nowStr, getSetting, csvBom } = h;
+  const { withAuth, json, serverError, visibleProjectIds, nowStr, getSetting, csvBom, boqProgressCon, boqProgressPo } = h;
   const audit = (env, user, action, id, summary) => env.DB.prepare('INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, ?, ?, ?, ?, ?)').bind(user.user_id, action, 'bud_heads', id || 0, String(summary).slice(0, 300), nowStr());
 
   async function projectOk(env, req, pid) { return pid && (await visibleProjectIds(env, req.user)).includes(pid); }
+
+  // ----- BOQ items under each head: quantity x rate, then committed / ordered / measured / billed against each -----
+  const pOk = async (env, req, pid) => pid > 0 && (await visibleProjectIds(env, req.user)).includes(pid);
+  router.get('/api/budget/boq', async (req, env) => withAuth(req, env, 'budget', 'V', async (req, env) => {
+    try {
+      const q = new URL(req.url).searchParams; const pid = Number(q.get('project_id'));
+      if (!(await pOk(env, req, pid))) return json({ ok: false, error: 'Pick a project.' }, 400);
+      const [items, con, po] = await Promise.all([
+        env.DB.prepare('SELECT b.*, h.code AS head_code, h.name AS head_name FROM bud_items b JOIN bud_heads h ON h.id = b.head_id WHERE b.project_id = ? AND b.deleted_at IS NULL ORDER BY h.sort_order, h.code, b.code, b.id LIMIT 1000').bind(pid).all(),
+        boqProgressCon(env, pid), boqProgressPo(env, pid),
+      ]);
+      const C = Object.fromEntries(con.map((r) => [r.boq, r])), P = Object.fromEntries(po.map((r) => [r.boq, r]));
+      const rows = items.results.map((b) => { const c = C[b.id] || {}, p = P[b.id] || {}; const committed = (c.committed || 0) + (p.ordered || 0);
+        return { ...b, committed_qty: committed, measured_qty: c.measured || 0, billed_qty: c.billed || 0, committed_paise: (c.committed_paise || 0) + (p.ordered_paise || 0),
+          over_qty: committed > b.qty + 1e-9, pct_used: b.qty ? Math.round((committed * 1000) / b.qty) / 10 : 0 }; });
+      if (q.get('csv')) return new Response(csvBom([['Head', 'Code', 'Item', 'Unit', 'BOQ qty', 'Rate', 'BOQ amount', 'Committed qty', 'Measured qty', 'Billed qty', 'Committed value'],
+        ...rows.map((r) => [r.head_code, r.code || '', r.description, r.unit || '', r.qty, (r.rate_paise / 100).toFixed(2), (r.amount_paise / 100).toFixed(2), r.committed_qty, r.measured_qty, r.billed_qty, (r.committed_paise / 100).toFixed(2)])]),
+        { headers: { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': 'attachment; filename="boq-status.csv"', 'Cache-Control': 'no-store' } });
+      return json({ ok: true, data: { items: rows } });
+    } catch (e) { return serverError(e, 'boq-list'); }
+  }));
+  // Add BOQ items: one, or a pasted list (up to 200) under one head.
+  router.post('/api/budget/boq', async (req, env) => withAuth(req, env, 'budget', 'C', async (req, env) => {
+    try {
+      const b = await req.json(); const pid = Number(b.project_id), head = Number(b.head_id);
+      if (!(await pOk(env, req, pid))) return json({ ok: false, error: 'Pick a project.' }, 400);
+      if (!(await env.DB.prepare('SELECT 1 AS x FROM bud_heads WHERE id = ? AND project_id = ? AND deleted_at IS NULL').bind(head, pid).first())) return json({ ok: false, error: 'Pick a budget head of this project.' }, 400);
+      const list = (Array.isArray(b.lines) ? b.lines : [b]).slice(0, 201);
+      if (list.length > 200) return json({ ok: false, error: 'At most 200 lines at a time.' }, 400);
+      const rows = [];
+      for (const [n, l] of list.entries()) {
+        const desc = String(l.description || '').trim().slice(0, 200), qty = Number(l.qty), rate = Math.round(Number(l.rate_paise));
+        if (!desc || !(qty > 0) || !(rate >= 0)) return json({ ok: false, error: `Line ${n + 1}: needs a description, a quantity and a rate.` }, 400);
+        rows.push({ code: String(l.code || '').trim().slice(0, 30) || null, desc, unit: String(l.unit || '').trim().slice(0, 20) || null, qty, rate });
+      }
+      const now = nowStr();
+      await env.DB.batch([
+        env.DB.prepare(`INSERT INTO bud_items (project_id, head_id, code, description, unit, qty, rate_paise, amount_paise, created_by, created_at)
+          SELECT ?1, ?2, json_extract(value, '$.code'), json_extract(value, '$.desc'), json_extract(value, '$.unit'), json_extract(value, '$.qty'), json_extract(value, '$.rate'), CAST(ROUND(json_extract(value, '$.qty') * json_extract(value, '$.rate')) AS INTEGER), ?3, ?4 FROM json_each(?5)`)
+          .bind(pid, head, req.user.user_id, now, JSON.stringify(rows)),
+        audit(env, req.user, 'create', head, `BOQ: ${rows.length} item(s) added`),
+      ]);
+      return json({ ok: true, data: { added: rows.length } });
+    } catch (e) { return serverError(e, 'boq-add'); }
+  }));
+  router.put('/api/budget/boq/:id', async (req, env) => withAuth(req, env, 'budget', 'E', async (req, env) => {
+    try {
+      const it = await env.DB.prepare('SELECT * FROM bud_items WHERE id = ? AND deleted_at IS NULL').bind(Number(req.params.id)).first();
+      if (!it || !(await pOk(env, req, it.project_id))) return json({ ok: false, error: 'BOQ item not found.' }, 404);
+      const b = await req.json();
+      const qty = b.qty !== undefined ? Number(b.qty) : it.qty, rate = b.rate_paise !== undefined ? Math.round(Number(b.rate_paise)) : it.rate_paise;
+      if (!(qty > 0) || !(rate >= 0)) return json({ ok: false, error: 'Check the quantity and rate.' }, 400);
+      const reason = String(b.reason || '').trim().slice(0, 200); if (!reason) return json({ ok: false, error: 'Say why the BOQ changes (revised drawing, client change...).' }, 400);
+      await env.DB.batch([
+        env.DB.prepare('UPDATE bud_items SET qty = ?, rate_paise = ?, amount_paise = ?, description = COALESCE(?, description), unit = COALESCE(?, unit) WHERE id = ?').bind(qty, rate, Math.round(qty * rate), b.description ? String(b.description).slice(0, 200) : null, b.unit ? String(b.unit).slice(0, 20) : null, it.id),
+        audit(env, req.user, 'edit', it.head_id, `BOQ ${it.code || it.id} ${it.description}: qty ${it.qty} → ${qty}, rate ${it.rate_paise / 100} → ${rate / 100} (${reason})`),
+      ]);
+      return json({ ok: true });
+    } catch (e) { return serverError(e, 'boq-edit'); }
+  }));
+  router.delete('/api/budget/boq/:id', async (req, env) => withAuth(req, env, 'budget', 'E', async (req, env) => {
+    try {
+      if (req.user.role !== 'owner') return json({ ok: false, error: 'Only the Owner can delete.' }, 403);
+      const it = await env.DB.prepare('SELECT * FROM bud_items WHERE id = ? AND deleted_at IS NULL').bind(Number(req.params.id)).first();
+      if (!it || !(await pOk(env, req, it.project_id))) return json({ ok: false, error: 'BOQ item not found.' }, 404);
+      const used = [...(await boqProgressCon(env, it.project_id)), ...(await boqProgressPo(env, it.project_id))].some((r) => r.boq === it.id);
+      if (used) return json({ ok: false, error: 'Work orders or POs use this BOQ item. It cannot be deleted.' }, 409);
+      await env.DB.batch([env.DB.prepare('UPDATE bud_items SET deleted_at = ? WHERE id = ?').bind(nowStr(), it.id), audit(env, req.user, 'delete', it.head_id, `BOQ item deleted: ${it.description}`)]);
+      return json({ ok: true });
+    } catch (e) { return serverError(e, 'boq-del'); }
+  }));
 
   router.get('/api/budget/heads', async (req, env) => withAuth(req, env, 'budget', 'V', async (req, env) => {
     try {

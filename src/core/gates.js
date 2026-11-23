@@ -46,3 +46,9 @@ export async function saleBlock(env, projectId) {
 // India Standard Time date, YYYY-MM-DD.
 export const todayIST = () => new Date(Date.now() + 19800000).toISOString().slice(0, 10);
 export const isDate = (v) => /^\d{4}-\d{2}-\d{2}$/.test(String(v || '')) && new Date(v + 'T00:00:00Z').toISOString().slice(0, 10) === v;
+
+// A wing (or the whole project) on hold: returns the reason, or null. Used before certifying, pouring and selling.
+export async function holdFor(env, projectId, wing) {
+  const h = await env.DB.prepare("SELECT wing, reason FROM prj_holds WHERE project_id = ? AND released_at IS NULL AND (wing IS NULL OR ? IS NULL OR wing = ?) ORDER BY wing IS NULL DESC LIMIT 1").bind(projectId, wing || null, wing || null).first();
+  return h ? `${h.wing ? 'Wing ' + h.wing : 'The project'} is on hold: ${h.reason}` : null;
+}

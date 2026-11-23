@@ -23,6 +23,14 @@ export function grnStockStatements(env, now, projectId, userId, uuid, lines) {
   return out;
 }
 
+// Material issued to a work order (net of anything sent back), with item names; itemIds adds items not issued yet. For contractor reconciliation.
+export async function issuedForWo(env, woId, itemIds = []) {
+  const rows = (await env.DB.prepare(`SELECT i.id AS item_id, i.name, i.unit, COALESCE((SELECT SUM(CASE m.kind WHEN 'issue' THEN m.qty WHEN 'receipt' THEN -m.qty ELSE 0 END) FROM stk_moves m
+      WHERE m.wo_id = ?1 AND m.item_id = i.id AND m.status = 'posted'), 0) AS qty
+    FROM stk_items i WHERE i.id IN (SELECT item_id FROM stk_moves WHERE wo_id = ?1) OR i.id IN (SELECT value FROM json_each(?2))`).bind(woId, JSON.stringify(itemIds)).all()).results;
+  return rows;
+}
+
 // Hourly: one reminder per PM/Purchase user per low item per day (one statement).
 export async function lowStockSweep(env) {
   await env.DB.prepare(`INSERT INTO notifications (user_id, title, body, link, created_at)
@@ -33,7 +41,7 @@ export async function lowStockSweep(env) {
 }
 
 export function registerStores(router, h) {
-  const { withAuth, json, serverError, visibleProjectIds, nowStr, csvBom } = h;
+  const { withAuth, json, serverError, visibleProjectIds, nowStr, csvBom, woInProject, approvedWosForProject } = h;
   const audit = (env, user, action, id, summary) => env.DB.prepare('INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, ?, ?, ?, ?, ?)').bind(user.user_id, action, 'stk_moves', id || 0, String(summary).slice(0, 300), nowStr());
   const csvResponse = (name, rows) => new Response(csvBom(rows), { headers: { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="${name}"`, 'Cache-Control': 'no-store' } });
 
@@ -77,6 +85,14 @@ export function registerStores(router, h) {
     } catch (e) { return serverError(e, 'stk-stock'); }
   }));
 
+  router.get('/api/stores/work-orders', async (req, env) => withAuth(req, env, 'stores', 'V', async (req, env) => {
+    try {
+      const pid = Number(new URL(req.url).searchParams.get('project_id'));
+      if (!(await projectOk(env, req, pid))) return json({ ok: false, error: 'Pick a project.' }, 400);
+      return json({ ok: true, data: { work_orders: await approvedWosForProject(env, pid) } });
+    } catch (e) { return serverError(e, 'stk-wos'); }
+  }));
+
   router.post('/api/stores/reorder', async (req, env) => withAuth(req, env, 'stores', 'E', async (req, env) => {
     try {
       if (!MANAGERS.includes(req.user.role)) return json({ ok: false, error: 'Only Purchase, the PM or the Owner can set a reorder level.' }, 403);
@@ -96,14 +112,16 @@ export function registerStores(router, h) {
       const it = await item(env, itemId);
       if (!it) return json({ ok: false, error: 'Pick an item.' }, 400);
       if (!(q > 0)) return json({ ok: false, error: 'Enter how much was issued.' }, 400);
+      const woId = Number(b.wo_id) || null;
+      if (woId && !(await woInProject(env, woId, pid))) return json({ ok: false, error: 'That work order is not an approved one on this project.' }, 400);
       const uuid = String(b.client_uuid || crypto.randomUUID());
       const dup = await env.DB.prepare('SELECT id FROM stk_moves WHERE client_uuid = ?').bind(uuid).first();
       if (dup) return json({ ok: true, data: { id: dup.id, duplicate: true } });
       const now = nowStr();
       const res = await env.DB.batch([
         env.DB.prepare('UPDATE stk_balance SET qty = qty - ?1 WHERE project_id = ?2 AND item_id = ?3 AND qty + 0.000001 >= ?1').bind(q, pid, itemId),
-        env.DB.prepare(`INSERT INTO stk_moves (project_id, item_id, kind, qty, status, where_used, note, by_user, client_uuid, created_at)
-          SELECT ?1, ?2, 'issue', ?3, 'posted', ?4, ?5, ?6, ?7, ?8 WHERE changes() > 0`).bind(pid, itemId, q, String(b.where_used || '').slice(0, 120), String(b.note || '').slice(0, 200), req.user.user_id, uuid, now),
+        env.DB.prepare(`INSERT INTO stk_moves (project_id, item_id, kind, qty, status, where_used, note, by_user, client_uuid, created_at, wo_id)
+          SELECT ?1, ?2, 'issue', ?3, 'posted', ?4, ?5, ?6, ?7, ?8, ?9 WHERE changes() > 0`).bind(pid, itemId, q, String(b.where_used || '').slice(0, 120), String(b.note || '').slice(0, 200), req.user.user_id, uuid, now, woId),
       ]);
       if (!res[1].meta.changes) return json({ ok: false, error: `Only ${fmt(await onHand(env, pid, itemId))} ${it.unit || ''} of ${it.name} is in the store.` }, 400);
       return json({ ok: true, data: { id: res[1].meta.last_row_id, on_hand: await onHand(env, pid, itemId) } });

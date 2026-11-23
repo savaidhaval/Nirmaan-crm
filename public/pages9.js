@@ -72,11 +72,14 @@ async function storeIssue(pid) {
   try { stock = await stockList(pid); } catch (e) { toast(e.message); return; }
   const items = stock.filter((s) => s.qty > 0);
   if (!items.length) { toast('Nothing in the store to issue'); return; }
+  let wos = []; try { wos = (await api(`/api/stores/work-orders?project_id=${pid}`)).data.work_orders; } catch (e) { /* offline: no work-order pick */ }
   const v = await openForm({ title: 'Issue to work', intro: 'Works without signal. It is sent when you are online again.', fields: [
     { name: 'item_id', label: 'Item', type: 'select', options: items.map((s) => [s.item_id, `${s.name} (${qtyText(s.qty)} ${s.unit || ''} in store)`]) },
-    { name: 'qty', label: 'How much', type: 'number', required: true }, { name: 'where_used', label: 'Where used (e.g. Slab 3, Wing B)' }] });
+    { name: 'qty', label: 'How much', type: 'number', required: true },
+    ...(wos.length ? [{ name: 'wo_id', label: "Given to a contractor's work order? (free-issue material)", type: 'select', options: [['', 'No, used by us'], ...wos.map((w) => [w.id, `${w.wo_no} · ${w.contractor}`])], help: 'Counted in the material check for that contractor.' }] : []),
+    { name: 'where_used', label: 'Where used (e.g. Slab 3, Wing B)' }] });
   if (!v) return;
-  if (await postOrQueue('/api/stores/issue', { project_id: pid, item_id: Number(v.item_id), qty: v.qty, where_used: v.where_used }, 'Issued')) loadStores(pid);
+  if (await postOrQueue('/api/stores/issue', { project_id: pid, item_id: Number(v.item_id), qty: v.qty, where_used: v.where_used, wo_id: v.wo_id ? Number(v.wo_id) : undefined }, 'Issued')) loadStores(pid);
 }
 
 // Stock that came in without a purchase order: opening stock, bought for cash, returned from work.

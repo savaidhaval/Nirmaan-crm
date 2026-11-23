@@ -338,13 +338,91 @@ export function registerProjectPlus(router, h) {
     } catch (e) { return serverError(e, 'pp-assign'); }
   }));
 
+  // ----- wing on hold (redesign, stay order, dispute): stops certifying, pouring and selling in that wing -----
+  router.get('/api/projects/:id/holds', async (req, env) => withAuth(req, env, 'projects', 'V', async (req, env) => {
+    try {
+      const pid = Number(req.params.id); if (!(await canSee(env, req, pid))) return json({ ok: false, error: 'Not allowed.' }, 403);
+      const rows = (await env.DB.prepare('SELECT h.*, u.name AS held_by_name, r.name AS released_by_name FROM prj_holds h LEFT JOIN users u ON u.id = h.held_by LEFT JOIN users r ON r.id = h.released_by WHERE h.project_id = ? ORDER BY h.released_at IS NOT NULL, h.id DESC LIMIT 50').bind(pid).all()).results;
+      return json({ ok: true, data: { holds: rows } });
+    } catch (e) { return serverError(e, 'pp-holds'); }
+  }));
+  router.post('/api/projects/:id/holds', async (req, env) => withAuth(req, env, 'projects', 'V', async (req, env) => {
+    try {
+      if (!['owner', 'pm'].includes(req.user.role)) return json({ ok: false, error: 'Only the PM or the Owner can put work on hold.' }, 403);
+      const pid = Number(req.params.id); if (!(await canSee(env, req, pid))) return json({ ok: false, error: 'Not allowed.' }, 403);
+      const b = await req.json(); const reason = str(b.reason, 300); const wing = str(b.wing, 20) || null;
+      if (!reason) return json({ ok: false, error: 'Say why (redesign, stay order, dispute...).' }, 400);
+      if (await env.DB.prepare('SELECT 1 AS x FROM prj_holds WHERE project_id = ? AND released_at IS NULL AND COALESCE(wing, \'\') = COALESCE(?, \'\')').bind(pid, wing).first()) return json({ ok: false, error: 'It is already on hold.' }, 409);
+      const now = nowStr();
+      const res = await env.DB.batch([
+        env.DB.prepare('INSERT INTO prj_holds (project_id, wing, reason, held_by, held_at) VALUES (?, ?, ?, ?, ?)').bind(pid, wing, reason, req.user.user_id, now),
+        env.DB.prepare("INSERT INTO notifications (user_id, title, body, link, created_at) SELECT id, ?, ?, 'projects', ? FROM users WHERE role IN ('owner', 'pm', 'sales', 'site') AND active = 1 AND deleted_at IS NULL AND id != ? ORDER BY role = 'owner' DESC, id IN (SELECT user_id FROM project_members WHERE project_id = ?) DESC, id DESC LIMIT 40")
+          .bind(`On hold: ${wing ? 'wing ' + wing : 'whole project'}`, `${reason}. No certifying, pouring or booking there until released.`, now, req.user.user_id, pid),
+        audit(env, req.user, 'hold', 'projects', pid, `Put ${wing ? 'wing ' + wing : 'the project'} on hold: ${reason}`),
+      ]);
+      return json({ ok: true, data: { id: res[0].meta.last_row_id } });
+    } catch (e) { return serverError(e, 'pp-hold'); }
+  }));
+  router.post('/api/holds/:id/release', async (req, env) => withAuth(req, env, 'projects', 'V', async (req, env) => {
+    try {
+      if (!['owner', 'pm'].includes(req.user.role)) return json({ ok: false, error: 'Only the PM or the Owner can release a hold.' }, 403);
+      const h = await env.DB.prepare('SELECT * FROM prj_holds WHERE id = ?').bind(Number(req.params.id)).first();
+      if (!h || !(await canSee(env, req, h.project_id))) return json({ ok: false, error: 'Not found.' }, 404);
+      const b = await req.json().catch(() => ({})); const note = str(b.note, 300);
+      if (!note) return json({ ok: false, error: 'Say why it is released.' }, 400);
+      const r = await env.DB.prepare('UPDATE prj_holds SET released_by = ?, released_at = ?, release_note = ? WHERE id = ? AND released_at IS NULL').bind(req.user.user_id, nowStr(), note, h.id).run();
+      if (!r.meta.changes) return json({ ok: false, error: 'Already released.' }, 409);
+      await audit(env, req.user, 'release', 'projects', h.project_id, `Hold released (${h.wing ? 'wing ' + h.wing : 'project'}): ${note}`).run();
+      return json({ ok: true });
+    } catch (e) { return serverError(e, 'pp-release'); }
+  }));
+
+  // ----- milestone dates: a baseline fixed once, then every change has a reason -----
+  const SLIP = ['monsoon', 'approvals', 'contractor', 'material', 'funds', 'design', 'other'];
+  router.post('/api/projects/:id/baseline', async (req, env) => withAuth(req, env, 'site', 'A', async (req, env) => {
+    try {
+      const pid = Number(req.params.id); if (!(await canSee(env, req, pid))) return json({ ok: false, error: 'Not allowed.' }, 403);
+      const res = await env.DB.batch([
+        env.DB.prepare('UPDATE site_milestones SET baseline_date = planned_date WHERE project_id = ? AND deleted_at IS NULL AND baseline_date IS NULL AND planned_date IS NOT NULL').bind(pid),
+        audit(env, req.user, 'baseline', 'projects', pid, 'Milestone dates fixed as the baseline'),
+      ]);
+      return json({ ok: true, data: { fixed: res[0].meta.changes || 0 } });
+    } catch (e) { return serverError(e, 'pp-baseline'); }
+  }));
+  router.post('/api/site/milestones/:id/reschedule', async (req, env) => withAuth(req, env, 'site', 'A', async (req, env) => {
+    try {
+      const m = await env.DB.prepare('SELECT * FROM site_milestones WHERE id = ? AND deleted_at IS NULL').bind(Number(req.params.id)).first();
+      if (!m || !(await canSee(env, req, m.project_id))) return json({ ok: false, error: 'Milestone not found.' }, 404);
+      if (m.status === 'done') return json({ ok: false, error: 'A certified milestone has its date.' }, 409);
+      const b = await req.json();
+      if (!isDate(b.planned_date)) return json({ ok: false, error: 'Pick the new expected date.' }, 400);
+      if (!SLIP.includes(b.reason)) return json({ ok: false, error: 'Pick why the date changed.' }, 400);
+      if (b.planned_date === m.planned_date) return json({ ok: false, error: 'That is the same date.' }, 400);
+      const now = nowStr();
+      await env.DB.batch([
+        env.DB.prepare('UPDATE site_milestones SET planned_date = ?, baseline_date = COALESCE(baseline_date, ?) WHERE id = ?').bind(b.planned_date, m.planned_date, m.id),
+        env.DB.prepare('INSERT INTO site_ms_changes (milestone_id, old_date, new_date, reason, note, changed_by, changed_at) VALUES (?, ?, ?, ?, ?, ?, ?)').bind(m.id, m.planned_date, b.planned_date, b.reason, str(b.note, 300) || null, req.user.user_id, now),
+        audit(env, req.user, 'reschedule', 'site_milestones', m.id, `${m.name}: ${m.planned_date || 'no date'} → ${b.planned_date} (${b.reason})`),
+      ]);
+      return json({ ok: true });
+    } catch (e) { return serverError(e, 'pp-resched'); }
+  }));
+  router.get('/api/site/milestones/:id/changes', async (req, env) => withAuth(req, env, 'site', 'V', async (req, env) => {
+    try {
+      const m = await env.DB.prepare('SELECT project_id FROM site_milestones WHERE id = ?').bind(Number(req.params.id)).first();
+      if (!m || !(await canSee(env, req, m.project_id))) return json({ ok: false, error: 'Milestone not found.' }, 404);
+      const rows = (await env.DB.prepare('SELECT c.*, u.name AS by_name FROM site_ms_changes c LEFT JOIN users u ON u.id = c.changed_by WHERE c.milestone_id = ? ORDER BY c.id').bind(Number(req.params.id)).all()).results;
+      return json({ ok: true, data: { changes: rows } });
+    } catch (e) { return serverError(e, 'pp-ms-changes'); }
+  }));
+
   // ----- project quick view: details, where it stands, open work and who is on it -----
   router.get('/api/projects/:id/overview', async (req, env) => withAuth(req, env, 'projects', 'V', async (req, env) => {
     try {
       const pid = Number(req.params.id);
       const ids = await visibleProjectIds(env, req.user);
       if (!ids.includes(pid)) return json({ ok: false, error: 'Not allowed.' }, 403);
-      const [p, apr, soc, sales, current] = await env.DB.batch([
+      const [p, apr, soc, sales, current, holds] = await env.DB.batch([
         env.DB.prepare('SELECT * FROM projects WHERE id = ? AND deleted_at IS NULL').bind(pid),
         env.DB.prepare("SELECT status, COUNT(*) AS n FROM apr_items WHERE project_id = ? AND deleted_at IS NULL GROUP BY status").bind(pid),
         env.DB.prepare(`SELECT s.id, s.name, COUNT(m.id) AS members, COALESCE(SUM(m.consent_status = 'consented'), 0) AS consented
@@ -352,6 +430,7 @@ export function registerProjectPlus(router, h) {
         env.DB.prepare("SELECT COUNT(*) AS units, COALESCE(SUM(status IN ('booked', 'possessed', 'sold')), 0) AS sold FROM sal_inventory WHERE project_id = ? AND deleted_at IS NULL").bind(pid),
         env.DB.prepare(`SELECT i.id, i.name, i.status, i.holder_designation, i.next_designation, i.target_date, u.name AS in_charge FROM apr_items i LEFT JOIN users u ON u.id = i.owner_user_id
           WHERE i.project_id = ? AND i.deleted_at IS NULL AND i.status IN ('applied', 'query', 'in_progress') ORDER BY i.stage_order LIMIT 3`).bind(pid),
+        env.DB.prepare('SELECT id, wing, reason, held_at FROM prj_holds WHERE project_id = ? AND released_at IS NULL').bind(pid),
       ]);
       const project = p.results[0];
       if (!project) return json({ ok: false, error: 'Project not found.' }, 404);
@@ -362,7 +441,7 @@ export function registerProjectPlus(router, h) {
       const counts = Object.fromEntries(apr.results.map((r) => [r.status, r.n]));
       const total = apr.results.reduce((t, r) => t + r.n, 0);
       return json({ ok: true, data: { project, approvals: { total, approved: counts.approved || 0, in_progress: (counts.applied || 0) + (counts.query || 0) + (counts.in_progress || 0), query: counts.query || 0, current: current.results },
-        society: soc.results[0] || null, sales: sales.results[0] || null, tasks: tasks.slice(0, 40) } });
+        society: soc.results[0] || null, sales: sales.results[0] || null, holds: holds.results, tasks: tasks.slice(0, 40) } });
     } catch (e) { return serverError(e, 'pp-overview'); }
   }));
 }
