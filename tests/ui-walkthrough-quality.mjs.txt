@@ -1,0 +1,71 @@
+import { createRequire } from 'node:module';
+const { chromium } = createRequire(import.meta.url)('/opt/node-tools/node_modules/playwright');
+const BASE = process.env.BASE || 'http://localhost:8787', SHOTS = '/tmp/claude-0/scratch/shots';
+const run = Date.now().toString(36);
+let pass = 0, fail = 0; const ok = (n, c, x = '') => { c ? pass++ : fail++; console.log(`${c ? 'PASS' : 'FAIL'}  ${n}${c ? '' : '  ' + x}`); };
+class C { constructor() { this.cookie = ''; } async call(m, p, b) { const h = { 'X-NirmaanCRM': '1' }; if (this.cookie) h.cookie = this.cookie; let body; if (b) { h['Content-Type'] = 'application/json'; body = JSON.stringify(b); }
+  const r = await fetch(BASE + p, { method: m, headers: h, body }); const sc = r.headers.get('set-cookie'); if (sc) this.cookie = sc.split(';')[0]; let d = null; try { d = await r.json(); } catch (e) {} return { status: r.status, data: d && d.data, err: d && d.error }; } }
+const o = new C(); await o.call('POST', '/api/auth/login', { email: 'owner@test.local', password: 'CiStrongPass-12345' });
+const pid = (await o.call('POST', '/api/projects', { rera_no: 'P518000TEST', name: 'UI Tower ' + run, code: 'UI' + run.toUpperCase().slice(-5), budget_paise: 5e9 })).data.id;
+await o.call('POST', '/api/settings/con.enabled', { value: 'on' });
+await o.call('POST', '/api/settings/con.pm_approval_limit_paise', { value: 50000000 });
+const users = {};
+for (const role of ['site', 'pm', 'purchase', 'accounts', 'sales', 'viewer']) {
+  const email = `ui-${role}-${run}@test.local`; const r = await o.call('POST', '/api/users', { name: 'UI ' + role + ' ' + run, email, role, projects: role === 'site' ? [pid] : [] });
+  const c = new C(); await c.call('POST', '/api/auth/login', { email, password: r.data.temporaryPassword }); const pw = 'UiStrongPass-' + run;
+  await c.call('POST', '/api/auth/change-password', { currentPassword: r.data.temporaryPassword, newPassword: pw }); users[role] = { email, pw };
+}
+const browser = await chromium.launch();
+const ctxs = {};
+async function page(role) {
+  if (!ctxs[role]) {
+    const ctx = await browser.newContext({ viewport: { width: 390, height: 800 } });
+    const email = role === 'owner' ? 'owner@test.local' : users[role].email, password = role === 'owner' ? 'CiStrongPass-12345' : users[role].pw;
+    const r = await ctx.request.post(BASE + '/api/auth/login', { headers: { 'X-NirmaanCRM': '1', 'Content-Type': 'application/json' }, data: { email, password } });
+    if (!r.ok()) throw new Error('login ' + role + ' ' + r.status());
+    ctxs[role] = ctx;
+  }
+  const p = await ctxs[role].newPage(); p.on('dialog', (d) => d.accept()); p.on('pageerror', (e) => console.log('PAGEERROR', role, e.message));
+  await p.goto(BASE + '/'); await p.waitForFunction(() => typeof navigate === 'function' && typeof currentUser !== 'undefined' && currentUser, null, { timeout: 15000 }); return p;
+}
+const go = async (p, route) => { await p.evaluate((r) => navigate(r), route); await p.waitForTimeout(800); };
+const toastText = async (p) => { await p.waitForTimeout(500); return p.evaluate(() => (document.getElementById('toast') || {}).textContent || ''); };
+const submit = (p) => p.click('#modal-form button[type=submit]');
+const pick = (p, sel, label) => p.selectOption(sel, { label });
+const shot = (p, n) => p.screenshot({ path: `${SHOTS}/${n}.png` });
+
+const iso = (d) => new Date(Date.now() + 19800000 + d * 86400000).toISOString().slice(0, 10);
+await o.call('POST', '/api/approvals/load-template', { project_id: pid });
+const items = (await o.call('GET', '/api/approvals')).data.items.filter((a) => a.project_id === pid); const g = (k) => items.find((a) => a.gate_key === k).id;
+await o.call('POST', `/api/approvals/${g('iod')}/event`, { event: 'applied' }); await o.call('POST', `/api/approvals/${g('iod')}/event`, { event: 'approved', letter_no: 'IOD/1', letter_date: iso(-60) });
+await o.call('POST', `/api/approvals/${g('cc')}/event`, { event: 'applied' }); await o.call('POST', `/api/approvals/${g('cc')}/event`, { event: 'approved', letter_no: 'CC/1', letter_date: iso(-50), cc_upto_floor: 10 });
+
+const sp = await page('site'); await go(sp, 'quality'); await sp.waitForSelector('#qa-new');
+ok('Quality sits in the Projects section bar for the site engineer', await sp.evaluate(() => !!document.querySelector('#sub-nav [data-route="quality"].active')));
+await sp.click('#qa-new'); await sp.waitForSelector('#f_grade');
+await sp.fill('#f_wing', 'A'); await sp.fill('#f_floor', '3'); await sp.fill('#f_qty_cum', '42.5');
+const boxes = await sp.$$('.multi-item'); for (const x of boxes.slice(0, 4)) await x.click();
+await shot(sp, '230-pour-card'); await submit(sp); await sp.waitForTimeout(1500);
+ok('the site engineer sends a pour card to the PM', (await sp.textContent('#qa-body')).includes('Waiting for PM'));
+const pmp = await page('pm'); await go(pmp, 'quality'); await pmp.selectOption('#qa-p', String(pid)); await pmp.waitForSelector('[data-pap]');
+await pmp.click('[data-pap]'); await pmp.waitForSelector('[data-mall]'); await pmp.click('[data-mall]'); await shot(pmp, '231-pour-approve'); await submit(pmp); await pmp.waitForTimeout(1500);
+ok('the PM ticks the remaining checks and approves', (await pmp.textContent('#qa-body')).includes('Approved to pour'));
+await go(sp, 'quality'); await sp.waitForSelector('[data-pdone]'); await sp.click('[data-pdone]'); await sp.waitForSelector('#f_poured_on');
+await sp.fill('#f_poured_on', iso(-30)); await submit(sp); await sp.waitForTimeout(1500);
+ok('pour recorded: the cube tests appear with due dates', (await sp.textContent('#qa-body')).includes('7-day') && (await sp.textContent('#qa-body')).includes('28-day'));
+await sp.click('[data-qtab="cubes"]'); await sp.waitForSelector('[data-cres]');
+const btns = await sp.$$('[data-cres]'); await btns[btns.length - 1].click(); await sp.waitForSelector('#f_result_mpa');
+const intro = await sp.locator('.modal').last().textContent();
+await sp.fill('#f_result_mpa', intro.includes('25 N') ? '22' : '10'); await submit(sp); await sp.waitForTimeout(1500);
+ok('a failed cube is shown as FAIL and an NCR opens', (await sp.textContent('#qa-body')).includes('FAIL'));
+await shot(sp, '232-cubes');
+await sp.click('[data-qtab="ncrs"]'); await sp.waitForTimeout(1200);
+ok('the NCR is listed', (await sp.textContent('#qa-body')).includes('cube failed'));
+await shot(sp, '233-ncr');
+await go(sp, 'site'); await sp.evaluate(() => newDpr()); await sp.waitForSelector('[data-w="activity"]');
+await sp.selectOption('[data-w="activity"]', 'Slab'); await sp.fill('[data-w="wing"]', 'A'); await sp.fill('[data-w="floor"]', '5'); await sp.fill('[data-w="qty"]', '38'); await sp.selectOption('[data-w="unit"]', 'cum');
+await sp.click('[data-wx="Rain"]'); await sp.fill('#dpr-lost', '2');
+await shot(sp, '234-dpr'); await sp.click('#dpr-form button[type=submit]'); await sp.waitForTimeout(1500);
+const d = (await o.call('GET', `/api/site/dprs?project_id=${pid}`)).data.dprs[0];
+ok('the daily report is saved from taps: activity, wing, floor, quantity, rain and hours lost', d && /Slab A fl 5 38 cum/.test(d.work_summary) && d.weather === 'Rain' && d.hours_lost === 2 && d.lost_reason === 'rain', JSON.stringify(d || {}));
+await browser.close(); console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);

@@ -274,7 +274,7 @@ export function registerProjectPlus(router, h) {
     const inP = `IN (${P.map(() => '?').join(',')})`;
     const w = (col) => (mine ? ` AND ${col} = ?` : '');
     const args = (extra) => [...P, ...(mine ? [mine] : []), ...(extra || [])];
-    const [a, s, m, n, g] = await env.DB.batch([
+    const [a, s, m, n, g, q] = await env.DB.batch([
       env.DB.prepare(`SELECT 'approval' AS kind, i.id, i.project_id, i.name AS title, i.status, i.target_date AS due, i.owner_user_id AS user_id, u.name AS in_charge, i.holder_designation AS detail
         FROM apr_items i LEFT JOIN users u ON u.id = i.owner_user_id WHERE i.deleted_at IS NULL AND i.project_id ${inP} AND (i.status IN ('applied', 'query', 'in_progress') OR (i.status = 'not_started' AND (i.owner_user_id IS NOT NULL OR i.target_date IS NOT NULL)))${w('i.owner_user_id')} ORDER BY i.target_date IS NULL, i.target_date LIMIT 30`).bind(...args()),
       env.DB.prepare(`SELECT 'step' AS kind, s.id, s.project_id, s.title || ' · ' || i.name AS title, s.status, s.target_date AS due, s.assigned_to AS user_id, u.name AS in_charge, s.responsible_designation AS detail, s.item_id
@@ -286,8 +286,10 @@ export function registerProjectPlus(router, h) {
       env.DB.prepare(`SELECT 'meeting' AS kind, mt.id, so.project_id, mt.next_action AS title, 'pending' AS status, mt.next_action_due AS due, mt.next_action_owner AS user_id, u.name AS in_charge, so.name AS detail
         FROM red_meetings mt JOIN red_societies so ON so.id = mt.society_id LEFT JOIN users u ON u.id = mt.next_action_owner
         WHERE mt.deleted_at IS NULL AND so.deleted_at IS NULL AND so.project_id ${inP} AND mt.next_action_done = 0 AND COALESCE(mt.next_action, '') != ''${w('mt.next_action_owner')} ORDER BY mt.next_action_due IS NULL, mt.next_action_due LIMIT 10`).bind(...args()),
+      env.DB.prepare(`SELECT 'ncr' AS kind, q.id, q.project_id, q.title, q.status, q.due_date AS due, q.assigned_to AS user_id, u.name AS in_charge, q.source AS detail
+        FROM qa_ncrs q LEFT JOIN users u ON u.id = q.assigned_to WHERE q.project_id ${inP} AND q.status = 'open'${w('q.assigned_to')} ORDER BY q.due_date IS NULL, q.due_date LIMIT 20`).bind(...args()),
     ]);
-    return [...a.results, ...s.results, ...m.results, ...n.results, ...g.results];
+    return [...a.results, ...s.results, ...m.results, ...n.results, ...g.results, ...q.results];
   }
 
   router.get('/api/tasks', async (req, env) => withAuth(req, env, 'projects', 'V', async (req, env) => {
@@ -309,6 +311,7 @@ export function registerProjectPlus(router, h) {
     step: ['apr_steps', 'assigned_to', 'target_date', 'project_id', 'approvals'],
     milestone: ['site_milestones', 'assigned_to', 'planned_date', 'project_id', 'site'],
     snag: ['site_snags', 'assigned_to', 'due_date', 'project_id', 'site'],
+    ncr: ['qa_ncrs', 'assigned_to', 'due_date', 'project_id', 'site'],
   };
   router.post('/api/tasks/assign', async (req, env) => withAuth(req, env, 'projects', 'V', async (req, env) => {
     try {
@@ -327,7 +330,7 @@ export function registerProjectPlus(router, h) {
         return json({ ok: true });
       }
       const t = TASK[b.kind]; if (!t) return json({ ok: false, error: 'Unknown task.' }, 400);
-      const row = await env.DB.prepare(`SELECT ${t[3]} AS pid FROM ${t[0]} WHERE id = ? AND deleted_at IS NULL`).bind(id).first();
+      const row = await env.DB.prepare(`SELECT ${t[3]} AS pid FROM ${t[0]} WHERE id = ?${t[0] === 'qa_ncrs' ? " AND status = 'open'" : ' AND deleted_at IS NULL'}`).bind(id).first();
       if (!row || !(await canSee(env, req, row.pid))) return json({ ok: false, error: 'Not found.' }, 404);
       await env.DB.batch([env.DB.prepare(`UPDATE ${t[0]} SET ${t[1]} = ?, ${t[2]} = COALESCE(?, ${t[2]}) WHERE id = ?`).bind(uid, b.due || null, id),
         audit(env, req.user, 'assign', t[0], id, 'Person in charge and expected date set')]);

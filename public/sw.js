@@ -1,8 +1,8 @@
 // sw.js — PWA service worker. Caches the static shell only, never API or file responses.
 // Network-first so a new deploy is picked up immediately; cache is the offline fallback.
 
-const CACHE_NAME = 'nirmaan-shell-v26';
-const SHELL_URLS = ['/', '/login.html', '/app.css', '/ui.js', '/app.js', '/pages.js', '/pages2.js', '/pages3.js', '/pages4.js', '/pages5.js', '/pages6.js', '/pages7.js', '/pages8.js', '/pages9.js', '/pages10.js', '/pages11.js', '/pages12.js', '/pages13.js', '/pages14.js', '/pages15.js', '/pages16.js', '/pages17.js', '/pages18.js', '/pages19.js', '/pages20.js', '/pages21.js', '/pages22.js', '/pages23.js', '/pages24.js', '/identity/brand-kit.css', '/identity/brand-tokens.css', '/identity/logo-horizontal.png', '/identity/icon-mark.png', '/identity/favicon.svg', '/identity/fonts/inter-400.woff2', '/identity/fonts/inter-600.woff2', '/identity/fonts/jakarta-700.woff2', '/identity/fonts/jakarta-800.woff2', '/install.js', '/manifest.json', '/charts.js', '/manifest.json'];
+const CACHE_NAME = 'nirmaan-shell-v27';
+const SHELL_URLS = ['/', '/login.html', '/app.css', '/ui.js', '/app.js', '/pages.js', '/pages2.js', '/pages3.js', '/pages4.js', '/pages5.js', '/pages6.js', '/pages7.js', '/pages8.js', '/pages9.js', '/pages10.js', '/pages11.js', '/pages12.js', '/pages13.js', '/pages14.js', '/pages15.js', '/pages16.js', '/pages17.js', '/pages18.js', '/pages19.js', '/pages20.js', '/pages21.js', '/pages22.js', '/pages23.js', '/pages24.js', '/pages25.js', '/identity/brand-kit.css', '/identity/brand-tokens.css', '/identity/logo-horizontal.png', '/identity/icon-mark.png', '/identity/favicon.svg', '/identity/fonts/inter-400.woff2', '/identity/fonts/inter-600.woff2', '/identity/fonts/jakarta-700.woff2', '/identity/fonts/jakarta-800.woff2', '/install.js', '/manifest.json', '/charts.js', '/manifest.json'];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
