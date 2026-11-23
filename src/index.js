@@ -15,7 +15,7 @@ import { registerSales3, ensureDemandNumber, handoverDueSweep } from './routes/s
 import { registerBulkDemands, demandLetterHtml } from './routes/bulk_demands.js';
 import { registerReports } from './routes/reports.js';
 import { registerFinance } from './routes/finance.js';
-import { registerProcurement2, poTermsStatement } from './routes/procurement2.js';
+import { registerProcurement2, boqProgressPo, poTermsStatement } from './routes/procurement2.js';
 import { csvBom } from './core/util.js';
 import { registerPetty } from './routes/petty.js';
 import { registerProfile } from './routes/profile.js';
@@ -34,13 +34,13 @@ import { registerRera, reraSweep } from './routes/rera.js';
 import { registerAi } from './routes/ai.js';
 import { registerProfessionals } from './routes/professionals.js';
 import { registerPartyDocs, partyDocsSweep } from './routes/partydocs.js';
-import { registerStores, grnStockStatements, lowStockSweep, stockItemExists } from './routes/stores.js';
-import { registerBudget, checkHeadOver, headBelongsToProject, headsOnPo } from './routes/budget.js';
-import { registerContractors, raDueSweep, activeContractorsForProject, contractorNames } from './routes/contractors.js';
+import { registerStores, grnStockStatements, lowStockSweep, stockItemExists, issuedForWo } from './routes/stores.js';
+import { registerBudget, checkHeadOver, headBelongsToProject, headsOnPo, boqItemInProject } from './routes/budget.js';
+import { registerContractors, raDueSweep, activeContractorsForProject, contractorNames, woItemsForDrawing, woInProject, approvedWosForProject, boqProgressCon } from './routes/contractors.js';
 import { registerMfa, mfaChallenge } from './routes/mfa.js';
 import { registerImporter } from './routes/importer.js';
 import { registerPrivacy } from './routes/privacy.js';
-import { gateOf, GATE_DEPS, GATE_LABEL, approvalState, saleBlock, todayIST, isDate } from './core/gates.js';
+import { gateOf, GATE_DEPS, GATE_LABEL, approvalState, saleBlock, todayIST, isDate, holdFor } from './core/gates.js';
 
 const router = new Router();
 
@@ -345,6 +345,7 @@ async function loadTarget(env, req) {
 }
 
 const nowStr = () => new Date().toISOString().replace('T', ' ').substring(0, 19);
+const drawingInProject = async (env, id, pid) => !!(await env.DB.prepare('SELECT 1 AS x FROM drw_drawings WHERE id = ? AND project_id = ? AND deleted_at IS NULL').bind(id, pid).first());
 
 router.put('/api/users/:id', async (req, env) => {
   return withAuth(req, env, 'users_settings', 'E', async (req, env) => {
@@ -866,6 +867,12 @@ async function milestoneCertify(req, env) {
   let block = null;
   if (!anyCc) block = 'No Commencement Certificate is marked approved for this project in Approvals.';
   else if (ms.floor != null && (upto == null || ms.floor > upto)) block = `The approved CC covers work up to floor ${upto == null ? '(not recorded)' : upto}; this milestone is floor ${ms.floor}.`;
+  { const held = await holdFor(env, ms.project_id, ms.wing); if (held) return json({ ok: false, error: held + '. Release the hold before certifying.', code: 'hold' }, 409); }
+  // Demolition waits until every society member has vacated (the Owner may go ahead with a reason).
+  if (/demoli/i.test(ms.name || '')) {
+    const v = await env.DB.prepare("SELECT COUNT(m.id) AS total, COALESCE(SUM(m.vacated_on IS NOT NULL), 0) AS gone FROM red_societies s JOIN red_members m ON m.society_id = s.id AND m.deleted_at IS NULL WHERE s.project_id = ? AND s.deleted_at IS NULL").bind(ms.project_id).first();
+    if (v.total > v.gone && (user.role !== 'owner' || !String(b.override_note || '').trim())) return json({ ok: false, error: `${v.total - v.gone} of ${v.total} members have not vacated yet.${user.role === 'owner' ? ' As the Owner you can go ahead only with a written reason.' : ''}`, code: 'vacate' }, 409);
+  }
   // An open NCR from a failed 28-day cube on this wing, at or below this floor, stops certification (no override: close the NCR first).
   if (ms.floor != null) {
     const ncr = await env.DB.prepare("SELECT title FROM qa_ncrs WHERE project_id = ? AND status = 'open' AND source = 'cube28' AND (wing IS NULL OR ? IS NULL OR wing = ?) AND (floor IS NULL OR floor <= ?) LIMIT 1").bind(ms.project_id, ms.wing || null, ms.wing || null, ms.floor).first();
@@ -1200,6 +1207,7 @@ router.post('/api/procurement/pos', async (req, env) => {
       if (stockId && !(await stockItemExists(env, stockId))) return json({ ok: false, error: 'That stock item does not exist.' }, 400);
       const gstBp = gst_bp !== undefined ? Number(gst_bp) : 1800;
       { const pre = poTermsStatement(env, { id: 0, gst_bp: gstBp }, amount_paise, body); if (pre.error) return json({ ok: false, error: pre.error }, 400); }
+      for (const it of items) if (it.boq_item_id && !(await boqItemInProject(env, Number(it.boq_item_id), Number(project_id)))) return json({ ok: false, error: 'A BOQ item is not in this project.' }, 400);
       const gst_paise = Math.round(amount_paise * gstBp / 10000);
       const total_paise = amount_paise + gst_paise;
       const status = 'draft';
@@ -1213,7 +1221,7 @@ router.post('/api/procurement/pos', async (req, env) => {
       const result = await env.DB.prepare(`INSERT INTO pro_pos (project_id, vendor_id, rfq_id, po_no, po_seq, amount_paise, gst_bp, gst_paise, total_paise, terms, status, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(project_id, vendor_id, rfq_id || null, poNo, nextSeq, amount_paise, gstBp, gst_paise, total_paise, terms || '', status, user.user_id, now).run();
       for (const it of items) {
         const qty = Number(it.qty) || 0; const rate = Math.round(Number(it.rate_paise) || 0);
-        await env.DB.prepare('INSERT INTO pro_po_items (po_id, description, qty, unit, rate_paise, amount_paise, budget_head_id, stock_item_id, hsn) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)').bind(result.meta.last_row_id, String(it.description), qty, it.unit || '', rate, Math.round(qty * rate), headId, stockId, String(it.hsn || '').trim().slice(0, 12) || null).run();
+        await env.DB.prepare('INSERT INTO pro_po_items (po_id, description, qty, unit, rate_paise, amount_paise, budget_head_id, stock_item_id, hsn, boq_item_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)').bind(result.meta.last_row_id, String(it.description), qty, it.unit || '', rate, Math.round(qty * rate), headId, Number(it.stock_item_id) || stockId, String(it.hsn || '').trim().slice(0, 12) || null, Number(it.boq_item_id) || null).run();
       }
       if (['material_category', 'transport_paise', 'loading_paise', 'packing_paise', 'insurance_paise', 'other_charges_paise', 'delivery_date', 'payment_terms', 'category_details', 'price_basis'].some((k) => body[k] !== undefined && body[k] !== '')) {
         const fresh = await env.DB.prepare('SELECT * FROM pro_pos WHERE id = ?').bind(result.meta.last_row_id).first();
@@ -1350,6 +1358,14 @@ router.post('/api/drawings/:id/revisions', async (req, env) => {
           SELECT u.id, ?1, ?2, 'drawings', ?3 FROM users u WHERE u.active = 1 AND u.deleted_at IS NULL AND u.id != ?4
             AND (u.role = 'pm' OR (u.role = 'site' AND EXISTS (SELECT 1 FROM project_members m WHERE m.user_id = u.id AND m.project_id = ?5 AND m.removed_at IS NULL)))`)
           .bind(`New drawing: ${drawing.code} ${revNo}`, `${drawing.title} is now Issued For Construction. Older revisions are superseded.`, now, req.user.user_id, drawing.project_id).run();
+        // Work-order items and pour cards built from this drawing need a check against the new revision.
+        const linked = await woItemsForDrawing(env, drawingId);
+        const pours = (await env.DB.prepare("SELECT COUNT(*) AS n FROM qa_pours WHERE drawing_id = ? AND status IN ('requested', 'approved')").bind(drawingId).first()).n;
+        if (linked.length || pours) {
+          await env.DB.prepare(`INSERT INTO notifications (user_id, title, body, link, created_at) SELECT id, ?, ?, 'contractors', ? FROM users WHERE role IN ('owner', 'pm', 'purchase') AND active = 1 AND deleted_at IS NULL
+            ORDER BY role = 'owner' DESC, id IN (SELECT user_id FROM project_members WHERE project_id = ?) DESC, id DESC LIMIT 20`)
+            .bind(`Check quantities: ${drawing.code} ${revNo}`, `${linked.length ? `Work orders built from this drawing: ${[...new Set(linked.map((l) => l.wo_no))].join(', ')} (${linked.length} item(s)). Check quantities and raise variations if needed. ` : ''}${pours ? `${pours} pour card(s) were made on the old revision and cannot be approved until re-made.` : ''}`.slice(0, 400), now, drawing.project_id).run();
+        }
       }
       return json({ ok: true, data: { rev_no: revNo } });
     } catch (e) {
@@ -1643,7 +1659,7 @@ const EXPORT_TABLES = ['projects', 'apr_items', 'apr_events', 'drw_drawings', 'd
     'sal_leads', 'sal_activities', 'sal_visits', 'sal_inventory', 'sal_partners', 'sal_bookings', 'sal_plan_stages', 'sal_demands', 'sal_receipts', 'documents', 'audit_log',
     'pro_grn_items', 'pro_payments', 'ppl_staff', 'ppl_hiring', 'ppl_candidates', 'sal_brokerage_payments', 'sal_refunds', 'sal_interest_waivers', 'mkt_spend', 'brands', 'counters',
     'pro_indents', 'pro_indent_items', 'pro_rfq_items', 'pro_quote_items',
-    'site_dpr_labour', 'bud_heads', 'stk_items', 'stk_balance', 'stk_moves', 'pro_party_docs', 'pro_professionals', 'ai_log', 'sal_receipt_requests', 'sal_adjustments', 'sal_booking_parties', 'sal_cost_sheets', 'sal_cost_sheet_lines', 'sal_handover', 'sal_handover_items', 'sal_booking_loans', 'rera_account_entries', 'eng_kudos', 'fea_versions', 'sal_bulk_runs', 'sal_bulk_items', 'drw_acks', 'tally_export_log', 'brand_profiles', 'project_members', 'drive_folders', 'bank_profiles', 'bank_import_batches', 'bank_import_rows', 'red_societies', 'red_members', 'red_consent_events', 'red_member_docs', 'red_rehab_allotments', 'red_transit_terms', 'red_transit_schedule', 'red_transit_payments', 'red_corpus_entries', 'red_meetings', 'red_meeting_attendees', 'prj_autodcr_history', 'apr_steps', 'apr_deps', 'con_variations', 'con_measurements', 'rera_certificates', 'qa_pours', 'qa_cubes', 'qa_ncrs', 'site_dpr_work', 'pty_funds', 'pty_entries', 'con_contractors', 'con_work_orders', 'con_wo_items', 'con_ra_bills', 'con_ra_lines', 'con_payments', 'con_ledger'];
+    'site_dpr_labour', 'bud_heads', 'stk_items', 'stk_balance', 'stk_moves', 'pro_party_docs', 'pro_professionals', 'ai_log', 'sal_receipt_requests', 'sal_adjustments', 'sal_booking_parties', 'sal_cost_sheets', 'sal_cost_sheet_lines', 'sal_handover', 'sal_handover_items', 'sal_booking_loans', 'rera_account_entries', 'eng_kudos', 'fea_versions', 'sal_bulk_runs', 'sal_bulk_items', 'drw_acks', 'tally_export_log', 'brand_profiles', 'project_members', 'drive_folders', 'bank_profiles', 'bank_import_batches', 'bank_import_rows', 'red_societies', 'red_members', 'red_consent_events', 'red_member_docs', 'red_rehab_allotments', 'red_transit_terms', 'red_transit_schedule', 'red_transit_payments', 'red_corpus_entries', 'red_meetings', 'red_meeting_attendees', 'prj_autodcr_history', 'apr_steps', 'apr_deps', 'con_variations', 'con_measurements', 'rera_certificates', 'qa_pours', 'qa_cubes', 'qa_ncrs', 'site_dpr_work', 'site_ms_changes', 'prj_holds', 'con_debit_notes', 'bud_items', 'pty_funds', 'pty_entries', 'con_contractors', 'con_work_orders', 'con_wo_items', 'con_ra_bills', 'con_ra_lines', 'con_payments', 'con_ledger'];
 const EXPORT_PARTS = 3;
 
 async function buildExport(env, part = 1) {
@@ -2195,7 +2211,7 @@ async function driveUpload(env, file, projectId) {
   });
 }
 
-const INLINE_MIME = /^(image\/(png|jpe?g|webp|gif)|application\/pdf|text\/plain)$/;
+const INLINE_MIME = /^(image\/(png|jpe?g|webp|gif)|application\/pdf|text\/plain|audio\/(webm|ogg|mp4|mpeg|aac|x-m4a))$/;
 async function driveResponse(env, doc, req, disposition) {
   let upstream;
   try {
@@ -2220,7 +2236,7 @@ registerImporter(router, { withAuth, json, serverError, visibleProjectIds, nowSt
 registerPrivacy(router, { withAuth, json, serverError, nowStr, decryptSetting });
 registerReports(router, { withAuth, json, serverError, visibleProjectIds, getSetting, nowStr });
 registerProcurement2(router, { withAuth, json, serverError, visibleProjectIds, nowStr, csvBom, getCurrentUser, userCan, grnStockStatements, stockItemExists, getSetting });
-registerStores(router, { withAuth, json, serverError, visibleProjectIds, nowStr, csvBom });
+registerStores(router, { withAuth, json, serverError, visibleProjectIds, nowStr, csvBom, woInProject, approvedWosForProject });
 registerPartyDocs(router, { withAuth, json, serverError, nowStr, getSetting });
 registerProfile(router, { withAuth, json, serverError, visibleProjectIds, nowStr, getSetting, printBrand, csvBom });
 registerFeasibility(router, { withAuth, json, serverError, visibleProjectIds, nowStr });
@@ -2232,8 +2248,8 @@ registerAi(router, { withAuth, json, serverError, visibleProjectIds, nowStr, get
 registerProfessionals(router, { withAuth, json, serverError, nowStr, encryptSetting, decryptSetting });
 registerPetty(router, { withAuth, json, serverError, visibleProjectIds, nowStr, getSetting, csvBom });
 registerContractors(router, { withAuth, json, serverError, visibleProjectIds, nowStr, getSetting, encryptSetting, decryptSetting, printBrand, csvBom, headBelongsToProject,
-  onWoApproved: (env, wo) => checkHeadOver(env, getSetting, nowStr, wo.project_id, [wo.budget_head_id]) });
-registerBudget(router, { withAuth, json, serverError, visibleProjectIds, nowStr, getSetting, csvBom });
+  onWoApproved: (env, wo) => checkHeadOver(env, getSetting, nowStr, wo.project_id, [wo.budget_head_id]), boqItemInProject, drawingInProject, stockItemExists, issuedForWo });
+registerBudget(router, { withAuth, json, serverError, visibleProjectIds, nowStr, getSetting, csvBom, boqProgressCon, boqProgressPo });
 registerSalesOps(router, { withAuth, json, serverError, visibleProjectIds, userCan, getSetting, nowStr, encryptSetting, clientIp, checkRateLimit });
 registerRedevelopment(router, { withAuth, json, serverError, visibleProjectIds, nowStr, getSetting, csvBom,
   // when the consent threshold is crossed, leave a note on the project's "Society consent" approval row (approvals stays in this file, not in the module)
@@ -2556,7 +2572,7 @@ router.post('/api/files/upload', async (req, env) => {
       }
 
       // Upload allow-list — no SVG/HTML (§11.2)
-      const allowedTypes = ['image/jpeg','image/png','image/webp','image/heic','application/pdf','application/msword','application/vnd.openxmlformats-officedocument.wordprocessingml.document','application/vnd.ms-excel','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','text/csv','text/plain'];
+      const allowedTypes = ['image/jpeg','image/png','image/webp','image/heic','application/pdf','application/msword','application/vnd.openxmlformats-officedocument.wordprocessingml.document','application/vnd.ms-excel','application/vnd.openxmlformats-officedocument.spreadsheetml.sheet','text/csv','text/plain','audio/webm','audio/ogg','audio/mp4','audio/x-m4a','audio/aac','audio/mpeg'];
       if (!allowedTypes.includes(file.type)) {
         return json({ ok: false, error: 'This file type is not allowed. Please upload JPG, PNG, PDF, CSV, or documents only.' }, 400);
       }
@@ -2634,7 +2650,7 @@ router.get('/api/files/download/:docId', async (req, env) => {
       // View in the app without downloading: only pictures, PDFs and plain text are shown inline; anything else still downloads.
       const sp = new URL(req.url).searchParams;
       const viewable = INLINE_MIME.test(String(doc.mime || '').toLowerCase());
-      if (sp.get('meta')) return json({ ok: true, data: { id: doc.id, title: doc.title, mime: doc.mime || '', viewable, kind: /^image\//i.test(doc.mime || '') ? 'image' : /pdf/i.test(doc.mime || '') ? 'pdf' : viewable ? 'text' : 'other' } });
+      if (sp.get('meta')) return json({ ok: true, data: { id: doc.id, title: doc.title, mime: doc.mime || '', viewable, kind: /^image\//i.test(doc.mime || '') ? 'image' : /pdf/i.test(doc.mime || '') ? 'pdf' : /^audio\//i.test(doc.mime || '') ? 'audio' : viewable ? 'text' : 'other' } });
       const disposition = sp.get('inline') && viewable ? 'inline' : 'attachment';
       if (doc.store === 'gdrive') return driveResponse(env, doc, req, disposition);
       if (doc.store === 'd1' || doc.store === null) {
@@ -3124,6 +3140,10 @@ function sniffOk(type, h, body) {
     case 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': return at(0, 0x50, 0x4b);
     case 'application/msword': case 'application/vnd.ms-excel': return at(0, 0xd0, 0xcf, 0x11, 0xe0);
     case 'text/plain': case 'text/csv': return !body.includes(0);
+    case 'audio/webm': return at(0, 0x1a, 0x45, 0xdf, 0xa3);                 // voice notes from Android
+    case 'audio/ogg': return at(0, 0x4f, 0x67, 0x67, 0x53);
+    case 'audio/mp4': case 'audio/x-m4a': case 'audio/aac': return at(4, 0x66, 0x74, 0x79, 0x70) || at(0, 0xff, 0xf1) || at(0, 0xff, 0xf9);   // iPhone
+    case 'audio/mpeg': return at(0, 0x49, 0x44, 0x33) || at(0, 0xff, 0xfb) || at(0, 0xff, 0xf3);
     default: return false;
   }
 }

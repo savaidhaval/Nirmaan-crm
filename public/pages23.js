@@ -36,7 +36,7 @@ async function openViewer(docId) {
   if (!m.viewable) { toast('This kind of file opens in its own app. Downloading it.'); location.href = dl; return; }
   const ov = document.createElement('div'); ov.className = 'modal-overlay viewer-overlay';
   const android = /Android/i.test(navigator.userAgent);
-  const body = m.kind === 'image' ? `<img src="${src}" alt="${esc(m.title)}" class="viewer-img">`
+  const body = m.kind === 'audio' ? `<audio controls autoplay src="${src}" style="width:100%"></audio>` : m.kind === 'image' ? `<img src="${src}" alt="${esc(m.title)}" class="viewer-img">`
     : m.kind === 'pdf' && android ? `<div class="empty-state"><p>Phones show PDFs in their own viewer.</p><a class="btn btn-primary" href="${src}" target="_blank" rel="noopener">Open the PDF</a></div>`
       : `<iframe src="${src}" class="viewer-frame" title="${esc(m.title)}"></iframe>`;
   ov.innerHTML = `<div class="modal viewer-modal"><div class="row"><h2 style="margin:0;word-break:break-word">${esc(m.title)}</h2><button class="btn small" id="vw-close" aria-label="Close">Close</button></div>
@@ -434,8 +434,12 @@ newPo = async function () {
     ...(heads.length ? [{ name: 'budget_head_id', label: 'Budget head', type: 'select', options: heads, help: 'Which cost this belongs to. Used to watch the budget.' }] : []),
     ...(stockItems.length ? [{ name: 'stock_item_id', label: 'Goes into the store as', type: 'select', options: stockItems, help: 'Pick the store item so what you receive is added to stock.' }] : [])] });
   if (!v) return;
+  // link the line to a BOQ item when the project has a BOQ
+  let boqId;
+  try { const boq = (await api(`/api/budget/boq?project_id=${Number(v.project_id)}`)).data.items;
+    if (boq.length) { const c = await openForm({ title: 'BOQ item', intro: 'Which BOQ item does this material belong to? (Shows how much of the BOQ is ordered.)', fields: [{ name: 'b', label: 'BOQ item', type: 'select', options: [['', 'None'], ...boq.map((x) => [x.id, `${x.code ? x.code + ' · ' : ''}${x.description} (${x.unit || ''})`])] }] }); if (c && c.b) boqId = Number(c.b); } } catch (e) { /* no BOQ access */ }
   const body = { project_id: Number(v.project_id), vendor_id: Number(v.vendor_id), gst_bp: Number(v.gst_bp), terms: v.terms, budget_head_id: v.budget_head_id ? Number(v.budget_head_id) : null, stock_item_id: v.stock_item_id ? Number(v.stock_item_id) : null,
     material_category: v.material_category || undefined, transport_paise: v.transport_paise || undefined, delivery_date: v.delivery_date || undefined, payment_terms: v.payment_terms || undefined,
-    items: [{ description: v.description, hsn: v.hsn, qty: v.qty, unit: v.unit, rate_paise: v.rate }] };
+    items: [{ description: v.description, hsn: v.hsn, qty: v.qty, unit: v.unit, rate_paise: v.rate, boq_item_id: boqId }] };
   if (await act(api('/api/procurement/pos', { method: 'POST', body }), 'PO created as draft. Add charges and terms, then send it for approval.')) loadProcurement();
 };

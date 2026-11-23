@@ -407,3 +407,12 @@ id TEXT PK, source TEXT, seen_at TEXT
 ## 0037 additions (safety in the daily report)
 - site_dprs: safety_checks (JSON { check: true/false } from the setting dpr.safety_checks), incident_kind (none | near_miss | injury | dangerous). safety_incident holds the description. An incident notifies the Owner and PMs.
 - Setting dpr.safety_checks (; separated, empty = built-in list). High-contrast choice is kept in the phone's local storage (nirmaan.contrast), not on the server.
+
+## 0038 additions (rest of the audit)
+- site_milestones.baseline_date; site_ms_changes (milestone_id, old_date, new_date, reason monsoon|approvals|contractor|material|funds|design|other, note, changed_by/at). In the backup list.
+- prj_holds (project_id, wing or NULL for the whole project, reason, held_by/at, released_by/at, release_note). An open hold stops certifying, pour approval, bookings and cost sheets in that wing. In the backup list.
+- red_members: paaa_reg_no, paaa_reg_date, paaa_doc_id, vacated_on, keys_received, utilities_disconnected. Transit rent needs vacated_on and cannot start before its month.
+- con_wo_items: drawing_id, boq_item_id, stock_item_id, consumption_per_unit, wastage_bp. qa_pours: drawing_id, drawing_rev_id. stk_moves.wo_id (material issued to a work order). pro_po_items.boq_item_id.
+- con_debit_notes (wo_id, reason, description, qty, unit, rate_paise, amount_paise, photo_doc_id, status pending|approved|rejected|recovered, ra_id, created_by/at, approved_by/at, decision_note). In the backup list.
+- bud_items (project_id, head_id, code, description, unit, qty, rate_paise, amount_paise, created_by/at, deleted_at). In the backup list.
+- Uploads now also accept audio/webm, audio/ogg, audio/mp4, audio/x-m4a, audio/aac, audio/mpeg (voice notes), checked by their first bytes.

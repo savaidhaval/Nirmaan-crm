@@ -167,3 +167,6 @@ Built after Dhaval's answer (architect, engineer and CA certificates before any 
 
 ## WhatsApp, high contrast, safety (migration 0037)
 31 API suites pass on a clean database (quality suite now 38 checks with safety) and a phone walkthrough (7 checks). Not deployed until Dhaval approves the PR.
+
+## Rest of the audit (migration 0038)
+All audit items are now built. 32 API suites pass on a clean database (new: remaining, 47 checks) and a phone walkthrough (5 checks). Not deployed until Dhaval approves the PR. Recording itself needs a real phone (the browser asks for the microphone once).

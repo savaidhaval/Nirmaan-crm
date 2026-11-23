@@ -88,6 +88,12 @@ export function poTermsStatement(env, po, goods, b) {
     amount, gst, total: amount + gst };
 }
 
+// Per BOQ item of a project: quantity and value ordered on approved POs (for the BOQ report in Budget).
+export async function boqProgressPo(env, projectId) {
+  return (await env.DB.prepare(`SELECT i.boq_item_id AS boq, SUM(i.qty) AS ordered, SUM(i.amount_paise) AS ordered_paise FROM pro_po_items i JOIN pro_pos p ON p.id = i.po_id
+    WHERE p.project_id = ? AND p.deleted_at IS NULL AND p.status IN ('approved', 'part_received', 'received') AND i.boq_item_id IS NOT NULL GROUP BY i.boq_item_id`).bind(projectId).all()).results;
+}
+
 export function registerProcurement2(router, h) {
   const { withAuth, json, serverError, visibleProjectIds, nowStr, csvBom, getCurrentUser, userCan, grnStockStatements, stockItemExists, getSetting } = h;
 

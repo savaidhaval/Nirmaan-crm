@@ -98,6 +98,8 @@ ok('Sales cannot book a rehab flat', (await (async () => { const sc = await mkUs
 // ============ WP-2: transit rent ============
 const first = iso(0).slice(0, 7) + '-01';
 const threeBack = (() => { const d = new Date(Date.now() + 19800000); d.setUTCMonth(d.getUTCMonth() - 3); return d.toISOString().slice(0, 7) + '-01'; })();
+ok('transit rent cannot start before the member has vacated', (await acc.call('POST', `/api/redev/members/${ids[0]}/transit-term`, { monthly_rent_paise: 2500000, start_date: first })).status === 409);
+for (const id of ids) await o.call('PUT', `/api/redev/members/${id}/vacate`, { paaa_reg_no: 'PAAA-' + id, paaa_reg_date: '2020-01-01', vacated_on: '2020-01-01' });
 ok('only Owner and Accounts record rent terms', (await pm.call('POST', `/api/redev/members/${ids[0]}/transit-term`, { monthly_rent_paise: 2500000, start_date: first })).status === 403 && (await sales.call('GET', `/api/redev/societies/${soc}/transit`)).status === 403);
 ok('rent and the first month are required', (await acc.call('POST', `/api/redev/members/${ids[0]}/transit-term`, { start_date: first })).status === 400 && (await acc.call('POST', `/api/redev/members/${ids[0]}/transit-term`, { monthly_rent_paise: 2500000 })).status === 400);
 const t1 = await acc.call('POST', `/api/redev/members/${ids[0]}/transit-term`, { monthly_rent_paise: 2500000, start_date: first, deposit_paise: 10000000, bg_ref: 'BG-77', bg_amount_paise: 5000000, bg_expiry: iso(20) });

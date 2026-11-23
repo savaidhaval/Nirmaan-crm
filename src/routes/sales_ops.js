@@ -1,7 +1,7 @@
 // routes/sales_ops.js — sales rules that protect money and inventory:
 // atomic unit holds/bookings, lead protection, discount approval, receipt integrity, refunds, cost sheet, lead-intake webhook.
 // D1 has no SELECT ... FOR UPDATE; every claim below is a single conditional UPDATE whose `changes` count decides the winner.
-import { saleBlock } from '../core/gates.js';
+import { saleBlock, holdFor } from '../core/gates.js';
 
 export const LEAD_TRANSITIONS = {
   new: ['contacted', 'interested', 'visit_scheduled', 'lost'],
@@ -229,6 +229,7 @@ export function registerSalesOps(router, h) {
       if (!(await visibleProjectIds(env, user)).includes(unit.project_id)) return json({ ok: false, error: 'Not allowed.' }, 403);
       if (unit.category === 'rehab') return json({ ok: false, error: 'Rehab flats are allotted to existing members and cannot be sold.' }, 400);
       { const blk = await saleBlock(env, unit.project_id); if (blk) return json({ ok: false, error: blk, code: 'rera' }, 409); }
+      { const held = await holdFor(env, unit.project_id, unit.wing); if (held) return json({ ok: false, error: held + '. Flats in it cannot be booked until the hold is released.', code: 'hold' }, 409); }
       const name = String(b.customer_name || '').trim().slice(0, 150);
       if (!name) return json({ ok: false, error: 'Customer name is required.' }, 400);
       const manager = MANAGER.includes(user.role);
