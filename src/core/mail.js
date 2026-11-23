@@ -70,18 +70,26 @@ export async function sendDigest(env, recipientEmail) {
   const projects = await env.DB.prepare('SELECT * FROM projects WHERE deleted_at IS NULL AND status != \'completed\' ORDER BY name').all();
   let html = `<h1 style="font-size:20px">NirmaanCRM — Morning report, ${dateStr}</h1>`;
   if (!projects.results.length) html += '<p>No active projects yet.</p>';
+  // One grouped statement per kind of fact (not five per project), so the morning run stays far inside the 50-statement cap however many projects there are.
+  const [dprR, msR, aprR, snagR, poR] = projects.results.length ? await env.DB.batch([
+    env.DB.prepare('SELECT project_id, work_summary, labour_count FROM site_dprs WHERE report_date = ? AND deleted_at IS NULL ORDER BY id').bind(yStr),
+    env.DB.prepare("SELECT project_id, name FROM site_milestones WHERE status = 'done' AND date(actual_date) >= date('now', '-7 days') AND deleted_at IS NULL ORDER BY id"),
+    env.DB.prepare("SELECT project_id, COUNT(*) AS n FROM apr_items WHERE deleted_at IS NULL AND valid_till IS NOT NULL AND date(valid_till) <= date('now', '+30 days') GROUP BY project_id"),
+    env.DB.prepare("SELECT project_id, COUNT(*) AS n FROM site_snags WHERE deleted_at IS NULL AND severity = 'high' AND status != 'verified' GROUP BY project_id"),
+    env.DB.prepare("SELECT project_id, COUNT(*) AS n FROM pro_pos WHERE deleted_at IS NULL AND status = 'pending_approval' GROUP BY project_id"),
+  ]) : [{ results: [] }, { results: [] }, { results: [] }, { results: [] }, { results: [] }];
+  const firstBy = (rows) => { const m = new Map(); for (const r of rows) if (!m.has(r.project_id)) m.set(r.project_id, r); return m; };
+  const dprBy = firstBy(dprR.results), aprBy = firstBy(aprR.results), snagBy = firstBy(snagR.results), poBy = firstBy(poR.results);
+  const msBy = new Map(); for (const r of msR.results) { if (!msBy.has(r.project_id)) msBy.set(r.project_id, []); msBy.get(r.project_id).push(r); }
   for (const p of projects.results) {
     html += `<h2 style="font-size:17px;margin-top:18px">${esc(p.name)}</h2><ul>`;
-    const dpr = await env.DB.prepare('SELECT work_summary, labour_count FROM site_dprs WHERE project_id = ? AND report_date = ? AND deleted_at IS NULL LIMIT 1').bind(p.id, yStr).first();
+    const dpr = dprBy.get(p.id);
     html += dpr ? `<li>Yesterday: ${esc(dpr.work_summary)} (labour: ${esc(dpr.labour_count ?? '—')})</li>` : '<li style="color:#b91c1c"><b>No site report was filed yesterday.</b></li>';
-    const ms = await env.DB.prepare("SELECT name FROM site_milestones WHERE project_id = ? AND status = 'done' AND date(actual_date) >= date('now', '-7 days') AND deleted_at IS NULL").bind(p.id).all();
-    if (ms.results.length) html += `<li>Milestones done this week: ${ms.results.map((m) => esc(m.name)).join(', ')}</li>`;
-    const apr = await env.DB.prepare("SELECT COUNT(*) AS n FROM apr_items WHERE project_id = ? AND deleted_at IS NULL AND valid_till IS NOT NULL AND date(valid_till) <= date('now', '+30 days')").bind(p.id).first();
-    if (Number(apr.n)) html += `<li>Approvals expiring within 30 days: <b>${apr.n}</b></li>`;
-    const snag = await env.DB.prepare("SELECT COUNT(*) AS n FROM site_snags WHERE project_id = ? AND deleted_at IS NULL AND severity = 'high' AND status != 'verified'").bind(p.id).first();
-    if (Number(snag.n)) html += `<li>Open high-severity snags: <b>${snag.n}</b></li>`;
-    const po = await env.DB.prepare("SELECT COUNT(*) AS n FROM pro_pos WHERE project_id = ? AND deleted_at IS NULL AND status = 'pending_approval'").bind(p.id).first();
-    if (Number(po.n)) html += `<li>Purchase orders waiting for approval: <b>${po.n}</b></li>`;
+    const ms = msBy.get(p.id) || [];
+    if (ms.length) html += `<li>Milestones done this week: ${ms.map((m) => esc(m.name)).join(', ')}</li>`;
+    const apr = aprBy.get(p.id); if (apr && Number(apr.n)) html += `<li>Approvals expiring within 30 days: <b>${apr.n}</b></li>`;
+    const snag = snagBy.get(p.id); if (snag && Number(snag.n)) html += `<li>Open high-severity snags: <b>${snag.n}</b></li>`;
+    const po = poBy.get(p.id); if (po && Number(po.n)) html += `<li>Purchase orders waiting for approval: <b>${po.n}</b></li>`;
     html += '</ul>';
   }
   const od = await env.DB.prepare("SELECT COUNT(*) AS n, COALESCE(SUM(amount_paise + COALESCE(gst_paise,0) - settled_paise), 0) AS t FROM sal_demands WHERE status NOT IN ('paid','cancelled','scheduled') AND due_date < date('now')").first();

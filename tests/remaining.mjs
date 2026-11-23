@@ -51,12 +51,14 @@ const hist = (await pm.call('GET', `/api/site/milestones/${msB.id}/changes`)).da
 ok('the change is kept with its reason', hist.length === 1 && hist[0].reason === 'monsoon' && hist[0].old_date === iso(10));
 
 // ============ PAAA and vacating ============
+const proofDoc = async () => { const fd = new FormData(); fd.append('file', new Blob([Buffer.from('%PDF-1.4 empty flat')], { type: 'application/pdf' }), 'empty.pdf'); fd.append('title', 'Empty flat'); fd.append('category', 'society'); fd.append('module', 'redevelopment'); fd.append('project_id', String(pid)); fd.append('audience', 'internal'); return (await o.call('POST', '/api/files/upload', fd)).data.id; };
+const where = { vacate_lat: 19.07, vacate_lng: 72.87 };
 const soc = (await o.call('POST', '/api/redev/societies', { project_id: pid, name: 'CHS ' + run })).data.id;
 const m1 = (await o.call('POST', `/api/redev/societies/${soc}/members`, { member_name: 'Asha', unit_label: '1' })).data.id;
 const m2 = (await o.call('POST', `/api/redev/societies/${soc}/members`, { member_name: 'Bala', unit_label: '2' })).data.id;
 ok('vacating needs the registered PAAA first', (await pm.call('PUT', `/api/redev/members/${m1}/vacate`, { vacated_on: iso(-20) })).status === 400);
 ok('transit rent cannot start before vacating', (await o.call('POST', `/api/redev/members/${m1}/transit-term`, { monthly_rent_paise: 2500000, start_date: iso(-20).slice(0, 8) + '01' })).status === 409);
-ok('PAAA registered and flat vacated', (await pm.call('PUT', `/api/redev/members/${m1}/vacate`, { paaa_reg_no: 'BDR-1/2026/55', paaa_reg_date: iso(-30), vacated_on: iso(-20), keys_received: true, utilities_disconnected: true })).status === 200);
+ok('PAAA registered and flat vacated', (await pm.call('PUT', `/api/redev/members/${m1}/vacate`, { paaa_reg_no: 'BDR-1/2026/55', paaa_reg_date: iso(-30), vacated_on: iso(-20), keys_received: true, utilities_disconnected: true, vacate_photo_doc_id: await proofDoc(), ...where })).status === 200);
 const before = new Date(Date.parse(iso(-20)) - 40 * 86400000).toISOString().slice(0, 8) + '01';
 ok('rent cannot start before the month of vacating', (await o.call('POST', `/api/redev/members/${m1}/transit-term`, { monthly_rent_paise: 2500000, start_date: before })).status === 400);
 ok('rent starts from the month of vacating', (await o.call('POST', `/api/redev/members/${m1}/transit-term`, { monthly_rent_paise: 2500000, start_date: iso(-20).slice(0, 8) + '01' })).status === 200);
@@ -65,7 +67,7 @@ ok('the society shows 1 of 2 vacated, not ready for demolition', vac.total === 2
 await pm.call('POST', '/api/site/milestones', { project_id: pid, name: 'Demolition of old building ' + run, planned_date: iso(5) });
 const demo = (await pm.call('GET', '/api/site/milestones')).data.milestones.find((m) => m.name === 'Demolition of old building ' + run);
 ok('demolition cannot be certified while a member has not vacated', (await pm.call('POST', `/api/site/milestones/${demo.id}/certify`, { actual_date: iso(0), cert_ref: 'D/1' })).code === 'vacate');
-await pm.call('PUT', `/api/redev/members/${m2}/vacate`, { paaa_reg_no: 'BDR-1/2026/56', paaa_reg_date: iso(-30), vacated_on: iso(-10), keys_received: true, utilities_disconnected: true });
+await pm.call('PUT', `/api/redev/members/${m2}/vacate`, { paaa_reg_no: 'BDR-1/2026/56', paaa_reg_date: iso(-30), vacated_on: iso(-10), keys_received: true, utilities_disconnected: true, vacate_photo_doc_id: await proofDoc(), ...where });
 ok('when all have vacated, demolition is certified', (await pm.call('POST', `/api/site/milestones/${demo.id}/certify`, { actual_date: iso(0), cert_ref: 'D/1' })).status === 200 && (await pm.call('GET', `/api/redev/societies/${soc}/vacating`)).data.ready_for_demolition === true);
 
 // ============ drawing links ============

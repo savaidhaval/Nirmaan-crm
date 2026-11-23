@@ -135,9 +135,23 @@ rdMembers = async function (pane) {
     const list = (await api(`/api/redev/societies/${RD.soc}/members?page=${RD.page}&q=${encodeURIComponent(RD.q)}&status=${RD.st}`)).data.members; const m = list.find((x) => String(x.id) === b.dataset.vac) || {};
     const f = await openForm({ title: `PAAA and vacating · ${m.member_name || ''}`, intro: 'Transit rent starts only from the month the flat is vacated.', fields: [
       { name: 'paaa_reg_no', label: 'PAAA registration number', value: m.paaa_reg_no || '' }, { name: 'paaa_reg_date', label: 'Registered on', type: 'date', value: m.paaa_reg_date || '' }, { name: 'file', label: 'Registered PAAA copy (optional)', type: 'file' },
-      { name: 'vacated_on', label: 'Flat vacated on', type: 'date', value: m.vacated_on || '' }, { name: 'keys_received', type: 'checkbox', checkLabel: 'Keys handed to us', value: !!m.keys_received }, { name: 'utilities_disconnected', type: 'checkbox', checkLabel: 'Electricity, water and gas disconnected', value: !!m.utilities_disconnected }] });
+      { name: 'vacated_on', label: 'Flat vacated on', type: 'date', value: m.vacated_on || '' },
+      { name: 'vacate_photo', label: 'Photo of the empty flat (take it at the flat)', type: 'file', help: m.vacate_photo_doc_id ? 'A photo is already on file. Add a new one only to replace it.' : 'Needed when you record the vacating date. Your phone location is saved with it.' },
+      { name: 'meter_electricity', label: 'Final electricity meter reading', value: m.meter_electricity || '' }, { name: 'meter_water', label: 'Final water meter reading', value: m.meter_water || '' },
+      { name: 'bills', label: 'Final zero-due utility bills (optional)', type: 'file' },
+      ...(isRole('owner') ? [{ name: 'override_note', label: 'Owner only: reason if there is no photo or location', help: 'Leave empty normally. It is recorded in the audit trail.' }] : []),
+      { name: 'keys_received', type: 'checkbox', checkLabel: 'Keys handed to us', value: !!m.keys_received }, { name: 'utilities_disconnected', type: 'checkbox', checkLabel: 'Electricity, water and gas disconnected', value: !!m.utilities_disconnected }] });
     if (!f) return;
     const body = { paaa_reg_no: f.paaa_reg_no, paaa_reg_date: f.paaa_reg_date, vacated_on: f.vacated_on, keys_received: f.keys_received, utilities_disconnected: f.utilities_disconnected };
+    const newVac = f.vacated_on && f.vacated_on !== (m.vacated_on || '');
+    if (newVac || f.vacate_photo) {
+      const pos = await m1Where();
+      if (pos) { body.vacate_lat = pos.lat; body.vacate_lng = pos.lng; } else if (!f.override_note && !m.vacate_lat) { toast('Switch on your phone location and allow it for this site, then save again.', 6000); return; }
+    }
+    if (f.override_note) body.override_note = f.override_note;
+    body.meter_electricity = f.meter_electricity; body.meter_water = f.meter_water;
+    if (f.vacate_photo) { const id = await rdUpload(f.vacate_photo, 'Empty flat ' + (m.unit_label || '')); if (!id) return; body.vacate_photo_doc_id = id; }
+    if (f.bills) { const id = await rdUpload(f.bills, 'Final utility bills ' + (m.unit_label || '')); if (!id) return; body.final_bills_doc_id = id; }
     if (f.file) { const id = await rdUpload(f.file, 'PAAA ' + (m.unit_label || '')); if (!id) return; body.paaa_doc_id = id; }
     if (await act(api(`/api/redev/members/${b.dataset.vac}/vacate`, { method: 'PUT', body }), 'Saved')) rdMembers(pane);
   }; });

@@ -1,7 +1,7 @@
 // routes/contractors.js — WP-5: contractors, work orders, running-account (RA) bills, advance and retention ledger.
 // Labour is paid through contractors, so there is no payroll. All money is integer paise; rates for GST/TDS are settings.
 import { emit } from '../core/events.js';
-import { approvalState, isDate } from '../core/gates.js';
+import { approvalState, isDate, demolitionBlock } from '../core/gates.js';
 
 const rupees = (p) => '₹' + (Number(p) / 100).toLocaleString('en-IN');
 const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
@@ -209,8 +209,8 @@ export function registerContractors(router, h) {
       const c = await env.DB.prepare('INSERT INTO counters (key, value) VALUES (?, 1) ON CONFLICT(key) DO UPDATE SET value = value + 1 RETURNING value').bind(`wo:${pid}`).first();
       const proj = await env.DB.prepare('SELECT code FROM projects WHERE id = ?').bind(pid).first();
       const no = `WO-${proj ? proj.code : pid}-${String(c.value).padStart(4, '0')}`;
-      const r = await env.DB.prepare("INSERT INTO con_work_orders (project_id, contractor_id, wo_no, scope, basis, value_paise, retention_bp, advance_paise, status, created_by, created_at, budget_head_id, advance_recovery_bp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?)")
-        .bind(pid, cid, no, String(b.scope || '').slice(0, 1000), basis, value, ret, adv, req.user.user_id, nowStr(), headId, adv > 0 ? recBp : null).run();
+      const r = await env.DB.prepare("INSERT INTO con_work_orders (project_id, contractor_id, wo_no, scope, basis, value_paise, retention_bp, advance_paise, status, created_by, created_at, budget_head_id, advance_recovery_bp, is_demolition) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?)")
+        .bind(pid, cid, no, String(b.scope || '').slice(0, 1000), basis, value, ret, adv, req.user.user_id, nowStr(), headId, adv > 0 ? recBp : null, b.is_demolition ? 1 : 0).run();
       const id = r.meta.last_row_id;
       await env.DB.batch([
         ...items.map((i) => env.DB.prepare('INSERT INTO con_wo_items (wo_id, description, qty, unit, rate_paise, amount_paise, boq_item_id, drawing_id, stock_item_id, consumption_per_unit, wastage_bp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
@@ -273,6 +273,8 @@ export function registerContractors(router, h) {
       const limit = await pmLimit(env);
       if (!mayDecide(req.user, wo.value_paise, limit)) return json({ ok: false, error: `This work order is above your limit (${rupees(limit)}). The Owner must decide.` }, 403);
       if (decision === 'rejected' && !String(b.note || '').trim()) return json({ ok: false, error: 'Please say why it is rejected.' }, 400);
+      // A demolition work order is released only when the IOD and the site proofs (meter removal, tree and barricade NOCs) are on file.
+      if (decision === 'approved' && wo.is_demolition) { const blk = await demolitionBlock(env, wo.project_id, getSetting); if (blk) return json({ ok: false, error: blk, code: 'demolition_gate' }, 409); }
       const r = await env.DB.prepare("UPDATE con_work_orders SET status = ?, approved_by = ?, approved_at = ?, decision_note = ? WHERE id = ? AND status = 'pending_approval'")
         .bind(decision, req.user.user_id, nowStr(), String(b.note || '').slice(0, 300), wo.id).run();
       if (!r.meta.changes) return json({ ok: false, error: 'This work order is not waiting for approval.' }, 409);

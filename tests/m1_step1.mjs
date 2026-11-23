@@ -44,7 +44,7 @@ const lock = await o.call('PUT', `/api/redev/members/${mE}/terms`, { rent_basis:
 ok('changing the certified area is refused (locked)', lock.status === 409 && /locked/.test(lock.err), JSON.stringify(lock));
 ok('sending the same certified area again is fine', (await o.call('PUT', `/api/redev/members/${mE}/terms`, { rent_basis: 'per_sqft', rent_y1_paise: 6000, certified_area_sqft: 480 })).status === 200);
 const startE = monthsAgo(1, 1);
-await o.call('PUT', `/api/redev/members/${mE}/vacate`, { paaa_reg_no: 'PAAA-E', paaa_reg_date: '2020-01-01', vacated_on: startE });
+await o.call('PUT', `/api/redev/members/${mE}/vacate`, { paaa_reg_no: 'PAAA-E', paaa_reg_date: '2020-01-01', vacated_on: startE, override_note: 'test fixture, no photo' });
 await o.call('POST', `/api/redev/members/${mE}/transit-term`, { monthly_rent_paise: 100, start_date: startE });
 ok('per sq ft rent uses the certified area (60 x 480), not the flat-area figure (60 x 500)', (await o.call('GET', `/api/redev/members/${mE}/transit`)).data.months[0].due_paise === 2880000);
 
@@ -52,8 +52,8 @@ ok('per sq ft rent uses the certified area (60 x 480), not the flat-area figure 
 const terms = { rent_basis: 'monthly', rent_y1_paise: 3000000, rent_y2_paise: 3300000 };
 await o.call('PUT', `/api/redev/members/${mC}/terms`, terms); await o.call('PUT', `/api/redev/members/${mD}/terms`, terms);
 const startX = monthsAgo(14, 1);
-await o.call('PUT', `/api/redev/members/${mC}/vacate`, { paaa_reg_no: 'PAAA-C', paaa_reg_date: '2020-01-01', vacated_on: monthsAgo(14, 15) });
-await o.call('PUT', `/api/redev/members/${mD}/vacate`, { paaa_reg_no: 'PAAA-D', paaa_reg_date: '2020-01-01', vacated_on: startX });
+await o.call('PUT', `/api/redev/members/${mC}/vacate`, { paaa_reg_no: 'PAAA-C', paaa_reg_date: '2020-01-01', vacated_on: monthsAgo(14, 15), override_note: 'test fixture, no photo' });
+await o.call('PUT', `/api/redev/members/${mD}/vacate`, { paaa_reg_no: 'PAAA-D', paaa_reg_date: '2020-01-01', vacated_on: startX, override_note: 'test fixture, no photo' });
 await o.call('POST', `/api/redev/members/${mC}/transit-term`, { monthly_rent_paise: 2500000, start_date: startX });
 await o.call('POST', `/api/redev/members/${mD}/transit-term`, { monthly_rent_paise: 2500000, start_date: startX });
 const mc = (await o.call('GET', `/api/redev/members/${mC}/transit`)).data.months, md = (await o.call('GET', `/api/redev/members/${mD}/transit`)).data.months;

@@ -171,7 +171,8 @@ async function rdTerm(memberId, pane, month) {
     { name: 'bg_ref', label: 'Bank guarantee number', value: t.bg_ref || '' }, { name: 'bg_amount_paise', label: 'Guarantee amount (₹)', type: 'money', value: t.bg_amount_paise ? t.bg_amount_paise / 100 : '' }, { name: 'bg_expiry', label: 'Guarantee expires on', type: 'date', value: t.bg_expiry || '' }] });
   if (!v) return;
   ['end_date', 'bg_expiry', 'bg_ref', 'bg_amount_paise', 'deposit_paise'].forEach((k) => { if (v[k] === '') delete v[k]; });
-  const r = await act(api(`/api/redev/members/${memberId}/transit-term`, { method: 'POST', body: v }), 'Saved');
+  const r = await m1RentSave('POST', `/api/redev/members/${memberId}/transit-term`, v);
+  if (r && r.data.pending) { toast(r.data.message, 7000); rdRent(pane, month); return; }
   if (r) { toast(`${r.data.months_scheduled} months scheduled`); rdRent(pane, month); }
 }
 
@@ -218,7 +219,8 @@ async function rdTerms(memberId, pane) {
   if (!v) return;
   const body = { carpet_sqft: v.carpet_sqft, certified_area_sqft: v.certified_area_sqft, extra_area_pct: v.extra_area_pct, rent_basis: v.rent_basis, corpus_paise: v.corpus || '', shifting_paise: v.shifting || '', car_parks: v.car_parks, buys_extra: v.buys_extra, buys_extra_sqft: v.buys_extra_sqft };
   [1, 2, 3, 4, 5].forEach((y) => { body['rent_y' + y + '_paise'] = v['y' + y] || ''; });
-  const r = await act(api(`/api/redev/members/${memberId}/terms`, { method: 'PUT', body }));
+  const r = await m1RentSave('PUT', `/api/redev/members/${memberId}/terms`, body);
+  if (r && r.data.pending) { toast(r.data.message, 7000); rdMembers(pane); return; }
   if (r) { toast(r.data.new_rera_sqft ? `Saved. New RERA carpet: ${r.data.new_rera_sqft} sq ft` : 'Saved', 5000); rdMembers(pane); }
 }
 

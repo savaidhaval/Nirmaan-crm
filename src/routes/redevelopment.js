@@ -1,3 +1,7 @@
+import { verifyPassword, base64ToBytes } from '../core/auth.js';
+import { PIN_RE, PAN_RE, setPin, checkPin, panHash } from '../core/pin.js';
+import { demolitionBlock, PROOF_LABEL } from '../core/gates.js';
+
 // routes/redevelopment.js — Redevelopment: societies and members with a consent meter (WP-1), rehab flats, transit rent,
 // corpus and bank guarantees (WP-2), and meetings and resolutions (WP-3).
 // Records only. The required majority and every legal procedure must be confirmed with the advocate; nothing legal is hard-coded.
@@ -86,7 +90,7 @@ export function societyForProject(env, projectId, name, address, userId, now) {
 }
 
 export function registerRedevelopment(router, h) {
-  const { withAuth, json, serverError, visibleProjectIds, nowStr, getSetting, csvBom, onConsent } = h;
+  const { withAuth, json, serverError, visibleProjectIds, nowStr, getSetting, csvBom, onConsent, encryptSetting } = h;
   const audit = (env, user, action, entity, id, summary) => env.DB.prepare('INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, ?, ?, ?, ?, ?)').bind(user.user_id, action, entity, id || 0, String(summary).slice(0, 300), nowStr());
   const csvResponse = (name, rows) => new Response(csvBom(rows), { headers: { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="${name}"`, 'Cache-Control': 'no-store' } });
   const canPhone = (u) => ['owner', 'pm'].includes(u.role);
@@ -203,8 +207,10 @@ export function registerRedevelopment(router, h) {
       const like = term ? `%${term}%` : '';
       const where = `society_id = ?1 AND deleted_at IS NULL AND (?2 = '' OR consent_status = ?2) AND (?3 = '' OR member_name LIKE ?3 OR unit_label LIKE ?3 OR wing LIKE ?3)`;
       const total = (await env.DB.prepare(`SELECT COUNT(*) AS n FROM red_members WHERE ${where}`).bind(soc.id, st, like).first()).n;
-      const rows = (await env.DB.prepare(`SELECT id, wing, unit_label, member_name, phone, member_type, carpet_sqft, consent_status, consent_date, notes, extra_area_bp, new_rera_sqft, buys_extra, buys_extra_sqft, car_parks, paaa_reg_no, paaa_reg_date, paaa_doc_id, vacated_on, keys_received, utilities_disconnected FROM red_members WHERE ${where} ORDER BY wing, unit_label, id LIMIT ${PAGE} OFFSET ?4`).bind(soc.id, st, like, (page - 1) * PAGE).all()).results;
+      const rows = (await env.DB.prepare(`SELECT id, wing, unit_label, member_name, phone, member_type, carpet_sqft, consent_status, consent_date, notes, extra_area_bp, new_rera_sqft, buys_extra, buys_extra_sqft, car_parks, paaa_reg_no, paaa_reg_date, paaa_doc_id, vacated_on, keys_received, utilities_disconnected, vacate_photo_doc_id, vacate_proof_at, vacate_lat, vacate_lng, meter_electricity, meter_water, certified_area_sqft, pan_last4, aadhaar_last4 FROM red_members WHERE ${where} ORDER BY wing, unit_label, id LIMIT ${PAGE} OFFSET ?4`).bind(soc.id, st, like, (page - 1) * PAGE).all()).results;
       if (!canPhone(req.user)) for (const r of rows) delete r.phone;
+      // identity is shown masked, and only to Owner, PM and Accounts
+      for (const r of rows) { r.pan_masked = r.pan_last4 && ['owner', 'pm', 'accounts'].includes(req.user.role) ? 'XXXXXX' + r.pan_last4 : (r.pan_last4 ? 'on file' : ''); r.aadhaar_masked = r.aadhaar_last4 && ['owner', 'pm', 'accounts'].includes(req.user.role) ? 'XXXX XXXX ' + r.aadhaar_last4 : (r.aadhaar_last4 ? 'on file' : ''); delete r.pan_last4; delete r.aadhaar_last4; }
       return json({ ok: true, data: { members: rows, total, page, page_size: PAGE } });
     } catch (e) { return serverError(e, 'red-members'); }
   }));
@@ -224,6 +230,9 @@ export function registerRedevelopment(router, h) {
       const b = await req.json().catch(() => ({})); const f = memberFields(b, soc); if (f.error) return bad(f.error);
       const uuid = txt(b.client_uuid, 60) || crypto.randomUUID();
       const dup = await env.DB.prepare('SELECT id FROM red_members WHERE client_uuid = ?').bind(uuid).first(); if (dup) return json({ ok: true, data: { id: dup.id, duplicate: true } });
+      // one old flat belongs to one primary member
+      const used = await env.DB.prepare("SELECT member_name FROM red_members WHERE society_id = ? AND deleted_at IS NULL AND COALESCE(wing, '') = ? AND unit_label = ?").bind(soc.id, f.v.wing, f.v.unit).first();
+      if (used) return bad(`Flat ${f.v.wing ? f.v.wing + '-' : ''}${f.v.unit} already belongs to ${used.member_name}. One old flat can have only one primary member.`, 409);
       const r = await env.DB.prepare('INSERT INTO red_members (society_id, wing, unit_label, member_name, phone, member_type, carpet_sqft, notes, client_uuid, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
         .bind(soc.id, f.v.wing, f.v.unit, f.v.name, f.v.phone, f.v.type, f.v.area, f.v.notes, uuid, nowStr()).run();
       await audit(env, req.user, 'create', 'red_members', r.meta.last_row_id, `Added member ${f.v.name} (${f.v.unit}) to ${soc.name}`).run();
@@ -243,7 +252,7 @@ export function registerRedevelopment(router, h) {
       if (errors.length) return bad(errors.slice(0, 3).join(' '));
       const r = await env.DB.prepare(`INSERT INTO red_members (society_id, wing, unit_label, member_name, phone, member_type, carpet_sqft, client_uuid, created_at)
         SELECT ?1, json_extract(value, '$.w'), json_extract(value, '$.u'), json_extract(value, '$.n'), json_extract(value, '$.p'), json_extract(value, '$.t'), json_extract(value, '$.a'), lower(hex(randomblob(16))), ?2 FROM json_each(?3)
-        WHERE NOT EXISTS (SELECT 1 FROM red_members m WHERE m.society_id = ?1 AND m.deleted_at IS NULL AND COALESCE(m.wing, '') = COALESCE(json_extract(value, '$.w'), '') AND m.unit_label = json_extract(value, '$.u') AND m.member_name = json_extract(value, '$.n'))`)
+        WHERE NOT EXISTS (SELECT 1 FROM red_members m WHERE m.society_id = ?1 AND m.deleted_at IS NULL AND COALESCE(m.wing, '') = COALESCE(json_extract(value, '$.w'), '') AND m.unit_label = json_extract(value, '$.u'))`)
         .bind(soc.id, nowStr(), JSON.stringify(good)).run();
       await audit(env, req.user, 'import', 'red_members', soc.id, `Imported ${r.meta.changes} member(s) into ${soc.name}`).run();
       const c = await consentSummary(env, soc); await afterConsent(env, req, soc, c);
@@ -397,12 +406,59 @@ export function registerRedevelopment(router, h) {
       if (doc && b.paaa_doc_id !== undefined && !(await env.DB.prepare("SELECT 1 AS x FROM documents WHERE id = ? AND deleted_at IS NULL AND project_id = ?").bind(doc, mem.project_id).first())) return bad('That file was not found.');
       const keys = b.keys_received !== undefined ? (b.keys_received ? 1 : 0) : mem.keys_received;
       const util = b.utilities_disconnected !== undefined ? (b.utilities_disconnected ? 1 : 0) : mem.utilities_disconnected;
+      // Vacating proof: a photo of the empty flat and where the phone was. Recording a new vacating date without both is refused
+      // (only the Owner can record it without, with a written reason). Rent never starts from a date without proof.
+      const inProject = async (id) => !!(await env.DB.prepare('SELECT 1 AS x FROM documents WHERE id = ? AND deleted_at IS NULL AND project_id = ?').bind(id, mem.project_id).first());
+      const photo = b.vacate_photo_doc_id !== undefined ? (Number(b.vacate_photo_doc_id) || null) : mem.vacate_photo_doc_id;
+      if (photo && b.vacate_photo_doc_id !== undefined && !(await inProject(photo))) return bad('The photo of the empty flat was not found.');
+      const bills = b.final_bills_doc_id !== undefined ? (Number(b.final_bills_doc_id) || null) : mem.final_bills_doc_id;
+      if (bills && b.final_bills_doc_id !== undefined && !(await inProject(bills))) return bad('The final utility bills file was not found.');
+      const lat = b.vacate_lat !== undefined ? num(b.vacate_lat) : mem.vacate_lat, lng = b.vacate_lng !== undefined ? num(b.vacate_lng) : mem.vacate_lng;
+      const locOk = lat != null && lng != null && lat >= 6 && lat <= 38 && lng >= 67 && lng <= 98;
+      const override = txt(b.override_note, 300);
+      const meterE = b.meter_electricity !== undefined ? txt(b.meter_electricity, 40) || null : mem.meter_electricity;
+      const meterW = b.meter_water !== undefined ? txt(b.meter_water, 40) || null : mem.meter_water;
+      let proofAt = mem.vacate_proof_at, proofBy = mem.vacate_proof_by, overrideNote = mem.vacate_override_note;
+      if (vac && vac !== mem.vacated_on) {
+        if (photo && locOk) { proofAt = nowStr(); proofBy = req.user.user_id; }
+        else if (override) {
+          if (req.user.role !== 'owner') return bad('Only the Owner can record vacating without a photo and location.', 403);
+          if (override.length < 10) return bad('Explain in a few words why there is no photo or location.');
+          overrideNote = override; proofAt = nowStr(); proofBy = req.user.user_id;
+        } else return bad('Vacating needs a photo of the empty flat and the phone\'s location. Take the photo at the flat with location switched on.', 400);
+      }
       await env.DB.batch([
-        env.DB.prepare('UPDATE red_members SET paaa_reg_no = ?, paaa_reg_date = ?, paaa_doc_id = ?, vacated_on = ?, keys_received = ?, utilities_disconnected = ? WHERE id = ?').bind(reg, regDate, doc, vac, keys, util, mem.id),
-        audit(env, req.user, 'update', 'red_members', mem.id, `${mem.member_name} (${mem.unit_label}): PAAA ${reg || 'not registered'}${vac ? ', vacated ' + vac : ''}${keys ? ', keys received' : ''}${util ? ', utilities off' : ''}`),
+        env.DB.prepare('UPDATE red_members SET paaa_reg_no = ?, paaa_reg_date = ?, paaa_doc_id = ?, vacated_on = ?, keys_received = ?, utilities_disconnected = ?, vacate_photo_doc_id = ?, vacate_lat = ?, vacate_lng = ?, vacate_proof_at = ?, vacate_proof_by = ?, meter_electricity = ?, meter_water = ?, final_bills_doc_id = ?, vacate_override_note = ? WHERE id = ?').bind(reg, regDate, doc, vac, keys, util, photo, lat, lng, proofAt, proofBy, meterE, meterW, bills, overrideNote, mem.id),
+        audit(env, req.user, 'update', 'red_members', mem.id, `${mem.member_name} (${mem.unit_label}): PAAA ${reg || 'not registered'}${vac ? ', vacated ' + vac : ''}${keys ? ', keys received' : ''}${util ? ', utilities off' : ''}${overrideNote && overrideNote !== mem.vacate_override_note ? ' (OWNER OVERRIDE: ' + overrideNote + ')' : ''}`),
       ]);
       return json({ ok: true });
     } catch (e) { return serverError(e, 'red-vacate'); }
+  }));
+  // PAN and the last 4 digits of the Aadhaar. One PAN can belong to one member of a society. The full Aadhaar is never accepted or stored.
+  router.put('/api/redev/members/:id/identity', async (req, env) => withAuth(req, env, 'redevelopment', 'E', async (req, env) => {
+    try {
+      const { mem, err } = await loadMember(env, req, Number(req.params.id)); if (err) return err;
+      const b = await req.json().catch(() => ({}));
+      const pan = txt(b.pan, 20).toUpperCase().replace(/\s/g, '');
+      const aRaw = String(b.aadhaar_last4 == null ? '' : b.aadhaar_last4).replace(/\D/g, '');
+      if (aRaw.length > 4) return bad('Enter only the last 4 digits of the Aadhaar. The full number is never stored.');
+      if (aRaw && aRaw.length !== 4) return bad('Enter exactly the last 4 digits of the Aadhaar.');
+      if (pan && !PAN_RE.test(pan)) return bad('The PAN looks wrong (format ABCDE1234F).');
+      let enc = null, hash = null, last4 = null;
+      if (pan) {
+        hash = await panHash(env, pan);
+        const other = await env.DB.prepare('SELECT member_name, unit_label FROM red_members WHERE society_id = ? AND pan_hash = ? AND id <> ? AND deleted_at IS NULL').bind(mem.society_id, hash, mem.id).first();
+        if (other) return bad(`This PAN is already linked to ${other.member_name} (flat ${other.unit_label}). One PAN can belong to only one member of a society.`, 409);
+        enc = await encryptSetting(env, pan); last4 = pan.slice(-4);
+      }
+      try {
+        await env.DB.batch([
+          env.DB.prepare('UPDATE red_members SET pan_enc = CASE WHEN ?1 IS NULL THEN pan_enc ELSE ?1 END, pan_hash = CASE WHEN ?2 IS NULL THEN pan_hash ELSE ?2 END, pan_last4 = CASE WHEN ?3 IS NULL THEN pan_last4 ELSE ?3 END, aadhaar_last4 = CASE WHEN ?4 = \'\' THEN aadhaar_last4 ELSE ?4 END WHERE id = ?5').bind(enc, hash, last4, aRaw, mem.id),
+          audit(env, req.user, 'update', 'red_members', mem.id, `Identity updated for ${mem.member_name} (${mem.unit_label})${pan ? ': PAN on file' : ''}${aRaw ? ', Aadhaar last 4 on file' : ''}`),
+        ]);
+      } catch (e) { if (/UNIQUE/.test(String(e.message))) return bad('This PAN is already linked to another member of this society.', 409); throw e; }
+      return json({ ok: true, data: { pan_masked: last4 ? 'XXXXXX' + last4 : undefined, aadhaar_masked: aRaw ? 'XXXX XXXX ' + aRaw : undefined } });
+    } catch (e) { return serverError(e, 'red-identity'); }
   }));
   router.get('/api/redev/societies/:id/vacating', async (req, env) => withAuth(req, env, 'redevelopment', 'V', async (req, env) => {
     try {
@@ -422,10 +478,8 @@ export function registerRedevelopment(router, h) {
       return json({ ok: true, data: { terms: t } });
     } catch (e) { return serverError(e, 'red-terms'); }
   }));
-  router.put('/api/redev/members/:id/terms', async (req, env) => withAuth(req, env, 'transit', 'E', async (req, env) => {
+  async function applyTerms(env, user, mem, b) {
     try {
-      const { mem, err } = await loadMember(env, req, Number(req.params.id)); if (err) return err;
-      const b = await req.json().catch(() => ({}));
       const basis = ['per_sqft', 'monthly'].includes(b.rent_basis) ? b.rent_basis : null;
       const money = (k) => { if (b[k] === '' || b[k] == null) return null; const v = Math.round(num(b[k])); return v >= 0 && v <= 1e12 ? v : NaN; };
       const rents = [1, 2, 3, 4, 5].map((y) => money(`rent_y${y}_paise`));
@@ -450,20 +504,20 @@ export function registerRedevelopment(router, h) {
       if (buysSqft != null && !(buysSqft > 0 && buysSqft <= 100000)) return bad('Check the extra area being bought.');
       await env.DB.batch([
         env.DB.prepare(`UPDATE red_members SET certified_area_sqft = ?, certified_by = CASE WHEN certified_area_sqft IS NULL AND ? IS NOT NULL THEN ? ELSE certified_by END, certified_at = CASE WHEN certified_area_sqft IS NULL AND ? IS NOT NULL THEN ? ELSE certified_at END, carpet_sqft = ?, rent_basis = ?, rent_y1_paise = ?, rent_y2_paise = ?, rent_y3_paise = ?, rent_y4_paise = ?, rent_y5_paise = ?, corpus_paise = ?, car_parks = ?, shifting_paise = ?, extra_area_bp = ?, new_rera_sqft = ?, buys_extra = ?, buys_extra_sqft = ? WHERE id = ?`)
-          .bind(cert ?? null, cert ?? null, req.user.user_id, cert ?? null, nowStr(), area, basis, ...rents, corpus, cars, shifting, bp, newArea, buys, buysSqft, mem.id),
+          .bind(cert ?? null, cert ?? null, user.user_id, cert ?? null, nowStr(), area, basis, ...rents, corpus, cars, shifting, bp, newArea, buys, buysSqft, mem.id),
         env.DB.prepare(REPRICE_SQL).bind(mem.id),
-        audit(env, req.user, 'update', 'red_members', mem.id, `Terms for ${mem.member_name}: ${basis ? 'rent set year-wise' : 'no rent'}${bp != null ? `, extra area ${pct}% (new RERA carpet ${newArea} sq ft)` : ''}${buys ? ', buying extra area' : ''}`),
+        audit(env, user, 'update', 'red_members', mem.id, `Terms for ${mem.member_name}: ${basis ? 'rent set year-wise' : 'no rent'}${bp != null ? `, extra area ${pct}% (new RERA carpet ${newArea} sq ft)` : ''}${buys ? ', buying extra area' : ''}`),
       ]);
       return json({ ok: true, data: { new_rera_sqft: newArea } });
     } catch (e) { return serverError(e, 'red-terms-set'); }
-  }));
+  }
+
 
   // ======================= WP-2: transit rent =======================
   const dueDay = async (env) => Math.min(28, Math.max(1, Math.round(Number(await getSetting(env, 'red.rent_due_day')) || 1)));
-  router.post('/api/redev/members/:id/transit-term', async (req, env) => withAuth(req, env, 'transit', 'E', async (req, env) => {
+  async function applyTransitTerm(env, user, mem, b) {
     try {
-      const { mem, err } = await loadMember(env, req, Number(req.params.id)); if (err) return err;
-      const b = await req.json().catch(() => ({})); const rent = Math.round(num(b.monthly_rent_paise) || 0);
+      const rent = Math.round(num(b.monthly_rent_paise) || 0);
       if (!(rent > 0)) return bad('Enter the monthly rent.'); if (!dateOk(b.start_date)) return bad('Enter the first month of rent.');
       // Transit rent starts only once the member has vacated, and not for months before that.
       if (!mem.vacated_on) return bad('Record that the member has vacated (with the registered PAAA) before starting transit rent.', 409);
@@ -475,16 +529,163 @@ export function registerRedevelopment(router, h) {
       await env.DB.batch([
         env.DB.prepare(`INSERT INTO red_transit_terms (member_id, monthly_rent_paise, start_date, end_date, deposit_paise, bg_ref, bg_amount_paise, bg_expiry, notes, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
           ON CONFLICT(member_id) DO UPDATE SET monthly_rent_paise = excluded.monthly_rent_paise, end_date = excluded.end_date, deposit_paise = excluded.deposit_paise, bg_ref = excluded.bg_ref, bg_amount_paise = excluded.bg_amount_paise, bg_expiry = excluded.bg_expiry, notes = excluded.notes`)
-          .bind(mem.id, rent, b.start_date, b.end_date || null, Math.max(0, Math.round(num(b.deposit_paise) || 0)), txt(b.bg_ref, 60), b.bg_amount_paise ? Math.round(num(b.bg_amount_paise)) : null, b.bg_expiry || null, txt(b.notes, 300), req.user.user_id, nowStr()),
+          .bind(mem.id, rent, b.start_date, b.end_date || null, Math.max(0, Math.round(num(b.deposit_paise) || 0)), txt(b.bg_ref, 60), b.bg_amount_paise ? Math.round(num(b.bg_amount_paise)) : null, b.bg_expiry || null, txt(b.notes, 300), user.user_id, nowStr()),
         env.DB.prepare(FILL_SQL(true, await ocGrace(env, getSetting))).bind(await dueDay(env), mem.id),
         // a changed rent applies to months that have no payment against them yet
         env.DB.prepare('UPDATE red_transit_schedule SET due_paise = ? WHERE member_id = ? AND NOT EXISTS (SELECT 1 FROM red_transit_payments p WHERE p.schedule_id = red_transit_schedule.id AND p.reversed_at IS NULL)').bind(rent, mem.id),
         env.DB.prepare(REPRICE_SQL).bind(mem.id),
-        audit(env, req.user, 'update', 'red_transit_terms', mem.id, `Transit rent for ${mem.member_name}: ${rupees(rent)} a month from ${b.start_date}`),
+        audit(env, user, 'update', 'red_transit_terms', mem.id, `Transit rent for ${mem.member_name}: ${rupees(rent)} a month from ${b.start_date}`),
       ]);
       const n = (await env.DB.prepare('SELECT COUNT(*) AS n FROM red_transit_schedule WHERE member_id = ?').bind(mem.id).first()).n;
       return json({ ok: true, data: { months_scheduled: n } });
     } catch (e) { return serverError(e, 'red-term'); }
+  }
+
+
+
+  // ======================= maker-checker: changing rent that is already set needs the Director's PIN =======================
+  const RENT_KEYS = ['rent_basis', 'rent_y1_paise', 'rent_y2_paise', 'rent_y3_paise', 'rent_y4_paise', 'rent_y5_paise'];
+  const normMoney = (v) => (v === '' || v == null ? null : Math.round(Number(v)));
+  // true when the request would change a rent that is already set
+  async function rentIsChanging(env, mem, kind, b) {
+    if (kind === 'terms') {
+      const had = RENT_KEYS.slice(1).some((k) => mem[k] != null);
+      if (!had) return false;
+      return RENT_KEYS.some((k) => b[k] !== undefined && (k === 'rent_basis' ? (b[k] || null) !== (mem[k] || null) : normMoney(b[k]) !== (mem[k] == null ? null : mem[k])));
+    }
+    const old = await env.DB.prepare('SELECT monthly_rent_paise FROM red_transit_terms WHERE member_id = ?').bind(mem.id).first();
+    return !!old && b.monthly_rent_paise !== undefined && Math.round(Number(b.monthly_rent_paise)) !== old.monthly_rent_paise;
+  }
+  // Returns a Response when the change must wait or is refused; null when it may be applied now.
+  async function rentGate(env, req, mem, kind, b) {
+    if (!(await rentIsChanging(env, mem, kind, b))) return null;
+    const { pin, ...clean } = b;
+    if (req.user.role === 'owner') {
+      if (!pin) return json({ ok: false, error: 'Changing a rent that is already set needs your approval PIN.', code: 'pin_required' }, 400);
+      const e = await checkPin(env, req.user.user_id, pin); if (e) return json({ ok: false, error: e, code: 'pin_required' }, 400);
+      b.pin = undefined; return null;
+    }
+    const summary = `${kind === 'terms' ? 'Rent terms' : 'Monthly rent'} change for ${mem.member_name} (${mem.unit_label})`;
+    const r = await env.DB.prepare('INSERT INTO red_rent_changes (member_id, kind, payload, summary, requested_by, created_at) VALUES (?, ?, ?, ?, ?, ?)').bind(mem.id, kind, JSON.stringify(clean), summary, req.user.user_id, nowStr()).run();
+    await env.DB.batch([
+      env.DB.prepare("INSERT INTO notifications (user_id, title, body, link, created_at) SELECT id, 'Rent change waiting for your PIN', ?, 'redevelopment', ? FROM users WHERE role = 'owner' AND active = 1 AND deleted_at IS NULL").bind(summary, nowStr()),
+      audit(env, req.user, 'request', 'red_rent_changes', r.meta.last_row_id, `${summary}: sent for Director approval`),
+    ]);
+    return json({ ok: true, data: { pending: true, id: r.meta.last_row_id, message: 'This changes a rent that is already set, so it has gone to the Owner for approval. Nothing changes until the Owner approves it with their PIN.' } });
+  }
+  router.put('/api/redev/members/:id/terms', async (req, env) => withAuth(req, env, 'transit', 'E', async (req, env) => {
+    try {
+      const { mem, err } = await loadMember(env, req, Number(req.params.id)); if (err) return err;
+      const b = await req.json().catch(() => ({}));
+      const g = await rentGate(env, req, mem, 'terms', b); if (g) return g;
+      return await applyTerms(env, req.user, mem, b);
+    } catch (e) { return serverError(e, 'red-terms-put'); }
+  }));
+  router.post('/api/redev/members/:id/transit-term', async (req, env) => withAuth(req, env, 'transit', 'E', async (req, env) => {
+    try {
+      const { mem, err } = await loadMember(env, req, Number(req.params.id)); if (err) return err;
+      const b = await req.json().catch(() => ({}));
+      const g = await rentGate(env, req, mem, 'transit_term', b); if (g) return g;
+      return await applyTransitTerm(env, req.user, mem, b);
+    } catch (e) { return serverError(e, 'red-term-post'); }
+  }));
+
+  // The Owner's approval PIN: 6 digits, set with the account password, kept only as a salted hash.
+  router.get('/api/redev/approval-pin', async (req, env) => withAuth(req, env, 'transit', 'V', async (req, env) => {
+    const u = await env.DB.prepare('SELECT approval_pin_set_at FROM users WHERE id = ?').bind(req.user.user_id).first();
+    return json({ ok: true, data: { has_pin: !!(u && u.approval_pin_set_at), is_owner: req.user.role === 'owner' } });
+  }));
+  router.post('/api/redev/approval-pin', async (req, env) => withAuth(req, env, 'transit', 'A', async (req, env) => {
+    try {
+      if (req.user.role !== 'owner') return bad('Only the Owner has an approval PIN.', 403);
+      const b = await req.json().catch(() => ({}));
+      if (!PIN_RE.test(String(b.pin || ''))) return bad('The PIN must be exactly 6 digits.');
+      if (/^(\d)\1{5}$/.test(b.pin) || '0123456789012345'.includes(b.pin) || '9876543210987654'.includes(b.pin)) return bad('Pick a PIN that is not all the same digit or a simple run.');
+      const u = await env.DB.prepare('SELECT password_hash, password_salt, approval_pin_set_at FROM users WHERE id = ?').bind(req.user.user_id).first();
+      if (!u || !u.password_hash || !(await verifyPassword(String(b.password || ''), base64ToBytes(u.password_salt), u.password_hash))) return bad('Your login password is not right.', 403);
+      await setPin(env, req.user.user_id, String(b.pin), nowStr());
+      await audit(env, req.user, u.approval_pin_set_at ? 'update' : 'create', 'users', req.user.user_id, 'Approval PIN ' + (u.approval_pin_set_at ? 'changed' : 'set')).run();
+      return json({ ok: true });
+    } catch (e) { return serverError(e, 'red-pin-set'); }
+  }));
+
+  router.get('/api/redev/rent-changes', async (req, env) => withAuth(req, env, 'transit', 'V', async (req, env) => {
+    try {
+      const ids = await visibleProjectIds(env, req.user); if (!ids.length) return json({ ok: true, data: { changes: [] } });
+      const st = ['pending', 'approved', 'rejected'].includes(new URL(req.url).searchParams.get('status')) ? new URL(req.url).searchParams.get('status') : 'pending';
+      const rows = (await env.DB.prepare(`SELECT c.id, c.member_id, c.kind, c.summary, c.status, c.created_at, c.decided_at, c.decision_note, c.payload, m.member_name, m.unit_label, ru.name AS requested_by_name FROM red_rent_changes c
+        JOIN red_members m ON m.id = c.member_id JOIN red_societies s ON s.id = m.society_id LEFT JOIN users ru ON ru.id = c.requested_by WHERE c.status = ? AND s.project_id IN (${ids.map(() => '?').join(',')}) ORDER BY c.id DESC LIMIT 50`).bind(st, ...ids).all()).results;
+      for (const r of rows) { try { const p = JSON.parse(r.payload); r.change = Object.fromEntries(Object.entries(p).filter(([k]) => /rent|basis/.test(k))); } catch (e) { r.change = {}; } delete r.payload; }
+      return json({ ok: true, data: { changes: rows } });
+    } catch (e) { return serverError(e, 'red-changes'); }
+  }));
+  async function loadChange(env, req) {
+    const c = await env.DB.prepare('SELECT c.*, s.project_id FROM red_rent_changes c JOIN red_members m ON m.id = c.member_id JOIN red_societies s ON s.id = m.society_id WHERE c.id = ?').bind(Number(req.params.id)).first();
+    if (!c) return { err: bad('Change not found.', 404) };
+    if (!(await visibleProjectIds(env, req.user)).includes(c.project_id)) return { err: bad('Not allowed.', 403) };
+    if (c.status !== 'pending') return { err: bad('This change has already been decided.', 409) };
+    return { c };
+  }
+  router.post('/api/redev/rent-changes/:id/approve', async (req, env) => withAuth(req, env, 'transit', 'A', async (req, env) => {
+    try {
+      if (req.user.role !== 'owner') return bad('Only the Owner can approve a rent change.', 403);
+      const { c, err } = await loadChange(env, req); if (err) return err;
+      if (c.requested_by === req.user.user_id) return bad('You cannot approve a change you asked for yourself.', 403);
+      const b = await req.json().catch(() => ({}));
+      const e = await checkPin(env, req.user.user_id, b.pin); if (e) return bad(e, 400);
+      const mem = (await loadMember(env, { ...req, params: { id: c.member_id } }, c.member_id)).mem; if (!mem) return bad('The member no longer exists.', 404);
+      let payload; try { payload = JSON.parse(c.payload); } catch (x) { return bad('The saved change is damaged.', 500); }
+      const r = c.kind === 'terms' ? await applyTerms(env, req.user, mem, payload) : await applyTransitTerm(env, req.user, mem, payload);
+      if (r.status >= 400) return r;
+      await env.DB.batch([
+        env.DB.prepare("UPDATE red_rent_changes SET status = 'approved', decided_by = ?, decided_at = ? WHERE id = ? AND status = 'pending'").bind(req.user.user_id, nowStr(), c.id),
+        audit(env, req.user, 'approve', 'red_rent_changes', c.id, `${c.summary}: approved with PIN`),
+        env.DB.prepare("INSERT INTO notifications (user_id, title, body, link, created_at) VALUES (?, 'Rent change approved', ?, 'redevelopment', ?)").bind(c.requested_by, c.summary, nowStr()),
+      ]);
+      return json({ ok: true });
+    } catch (e) { return serverError(e, 'red-change-approve'); }
+  }));
+  router.post('/api/redev/rent-changes/:id/reject', async (req, env) => withAuth(req, env, 'transit', 'A', async (req, env) => {
+    try {
+      if (req.user.role !== 'owner') return bad('Only the Owner can reject a rent change.', 403);
+      const { c, err } = await loadChange(env, req); if (err) return err;
+      const b = await req.json().catch(() => ({})); const note = txt(b.note, 300); if (!note) return bad('Please say why it is rejected.');
+      await env.DB.batch([
+        env.DB.prepare("UPDATE red_rent_changes SET status = 'rejected', decided_by = ?, decided_at = ?, decision_note = ? WHERE id = ? AND status = 'pending'").bind(req.user.user_id, nowStr(), note, c.id),
+        audit(env, req.user, 'reject', 'red_rent_changes', c.id, `${c.summary}: rejected. ${note}`),
+        env.DB.prepare("INSERT INTO notifications (user_id, title, body, link, created_at) VALUES (?, 'Rent change rejected', ?, 'redevelopment', ?)").bind(c.requested_by, c.summary + '. ' + note, nowStr()),
+      ]);
+      return json({ ok: true });
+    } catch (e) { return serverError(e, 'red-change-reject'); }
+  }));
+
+  // ======================= pre-demolition gate: meter-removal receipts and NOCs =======================
+  router.get('/api/redev/projects/:id/site-proofs', async (req, env) => withAuth(req, env, 'redevelopment', 'V', async (req, env) => {
+    try {
+      const pid = Number(req.params.id); if (!(await visibleProjectIds(env, req.user)).includes(pid)) return bad('Not allowed.', 403);
+      const rows = (await env.DB.prepare('SELECT kind, status, document_id, ref_no, on_date, note FROM red_site_proofs WHERE project_id = ?').bind(pid).all()).results;
+      const blocked = await demolitionBlock(env, pid, getSetting);
+      return json({ ok: true, data: { proofs: rows, labels: PROOF_LABEL, blocked } });
+    } catch (e) { return serverError(e, 'red-proofs'); }
+  }));
+  router.put('/api/redev/projects/:id/site-proofs/:kind', async (req, env) => withAuth(req, env, 'redevelopment', 'E', async (req, env) => {
+    try {
+      const pid = Number(req.params.id); if (!(await visibleProjectIds(env, req.user)).includes(pid)) return bad('Not allowed.', 403);
+      const kind = req.params.kind; if (!PROOF_LABEL[kind]) return bad('Unknown proof.');
+      const b = await req.json().catch(() => ({}));
+      const na = b.status === 'not_applicable'; const note = txt(b.note, 300); const doc = Number(b.document_id) || null; const on = b.on_date || null;
+      if (on && !dateOk(on)) return bad('Check the date.');
+      if (na && note.length < 5) return bad('Say why this does not apply.');
+      if (!na && !doc) return bad(`Attach the ${PROOF_LABEL[kind]}.`);
+      if (doc && !(await env.DB.prepare('SELECT 1 AS x FROM documents WHERE id = ? AND deleted_at IS NULL AND project_id = ?').bind(doc, pid).first())) return bad('That file was not found in this project.');
+      await env.DB.batch([
+        env.DB.prepare(`INSERT INTO red_site_proofs (project_id, kind, status, document_id, ref_no, on_date, note, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          ON CONFLICT(project_id, kind) DO UPDATE SET status = excluded.status, document_id = excluded.document_id, ref_no = excluded.ref_no, on_date = excluded.on_date, note = excluded.note, created_by = excluded.created_by, created_at = excluded.created_at`)
+          .bind(pid, kind, na ? 'not_applicable' : 'provided', na ? null : doc, txt(b.ref_no, 80) || null, on, note || null, req.user.user_id, nowStr()),
+        audit(env, req.user, 'update', 'red_site_proofs', pid, `${PROOF_LABEL[kind]}: ${na ? 'not applicable (' + note + ')' : 'file attached'}`),
+      ]);
+      return json({ ok: true, data: { blocked: await demolitionBlock(env, pid, getSetting) } });
+    } catch (e) { return serverError(e, 'red-proof-set'); }
   }));
 
   const STATE = `CASE WHEN r.id IS NULL THEN NULL WHEN COALESCE(pd.paid, 0) >= r.due_paise THEN 'paid' WHEN r.due_on < date('now') THEN 'overdue' WHEN COALESCE(pd.paid, 0) > 0 THEN 'partial' ELSE 'due' END`;

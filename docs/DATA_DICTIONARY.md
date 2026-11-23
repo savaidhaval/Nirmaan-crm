@@ -432,3 +432,13 @@ id TEXT PK, source TEXT, seen_at TEXT
 - sal_inventory.category now takes sale | rehab | landowner (no schema change). A landowner flat has status 'landowner', is never priced or sold, and its bucket cannot be changed once set.
 - Settings: red.oc_grace_days (days after the OC date when transit rent stops, default 30), apr.alert_days (expiry alert steps, default 30,15,7).
 - Rules: transit-rent escalation years count from red_members.vacated_on (month granularity; vacated after the 1st = one month later); red_transit_schedule rows with no payment row beyond the OC date + grace days are removed by the hourly sweep. Notifications for approval expiry use link approvals#<id>@<valid_till>:T<step>, once per step.
+
+## Module 1 gaps, step 2 (migration 0041)
+- users: approval_pin_hash, approval_pin_salt, approval_pin_set_at. The Owner's 6-digit approval PIN, kept only as a salted PBKDF2 hash. Never returned, never exported. 5 wrong tries lock it for 15 minutes (rate_limits key pin:<user>).
+- red_members vacating proof: vacate_photo_doc_id (photo of the empty flat, documents.id), vacate_lat, vacate_lng (phone location, must be inside India's bounds), vacate_proof_at, vacate_proof_by, meter_electricity, meter_water (final readings as text), final_bills_doc_id (zero-due utility bills), vacate_override_note (Owner only: why vacating was recorded without photo or location).
+- red_members identity: pan_enc (encrypted PAN), pan_hash (keyed HMAC of the PAN, for the one-PAN-one-member rule), pan_last4, aadhaar_last4 (the last 4 digits only; a full Aadhaar is refused). Unique index uq_red_mem_pan on (society_id, pan_hash) for live members. The member list shows pan_masked / aadhaar_masked to Owner, PM and Accounts, and "on file" to others.
+- red_rent_changes (member_id, kind terms|transit_term, payload JSON, summary, status pending|approved|rejected, requested_by, created_at, decided_by, decided_at, decision_note). A change to a rent that is already set waits here until the Owner approves it with the PIN (applied then) or rejects it with a reason. In the backup list.
+- red_site_proofs (project_id, kind electricity|water|gas|tree_noc|barricade, status provided|not_applicable, document_id, ref_no, on_date, note, created_by, created_at; unique project + kind). In the backup list.
+- con_work_orders.is_demolition (0/1): a demolition work order is approved only when the IOD is approved and every proof in the setting red.demolition_proofs (default all five) is provided or marked not applicable.
+- Settings: red.demolition_proofs.
+

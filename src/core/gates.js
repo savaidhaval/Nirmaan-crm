@@ -52,3 +52,18 @@ export async function holdFor(env, projectId, wing) {
   const h = await env.DB.prepare("SELECT wing, reason FROM prj_holds WHERE project_id = ? AND released_at IS NULL AND (wing IS NULL OR ? IS NULL OR wing = ?) ORDER BY wing IS NULL DESC LIMIT 1").bind(projectId, wing || null, wing || null).first();
   return h ? `${h.wing ? 'Wing ' + h.wing : 'The project'} is on hold: ${h.reason}` : null;
 }
+
+// Pre-demolition gate: a work order that starts demolition needs the IOD approved and every required site proof on file
+// (meter-removal receipts for electricity, water and gas, and the tree and barricade NOCs; each may be marked "not applicable" with a note).
+// The required list is the setting red.demolition_proofs (items separated by ; ). Returns a plain message, or null when clear.
+export const PROOF_LABEL = { electricity: 'electricity meter removal receipt', water: 'water disconnection receipt', gas: 'PNG gas disconnection receipt', tree_noc: 'tree NOC', barricade: 'barricading permission' };
+export async function demolitionBlock(env, projectId, getSetting) {
+  const raw = String((await getSetting(env, 'red.demolition_proofs')) || '').trim();
+  const need = (raw ? raw.split(/[;,\n]+/) : ['electricity', 'water', 'gas', 'tree_noc', 'barricade']).map((x) => x.trim()).filter((x) => PROOF_LABEL[x]);
+  const st = await approvalState(env, projectId);
+  const missing = [];
+  if (!st.approved('iod')) missing.push('IOD approval');
+  const have = new Set((await env.DB.prepare("SELECT kind FROM red_site_proofs WHERE project_id = ? AND (status = 'not_applicable' OR document_id IS NOT NULL)").bind(projectId).all()).results.map((r) => r.kind));
+  for (const k of need) if (!have.has(k)) missing.push(PROOF_LABEL[k]);
+  return missing.length ? `Demolition cannot be released yet. Still missing: ${missing.join(', ')}.` : null;
+}
