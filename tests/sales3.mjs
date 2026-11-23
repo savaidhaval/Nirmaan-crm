@@ -69,7 +69,8 @@ const big2 = await rcpt(acc, { amount_paise: 700000, demand_id: dem1.id, ref_no:
 ok('rejecting needs a reason', (await pm.call('POST', `/api/sales/receipt-requests/${big2.data.request_id}/reject`, {})).status === 400);
 ok('rejected receipt posts nothing', (await pm.call('POST', `/api/sales/receipt-requests/${big2.data.request_id}/reject`, { note: 'wrong cheque' })).status === 200 && (await o.call('GET', `/api/sales/bookings/${bk}`)).data.receipts.length === after.receipts.length);
 const big3 = await rcpt(o, { amount_paise: 800000, demand_id: dem1.id, ref_no: 'BIG3' + run });
-ok('even the Owner cannot approve a receipt they recorded', (await o.call('POST', `/api/sales/receipt-requests/${big3.data.request_id}/approve`, {})).status === 403 && (await pm.call('POST', `/api/sales/receipt-requests/${big3.data.request_id}/approve`, {})).status === 200);
+{ const r = await o.call('POST', `/api/sales/receipt-requests/${big3.data.request_id}/approve`, {}); ok('the Owner approves a receipt they recorded themselves', r.status === 200, JSON.stringify(r.data || r.error));
+  const au = (await o.call('GET', '/api/audit?entity=sal_receipt_requests&entity_id=' + big3.data.request_id)).data.audit; ok('the audit says it was approved by the Owner as maker', au.some((x) => /approved by Owner as maker/.test(x.summary))); }
 await setSetting('sales.receipt_approval_limit_paise', 0);
 
 // credit notes

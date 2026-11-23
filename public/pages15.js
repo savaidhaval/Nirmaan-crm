@@ -73,9 +73,9 @@ async function rdMembers(pane) {
   const pages = Math.max(1, Math.ceil(r.total / r.page_size));
   pane.innerHTML = `<div class="grid"><div class="field"><label>Search flat or name</label><input id="rd-q" value="${esc(RD.q)}"></div><div class="field"><label>Show</label><select id="rd-st"><option value="">Everyone</option><option value="pending">Pending</option><option value="consented">Consented</option><option value="declined">Declined</option></select></div></div>
     ${canE ? '<div class="row-btns"><button class="btn btn-primary" id="rd-add">+ Add member</button><button class="btn" id="rd-paste">Paste a list</button></div>' : ''}
-    ${r.members.map((m) => `<div class="card"><div class="row"><div><b>${esc(m.member_name)}</b> · ${esc((m.wing ? m.wing + '-' : '') + m.unit_label)}<p class="muted">${esc(m.member_type)}${m.carpet_sqft ? ' · ' + m.carpet_sqft + ' sq ft' : ''}${m.phone ? ' · ' + esc(m.phone) : ''}</p></div>${chip(m.consent_status, { consented: 'good', declined: 'bad', pending: 'warn' }[m.consent_status])}</div>
+    ${r.members.map((m) => `<div class="card"><div class="row"><div><b>${esc(m.member_name)}</b> · ${esc((m.wing ? m.wing + '-' : '') + m.unit_label)}<p class="muted">${esc(m.member_type)}${m.carpet_sqft ? ' · ' + m.carpet_sqft + ' sq ft now' : ''}${m.new_rera_sqft ? ' · new RERA carpet ' + m.new_rera_sqft + ' sq ft' : ''}${m.car_parks ? ' · ' + m.car_parks + ' car park' + (m.car_parks > 1 ? 's' : '') : ''}${m.phone ? ' · ' + esc(m.phone) : ''}</p>${m.buys_extra ? chip('Buying extra area' + (m.buys_extra_sqft ? ': ' + m.buys_extra_sqft + ' sq ft' : ''), 'info') : ''}</div>${chip(m.consent_status, { consented: 'good', declined: 'bad', pending: 'warn' }[m.consent_status])}</div>
       ${canE ? `<div class="row-btns">${['consented', 'declined', 'pending'].map((s) => `<button class="btn small ${m.consent_status === s ? 'btn-primary' : ''}" data-cs="${m.id}:${s}">${s === 'consented' ? 'Consented' : s === 'declined' ? 'Declined' : 'Pending'}</button>`).join('')}
-        ${RD.d.checklist.length ? `<button class="btn small" data-docs="${m.id}">Documents</button>` : ''}${currentUser.role === 'owner' ? `<button class="btn small" data-rm="${m.id}">Remove</button>` : ''}</div>` : ''}</div>`).join('') || '<div class="empty-state"><p>No members yet. Add one, or paste a list.</p></div>'}
+        <button class="btn small" data-terms="${m.id}">Rent, corpus &amp; area</button>${RD.d.checklist.length ? `<button class="btn small" data-docs="${m.id}">Documents</button>` : ''}${currentUser.role === 'owner' ? `<button class="btn small" data-rm="${m.id}">Remove</button>` : ''}</div>` : ''}</div>`).join('') || '<div class="empty-state"><p>No members yet. Add one, or paste a list.</p></div>'}
     <div class="row-btns"><button class="btn small" id="rd-prev"${RD.page <= 1 ? ' disabled' : ''}>← Previous</button><span class="muted">Page ${r.page} of ${pages} · ${r.total} members</span><button class="btn small" id="rd-next"${RD.page >= pages ? ' disabled' : ''}>Next →</button></div>`;
   $('rd-st').value = RD.st;
   $('rd-q').onchange = () => { RD.q = $('rd-q').value; RD.page = 1; rdMembers(pane); };
@@ -89,8 +89,9 @@ async function rdMembers(pane) {
   }; });
   pane.querySelectorAll('[data-rm]').forEach((b) => { b.onclick = async () => { const v = await openForm({ title: 'Remove member', fields: [{ name: 'reason', label: 'Why?', required: true }] }); if (v && await act(api(`/api/redev/members/${b.dataset.rm}/remove`, { method: 'POST', body: v }), 'Removed')) { await rdRefreshMeter(); rdMembers(pane); } }; });
   pane.querySelectorAll('[data-docs]').forEach((b) => { b.onclick = () => rdDocs(Number(b.dataset.docs)); });
+  pane.querySelectorAll('[data-terms]').forEach((b) => { b.onclick = () => rdTerms(Number(b.dataset.terms), pane); });
   const mf = (v) => [{ name: 'wing', label: 'Wing', value: v.wing || '' }, { name: 'unit_label', label: 'Flat', required: true }, { name: 'member_name', label: 'Member name', required: true }, { name: 'phone', label: 'Mobile number' },
-    { name: 'member_type', label: 'Type', type: 'select', options: [['owner', 'Owner'], ['tenant', 'Tenant'], ['commercial', 'Commercial'], ['other', 'Other']] }, { name: 'carpet_sqft', label: 'Carpet area (sq ft)', type: 'number' }];
+    { name: 'member_type', label: 'Type', type: 'select', options: [['owner', 'Owner'], ['residential', 'Residential'], ['tenant', 'Tenant'], ['commercial', 'Commercial'], ['other', 'Other']] }, { name: 'carpet_sqft', label: 'Current flat area (carpet, sq ft)', type: 'number' }];
   if ($('rd-add')) $('rd-add').onclick = async () => { const v = await openForm({ title: 'Add member', fields: mf({}) }); if (v && await act(api(`/api/redev/societies/${RD.soc}/members`, { method: 'POST', body: { ...v, client_uuid: crypto.randomUUID() } }), 'Member added')) { await rdRefreshMeter(); rdMembers(pane); } };
   if ($('rd-paste')) $('rd-paste').onclick = async () => {
     const v = await openForm({ title: 'Paste a list', intro: 'One member per line: wing, flat, name, mobile, type, carpet sq ft. Up to 200 lines. Do not include Aadhaar numbers.', fields: [{ name: 'csv', label: 'List', type: 'textarea', required: true, placeholder: 'A, 101, Mr Patil, 9820012345, owner, 450' }] });
@@ -199,21 +200,51 @@ async function rdCorpus(pane) {
   pane.querySelectorAll('[data-crev]').forEach((b) => { b.onclick = async () => { const v = await openForm({ title: 'Reverse', fields: [{ name: 'reason', label: 'Why?', required: true }] }); if (v && await act(api(`/api/redev/corpus/${b.dataset.crev}/reverse`, { method: 'POST', body: v }), 'Reversed')) rdCorpus(pane); }; });
 }
 
+// ---------- member terms: year-wise rent, corpus, car parking, shifting, area ----------
+async function rdTerms(memberId, pane) {
+  const t = (await api(`/api/redev/members/${memberId}/terms`)).data.terms;
+  const rs = (p) => (p == null ? '' : p / 100);
+  const v = await openForm({ title: `${t.member_name} · ${(t.wing ? t.wing + '-' : '') + t.unit_label}`, intro: 'Rent for each year can differ. The new RERA carpet area is worked out for you.', fields: [
+    { name: 'carpet_sqft', label: 'Current flat area (carpet, sq ft)', type: 'number', value: t.carpet_sqft ?? '' },
+    { name: 'extra_area_pct', label: 'Proposed extra area on RERA carpet (%)', type: 'number', value: t.extra_area_bp == null ? '' : t.extra_area_bp / 100, help: t.new_rera_sqft ? `New RERA carpet now: ${t.new_rera_sqft} sq ft` : 'e.g. 35 for 35% more' },
+    { name: 'rent_basis', label: 'Rent is', type: 'select', value: t.rent_basis || 'monthly', options: [['monthly', 'A monthly amount (₹ per month)'], ['per_sqft', '₹ per sq ft per month']] },
+    ...[1, 2, 3, 4, 5].map((y) => ({ name: 'y' + y, label: `Year ${y} rent`, type: 'money', value: rs(t['rent_y' + y + '_paise']), placeholder: y > 1 ? 'Leave empty if not agreed' : '' })),
+    { name: 'corpus', label: 'Corpus fund (₹)', type: 'money', value: rs(t.corpus_paise) },
+    { name: 'shifting', label: 'Shifting charges (₹)', type: 'money', value: rs(t.shifting_paise) },
+    { name: 'car_parks', label: 'Number of car parkings', type: 'number', value: t.car_parks ?? '' },
+    { name: 'buys_extra', type: 'checkbox', checkLabel: 'Member is buying extra area', value: !!t.buys_extra },
+    { name: 'buys_extra_sqft', label: 'Extra area being bought (sq ft)', type: 'number', value: t.buys_extra_sqft ?? '' }] });
+  if (!v) return;
+  const body = { carpet_sqft: v.carpet_sqft, extra_area_pct: v.extra_area_pct, rent_basis: v.rent_basis, corpus_paise: v.corpus || '', shifting_paise: v.shifting || '', car_parks: v.car_parks, buys_extra: v.buys_extra, buys_extra_sqft: v.buys_extra_sqft };
+  [1, 2, 3, 4, 5].forEach((y) => { body['rent_y' + y + '_paise'] = v['y' + y] || ''; });
+  const r = await act(api(`/api/redev/members/${memberId}/terms`, { method: 'PUT', body }));
+  if (r) { toast(r.data.new_rera_sqft ? `Saved. New RERA carpet: ${r.data.new_rera_sqft} sq ft` : 'Saved', 5000); rdMembers(pane); }
+}
+
 // ---------- meetings ----------
 async function rdMeetings(pane) {
   const r = (await api(`/api/redev/societies/${RD.soc}/meetings`)).data, canC = isRole('owner', 'pm');
   pane.innerHTML = `<p class="help">${esc(r.note)}</p>${canC ? '<button class="btn btn-primary btn-full" id="mt-new">+ New meeting</button>' : ''}<a class="btn small" href="/api/redev/societies/${RD.soc}/meetings?csv=1">Download (Excel)</a>
     ${r.meetings.map((m) => `<div class="card"><div class="row"><div><b>${esc(m.held_on)}</b> · ${esc(m.kind.replace('_', ' '))}${m.attendees_count != null ? ` · ${m.attendees_count} present` : ''}<p>${esc(m.agenda || '')}</p>${m.resolution_text ? `<p class="muted">Resolution: ${esc(m.resolution_text)}</p>` : ''}</div>${m.resolution_text ? chip(m.resolution_passed ? 'Passed' : 'Not passed', m.resolution_passed ? 'good' : 'warn') : ''}</div>
       ${m.minutes_document_id ? `<a class="btn small" href="/api/files/download/${m.minutes_document_id}">Minutes: ${esc(m.minutes_title || 'file')}</a>` : ''}
-      ${m.next_action ? `<p>${m.next_action_done ? chip('Done', 'good') : chip('Open', 'warn')} Next: ${esc(m.next_action)}${m.next_action_due ? ' by ' + esc(m.next_action_due) : ''}</p>${canC && !m.next_action_done ? `<button class="btn small" data-md="${m.id}">Mark done</button>` : ''}` : ''}</div>`).join('') || '<div class="empty-state"><p>No meetings recorded yet.</p></div>'}`;
+      ${m.attendee_ids && m.attendee_ids.length ? `<button class="btn small" data-att="${m.id}">Who attended (${m.attendee_ids.length})</button>` : ''}
+      ${m.next_action ? `<p>${m.next_action_done ? chip('Done', 'good') : chip('Open', 'warn')} Next: ${esc(m.next_action)}${m.next_action_due ? ' by ' + esc(m.next_action_due) : ''} · In charge: ${esc(m.next_action_owner_name || 'not set')}</p>${canC && !m.next_action_done ? `<button class="btn small" data-md="${m.id}">Mark done</button>` : ''}` : ''}</div>`).join('') || '<div class="empty-state"><p>No meetings recorded yet.</p></div>'}`;
   if ($('mt-new')) $('mt-new').onclick = async () => {
-    const v = await openForm({ title: 'New meeting', intro: RD_NOTE, fields: [{ name: 'kind', label: 'Kind', type: 'select', options: [['general_body', 'General body'], ['committee', 'Committee'], ['other', 'Other']] }, { name: 'held_on', label: 'Date held', type: 'date', required: true, value: today() }, { name: 'agenda', label: 'Agenda', type: 'textarea' }, { name: 'attendees_count', label: 'Members present', type: 'number' },
-      { name: 'resolution_text', label: 'Resolution (if any)', type: 'textarea' }, { name: 'resolution_passed', label: 'Resolution', type: 'checkbox', checkLabel: 'It was passed' }, { name: 'file', label: 'Minutes file', type: 'file' }, { name: 'next_action', label: 'Next action' }, { name: 'next_action_due', label: 'Do it by', type: 'date' }] });
-    if (!v) return; const body = { ...v }; delete body.file;
+    const [names, ch] = await Promise.all([api(`/api/redev/societies/${RD.soc}/member-names`).then((x) => x.data.members).catch(() => []), api('/api/projects-meta/choices').then((x) => x.data).catch(() => ({ people: [] }))]);
+    const v = await openForm({ title: 'New meeting', intro: RD_NOTE, fields: [{ name: 'kind', label: 'Kind', type: 'select', options: [['general_body', 'General body'], ['committee', 'Committee'], ['other', 'Other']] }, { name: 'held_on', label: 'Date held', type: 'date', required: true, value: today() }, { name: 'agenda', label: 'Agenda', type: 'textarea' },
+      names.length ? { name: 'attendee_ids', label: 'Members present (tick each one)', type: 'multi', options: names.map((n) => [n.id, `${n.member_name} · ${(n.wing ? n.wing + '-' : '') + n.unit_label}`]) } : { name: 'attendees_count', label: 'Members present', type: 'number' },
+      { name: 'resolution_text', label: 'Resolution (if any)', type: 'textarea' }, { name: 'resolution_passed', label: 'Resolution', type: 'checkbox', checkLabel: 'It was passed' }, { name: 'file', label: 'Minutes file', type: 'file' }, { name: 'next_action', label: 'Next action' }, { name: 'next_action_owner', label: 'Person in charge of the next action', type: 'select', options: [['', 'Pick a person'], ...ch.people.map((p) => [p.id, p.name])], value: currentUser.id }, { name: 'next_action_due', label: 'Expected completion date', type: 'date' }] });
+    if (!v) return; const body = { ...v }; delete body.file; if (!body.next_action_owner) delete body.next_action_owner;
     if (v.file) { const id = await rdUpload(v.file, 'Minutes ' + v.held_on); if (!id) return; body.minutes_document_id = id; }
     ['next_action_due', 'attendees_count'].forEach((k) => { if (body[k] === '') delete body[k]; });
     if (await act(api(`/api/redev/societies/${RD.soc}/meetings`, { method: 'POST', body }), 'Meeting saved')) rdMeetings(pane);
   };
+  pane.querySelectorAll('[data-att]').forEach((b) => { b.onclick = async () => {
+    const m = r.meetings.find((x) => String(x.id) === b.dataset.att); const names = (await api(`/api/redev/societies/${RD.soc}/member-names`)).data.members; const by = Object.fromEntries(names.map((n) => [n.id, n]));
+    const ov = document.createElement('div'); ov.className = 'modal-overlay';
+    ov.innerHTML = `<div class="modal"><h2>Present on ${esc(m.held_on)}</h2>${m.attendee_ids.map((id) => by[id] ? `<p>${esc(by[id].member_name)} · ${esc((by[id].wing ? by[id].wing + '-' : '') + by[id].unit_label)}</p>` : '').join('')}<div class="modal-actions"><button class="btn" id="att-close">Close</button></div></div>`;
+    document.body.appendChild(ov); ov.querySelector('#att-close').onclick = () => ov.remove();
+  }; });
   pane.querySelectorAll('[data-md]').forEach((b) => { b.onclick = async () => { if (await act(api(`/api/redev/meetings/${b.dataset.md}`, { method: 'PUT', body: { next_action_done: true } }), 'Done')) rdMeetings(pane); }; });
 }
 

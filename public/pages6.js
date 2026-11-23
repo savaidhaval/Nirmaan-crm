@@ -72,12 +72,15 @@ async function receiveMaterial(poId) {
     if (v && await postOrQueue(`/api/procurement/pos/${poId}/grn`, v, 'Receipt recorded')) loadProcurement();
     return;
   }
+  // Lines not yet tied to a store item get a picker, so what arrives is counted in the store.
+  const stockOpts = d.items.some((i) => !i.stock_item_id) && typeof stockItemOptions === 'function' ? await stockItemOptions() : [];
   const v = await openForm({ title: `Material received · ${d.po.po_no}`, intro: 'Type how much arrived today for each item. Leave blank if nothing came.', fields: [
     { name: 'received_on', label: 'Date', type: 'date', value: today() }, { name: 'challan_no', label: 'Challan / delivery note no.' },
-    ...d.items.map((i) => ({ name: 'q' + i.id, label: `${i.description} (${i.unit || 'units'})`, type: 'number', placeholder: `${Math.max(0, i.ordered - i.received)} still due of ${i.ordered}` })),
+    ...d.items.flatMap((i) => [{ name: 'q' + i.id, label: `${i.description} (${i.unit || 'units'})`, type: 'number', placeholder: `${Math.max(0, i.ordered - i.received)} still due of ${i.ordered}` },
+      ...(!i.stock_item_id && stockOpts.length ? [{ name: 's' + i.id, label: `Add "${i.description}" to the store as`, type: 'select', options: stockOpts, help: 'Pick the store item so the store count goes up.' }] : [])]),
     { name: 'qty_note', label: 'Condition / remarks' }] });
   if (!v) return;
-  const lines = d.items.filter((i) => Number(v['q' + i.id]) > 0).map((i) => ({ po_item_id: i.id, qty_received: Number(v['q' + i.id]) }));
+  const lines = d.items.filter((i) => Number(v['q' + i.id]) > 0).map((i) => ({ po_item_id: i.id, qty_received: Number(v['q' + i.id]), stock_item_id: Number(v['s' + i.id]) || undefined }));
   if (!lines.length) { toast('Enter a quantity for at least one item'); return; }
   const over = d.items.find((i) => Number(v['q' + i.id]) > i.ordered - i.received);
   if (over && !confirm(`More than ordered for "${over.description}". Save anyway?`)) return;

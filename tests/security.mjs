@@ -178,7 +178,13 @@ ok('bad payment plan refused', (await owner.call('POST', '/api/sales/plan-stages
 const vend = (await owner.call('POST', '/api/procurement/vendors', { name: 'zz vendor ' + run })).data.data.id;
 const po = (await owner.call('POST', '/api/procurement/pos', { project_id: pid, vendor_id: vend, items: [{ description: 'x', qty: 1, rate_paise: 100000 }] })).data.data.id;
 await owner.call('POST', `/api/procurement/pos/${po}/submit`);
-ok('creator cannot approve own PO', (await owner.call('POST', `/api/procurement/pos/${po}/approve`)).status === 403);
+{ const em = `zz-pm2-${run}@test.local`; const nu = await owner.call('POST', '/api/users', { name: 'zz pm2', email: em, role: 'pm', projects: [pid] });
+  const pm2 = { c: new Client() }; await pm2.c.login(em, nu.data.data.temporaryPassword); await pm2.c.call('POST', '/api/auth/change-password', { currentPassword: nu.data.data.temporaryPassword, newPassword: 'ZzStrongPass2-' + run });
+  const po2 = (await pm2.c.call('POST', '/api/procurement/pos', { project_id: pid, vendor_id: vend, items: [{ description: 'y', qty: 1, rate_paise: 100000 }] })).data.data.id;
+  await pm2.c.call('POST', `/api/procurement/pos/${po2}/submit`);
+  ok('a PM cannot approve a PO they created', (await pm2.c.call('POST', `/api/procurement/pos/${po2}/approve`)).status === 403); }
+ok('the Owner (super user) can approve a PO they created', (await owner.call('POST', `/api/procurement/pos/${po}/approve`)).status === 200);
+ok('the audit marks it "approved by Owner as maker"', (await owner.call('GET', `/api/audit?entity=pro_pos&entity_id=${po}`)).data.data.audit.some((a) => /approved by Owner as maker/.test(a.summary)));
 
 // --- archive
 await owner.call('POST', `/api/projects/${otherPid}/archive`);

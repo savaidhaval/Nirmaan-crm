@@ -31,11 +31,12 @@ async function renderStores(main) {
   const mgr = isRole('owner', 'pm', 'purchase');
   main.innerHTML = `<h1>Store</h1><div class="field"><label>Project</label><select id="stk-project">${projects.map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join('')}</select></div>
     <div class="grid"><button class="btn btn-primary btn-full" id="stk-issue">📤 Issue to work</button>
-    <button class="btn btn-full" id="stk-adjust">⚖ Stock count differs</button>${mgr ? '<button class="btn btn-full" id="stk-item">➕ New item</button><button class="btn btn-full" id="stk-transfer">🚚 Send to another site</button>' : ''}</div><div id="stk-body">Loading...</div>`;
+    <button class="btn btn-full" id="stk-receive">📥 Stock received</button><button class="btn btn-full" id="stk-adjust">⚖ Stock count differs</button>${mgr ? '<button class="btn btn-full" id="stk-item">➕ New item</button><button class="btn btn-full" id="stk-transfer">🚚 Send to another site</button>' : ''}</div><div id="stk-body">Loading...</div>`;
   const pid = () => Number($('stk-project').value);
   $('stk-project').onchange = () => loadStores(pid());
   $('stk-issue').onclick = () => storeIssue(pid());
   $('stk-adjust').onclick = () => storeAdjust(pid());
+  $('stk-receive').onclick = () => storeReceive(pid());
   if (mgr) { $('stk-item').onclick = async () => { const v = await openForm({ title: 'New store item', fields: [{ name: 'name', label: 'Item (e.g. Cement)', required: true }, { name: 'unit', label: 'Unit (bags, kg, nos…)' }, { name: 'category', label: 'Category' }] }); if (v && await act(api('/api/stores/items', { method: 'POST', body: v }), 'Item added')) loadStores(pid()); };
     $('stk-transfer').onclick = () => storeTransfer(pid(), projects); }
   loadStores(pid());
@@ -47,7 +48,7 @@ async function loadStores(pid) {
     const [stock, moves] = await Promise.all([stockList(pid), api(`/api/stores/moves?project_id=${pid}`).catch(() => ({ data: { moves: [] } }))]);
     const mgr = isRole('owner', 'pm', 'purchase'), canA = isRole('owner', 'pm');
     const pending = moves.data.moves.filter((m) => m.status === 'pending');
-    let html = pending.length && canA ? '<h3>Waiting for approval</h3>' + pending.map((m) => `<div class="card"><b>${esc(m.item)}</b>: ${m.qty > 0 ? '+' : ''}${qtyText(m.qty)} ${esc(m.unit || '')}<p class="muted">${esc(m.note || '')} · ${esc(m.by_name || '')}</p><div class="row-btns"><button class="btn small btn-primary" data-mv="approve" data-id="${m.id}">Approve</button><button class="btn small" data-mv="reject" data-id="${m.id}">Reject</button></div></div>`).join('') : '';
+    let html = pending.length && canA ? '<h3>Waiting for approval</h3>' + pending.map((m) => `<div class="card"><b>${esc(m.item)}</b> · ${m.kind === 'receipt' ? 'received' : 'count differs'}: ${m.qty > 0 ? '+' : ''}${qtyText(m.qty)} ${esc(m.unit || '')}<p class="muted">${esc(m.note || '')} · ${esc(m.by_name || '')}</p><div class="row-btns"><button class="btn small btn-primary" data-mv="approve" data-id="${m.id}">Approve</button><button class="btn small" data-mv="reject" data-id="${m.id}">Reject</button></div></div>`).join('') : '';
     html += '<h3>Stock on hand</h3>' + (stock.map((s) => `<div class="card"><div class="row"><div><b>${esc(s.name)}</b><p class="muted">${esc(s.category || '')}${s.reorder_level ? ` · reorder at ${qtyText(s.reorder_level)}` : ''}</p></div><div style="text-align:right"><b style="font-size:1.3em">${qtyText(s.qty)}</b> ${esc(s.unit || '')}<br>${s.low ? chip('Low', 'bad') : ''}</div></div>${mgr ? `<button class="btn small" data-reorder="${s.item_id}" data-name="${esc(s.name)}" data-lvl="${s.reorder_level}">Set reorder level</button>` : ''}</div>`).join('')
       || '<div class="card"><p>No items yet.</p><p class="muted">Add items. Material received against a purchase order that is tied to an item goes into the store by itself.</p></div>');
     const KIND = { receipt: 'Received', issue: 'Issued', transfer_out: 'Sent out', transfer_in: 'Received from site', adjust: 'Count adjusted' };
@@ -76,6 +77,20 @@ async function storeIssue(pid) {
     { name: 'qty', label: 'How much', type: 'number', required: true }, { name: 'where_used', label: 'Where used (e.g. Slab 3, Wing B)' }] });
   if (!v) return;
   if (await postOrQueue('/api/stores/issue', { project_id: pid, item_id: Number(v.item_id), qty: v.qty, where_used: v.where_used }, 'Issued')) loadStores(pid);
+}
+
+// Stock that came in without a purchase order: opening stock, bought for cash, returned from work.
+async function storeReceive(pid) {
+  const stock = await stockList(pid).catch(() => []);
+  if (!stock.length) { toast(isRole('owner', 'pm', 'purchase') ? 'Add the item first with "New item"' : 'Ask Purchase to add the item first'); return; }
+  const mgr = isRole('owner', 'pm', 'purchase');
+  const v = await openForm({ title: 'Stock received', intro: mgr ? 'For material that came without a purchase order. Material received against a PO is added by itself.' : 'For material that came without a purchase order. A manager approves it before the count changes.', fields: [
+    { name: 'item_id', label: 'Item', type: 'select', options: stock.map((s) => [s.item_id, `${s.name} (${qtyText(s.qty)} ${s.unit || ''} in store now)`]) },
+    { name: 'qty', label: 'How much came in', type: 'number', required: true },
+    { name: 'note', label: 'Where from?', type: 'select', options: [['Opening stock', 'Opening stock (already at site)'], ['Bought for cash', 'Bought for cash'], ['Returned from work', 'Returned from work'], ['Other', 'Other']] },
+    { name: 'detail', label: 'Details (bill no., supplier, etc.)' }] });
+  if (!v) return;
+  if (await postOrQueue('/api/stores/receive', { project_id: pid, item_id: Number(v.item_id), qty: v.qty, note: [v.note, v.detail].filter(Boolean).join(': ') }, mgr ? 'Added to store' : 'Sent for approval')) loadStores(pid);
 }
 
 async function storeAdjust(pid) {
@@ -113,7 +128,7 @@ async function loadPetty() {
     const [funds, pending] = await Promise.all([api('/api/petty/funds'), canA ? api('/api/petty/pending') : { data: { entries: [] } }]);
     let html = mgr && isRole('owner', 'pm', 'accounts') ? '<button class="btn btn-full" id="pty-open">➕ Open a petty-cash fund</button>' : '';
     if (pending.data.entries.length) html += '<h3>Waiting for your approval</h3>' + pending.data.entries.map((e) => `<div class="card"><div class="row"><div><b>${moneyP(e.amount_paise)}</b> · ${esc(e.kind === 'return' ? 'cash returned' : (e.category || 'expense'))}<p class="muted">${esc(e.by_name || '')} · ${esc(e.project)} · ${esc(e.entry_date)}${e.narration ? ' · ' + esc(e.narration) : ''}</p></div></div>
-      <div class="row-btns"><button class="btn small" data-pty-photos="${e.id}">Bill photo</button>${e.created_by !== currentUser.id ? `<button class="btn small btn-primary" data-pty="approve" data-id="${e.id}">Approve</button><button class="btn small" data-pty="reject" data-id="${e.id}">Reject</button>` : '<span class="muted">Another approver is needed</span>'}</div></div>`).join('');
+      <div class="row-btns"><button class="btn small" data-pty-photos="${e.id}">Bill photo</button>${(e.created_by !== currentUser.id || currentUser.role === 'owner') ? `<button class="btn small btn-primary" data-pty="approve" data-id="${e.id}">Approve</button><button class="btn small" data-pty="reject" data-id="${e.id}">Reject</button>` : '<span class="muted">Another approver is needed</span>'}</div></div>`).join('');
     html += '<h3>' + (isRole('site') ? 'My fund' : 'Funds') + '</h3>' + (funds.data.funds.map((f) => `<div class="card clickable" data-fund="${f.id}"><div class="row"><div><b>${esc(f.project)}</b><p class="muted">${esc(f.custodian || '')}</p></div><div style="text-align:right"><b style="font-size:1.4em">${moneyP(f.balance_paise)}</b>${f.low ? '<br>' + chip('Running low', 'bad') : ''}${f.pending_paise ? `<br><span class="muted">${moneyP(f.pending_paise)} waiting</span>` : ''}</div></div></div>`).join('')
       || '<div class="card"><p>No petty-cash fund yet.</p><p class="muted">' + (mgr ? 'Open one for the person who keeps cash at the site.' : 'Ask Accounts or the Owner to open one for you.') + '</p></div>');
     body.innerHTML = html;

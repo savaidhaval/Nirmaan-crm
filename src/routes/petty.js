@@ -121,13 +121,13 @@ export function registerPetty(router, h) {
     try {
       const e = await env.DB.prepare('SELECT e.*, f.project_id, f.custodian_user_id FROM pty_entries e JOIN pty_funds f ON f.id = e.fund_id WHERE e.id = ?').bind(Number(req.params.id)).first();
       if (!e || !(await visibleProjectIds(env, req.user)).includes(e.project_id)) return json({ ok: false, error: 'Entry not found.' }, 404);
-      if (e.created_by === req.user.user_id) return json({ ok: false, error: 'You cannot approve your own entry.' }, 403);
+      if (e.created_by === req.user.user_id && req.user.role !== 'owner') return json({ ok: false, error: 'You cannot approve your own entry.' }, 403);
       const b = await req.json().catch(() => ({}));
       if (!approve && !String(b.note || '').trim()) return json({ ok: false, error: 'Please say why it is rejected.' }, 400);
       const r = await env.DB.prepare("UPDATE pty_entries SET status = ?, approved_by = ?, decided_at = ?, decision_note = ? WHERE id = ? AND status = 'submitted'")
         .bind(approve ? 'approved' : 'rejected', req.user.user_id, nowStr(), String(b.note || '').slice(0, 200), e.id).run();
       if (!r.meta.changes) return json({ ok: false, error: 'This entry was already decided.' }, 409);
-      await audit(env, req.user, approve ? 'approve' : 'reject', e.id, `${req.user.name} ${approve ? 'approved' : 'rejected'} petty cash ${rupees(e.amount_paise)}`).run();
+      await audit(env, req.user, approve ? 'approve' : 'reject', e.id, `${req.user.name} ${approve ? 'approved' : 'rejected'} petty cash ${rupees(e.amount_paise)}${e.created_by === req.user.user_id ? ' (approved by Owner as maker)' : ''}`).run();
       await notifyUsers(env, [e.created_by], `Petty cash ${approve ? 'approved' : 'rejected'}: ${rupees(e.amount_paise)}`, String(b.note || ''));
       let low = false;
       if (approve) {

@@ -151,11 +151,37 @@ export function registerStores(router, h) {
     } catch (e) { return serverError(e, 'stk-adjust'); }
   }));
 
+  // Stock received without a purchase order (opening stock, cash purchase, returned from work).
+  // Purchase, the PM or the Owner add it straight away; anyone else's entry waits for a PM or the Owner.
+  router.post('/api/stores/receive', async (req, env) => withAuth(req, env, 'stores', 'C', async (req, env) => {
+    try {
+      const b = await req.json(); const pid = Number(b.project_id), itemId = Number(b.item_id), q = num(b.qty);
+      if (!(await projectOk(env, req, pid))) return json({ ok: false, error: 'Not allowed.' }, 403);
+      const it = await item(env, itemId);
+      if (!it) return json({ ok: false, error: 'Pick an item.' }, 400);
+      if (!(q > 0)) return json({ ok: false, error: 'Enter how much came in.' }, 400);
+      const note = String(b.note || '').trim().slice(0, 200);
+      if (!note) return json({ ok: false, error: 'Say where it came from (e.g. opening stock, bought for cash, returned from site).' }, 400);
+      const uuid = String(b.client_uuid || crypto.randomUUID());
+      const dup = await env.DB.prepare('SELECT id FROM stk_moves WHERE client_uuid = ?').bind(uuid).first();
+      if (dup) return json({ ok: true, data: { id: dup.id, duplicate: true } });
+      const now = nowStr(), direct = MANAGERS.includes(req.user.role);
+      const res = await env.DB.batch([
+        env.DB.prepare("INSERT INTO stk_moves (project_id, item_id, kind, qty, status, note, by_user, client_uuid, created_at) VALUES (?, ?, 'receipt', ?, ?, ?, ?, ?, ?)")
+          .bind(pid, itemId, q, direct ? 'posted' : 'pending', note, req.user.user_id, uuid, now),
+        ...(direct ? [env.DB.prepare('INSERT INTO stk_balance (project_id, item_id, qty) VALUES (?, ?, ?) ON CONFLICT(project_id, item_id) DO UPDATE SET qty = qty + excluded.qty').bind(pid, itemId, q),
+          audit(env, req.user, 'receive', null, `Stock received: ${fmt(q)} ${it.unit || ''} ${it.name} (${note})`)] : []),
+      ]);
+      if (!direct) await notifyRoles(env, ['pm', 'owner'], `Stock received to approve: ${it.name}`, `${req.user.name}: +${fmt(q)} ${it.unit || ''}. ${note.slice(0, 100)}`);
+      return json({ ok: true, data: { id: res[0].meta.last_row_id, pending: !direct, on_hand: await onHand(env, pid, itemId) } });
+    } catch (e) { return serverError(e, 'stk-receive'); }
+  }));
+
   const decide = (approve) => (req, env) => withAuth(req, env, 'stores', 'A', async (req, env) => {
     try {
-      const mv = await env.DB.prepare("SELECT * FROM stk_moves WHERE id = ? AND kind = 'adjust'").bind(Number(req.params.id)).first();
-      if (!mv || !(await projectOk(env, req, mv.project_id))) return json({ ok: false, error: 'Adjustment not found.' }, 404);
-      if (mv.by_user === req.user.user_id) return json({ ok: false, error: 'You cannot approve your own adjustment.' }, 403);
+      const mv = await env.DB.prepare("SELECT * FROM stk_moves WHERE id = ? AND kind IN ('adjust', 'receipt')").bind(Number(req.params.id)).first();
+      if (!mv || !(await projectOk(env, req, mv.project_id))) return json({ ok: false, error: 'Entry not found.' }, 404);
+      if (mv.by_user === req.user.user_id && req.user.role !== 'owner') return json({ ok: false, error: 'You cannot approve your own entry.' }, 403);
       const now = nowStr();
       if (!approve) {
         const r = await env.DB.prepare("UPDATE stk_moves SET status = 'rejected', approved_by = ?, decided_at = ? WHERE id = ? AND status = 'pending'").bind(req.user.user_id, now, mv.id).run();
@@ -164,9 +190,9 @@ export function registerStores(router, h) {
       }
       if ((await onHand(env, mv.project_id, mv.item_id)) + mv.qty < -0.000001) return json({ ok: false, error: 'That would take the stock below zero. Check the count.' }, 400);
       const res = await env.DB.batch([
-        env.DB.prepare("UPDATE stk_moves SET status = 'posted', approved_by = ?1, decided_at = ?2 WHERE id = ?3 AND status = 'pending' AND by_user != ?1").bind(req.user.user_id, now, mv.id),
+        env.DB.prepare("UPDATE stk_moves SET status = 'posted', approved_by = ?1, decided_at = ?2 WHERE id = ?3 AND status = 'pending' AND (by_user != ?1 OR ?4 = 1)").bind(req.user.user_id, now, mv.id, req.user.role === 'owner' ? 1 : 0),
         env.DB.prepare("INSERT INTO stk_balance (project_id, item_id, qty) SELECT project_id, item_id, qty FROM stk_moves WHERE id = ?1 AND status = 'posted' AND approved_by = ?2 AND changes() > 0 ON CONFLICT(project_id, item_id) DO UPDATE SET qty = qty + excluded.qty").bind(mv.id, req.user.user_id),
-        audit(env, req.user, 'approve', mv.id, `Stock adjustment ${mv.qty} approved`),
+        audit(env, req.user, 'approve', mv.id, `Stock ${mv.kind === 'receipt' ? 'receipt' : 'adjustment'} ${mv.qty} approved${mv.by_user === req.user.user_id ? ' (approved by Owner as maker)' : ''}`),
       ]);
       if (!res[0].meta.changes) return json({ ok: false, error: 'Already decided.' }, 409);
       return json({ ok: true });
