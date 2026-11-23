@@ -32,6 +32,9 @@ const MATRIX = {
   tally: {
     owner: 'VCEAX', pm: '–', site: '–', sales: '–', accounts: 'VCEX', purchase: '–', hr: '–', viewer: 'VX',
   },
+  bd: {
+    owner: 'VCEAX', pm: 'VCEA', site: '–', sales: '–', accounts: 'V', purchase: '–', hr: '–', viewer: 'V',
+  },
   feasibility: {
     owner: 'VCEAX', pm: 'VCE', site: '–', sales: '–', accounts: 'V', purchase: '–', hr: '–', viewer: 'V',
   },

@@ -18,6 +18,12 @@ export async function feasibilitySweep(env, getSetting) {
       AND NOT EXISTS (SELECT 1 FROM notifications n WHERE n.user_id = u.id AND n.title = 'Feasibility review due: ' || p.name AND n.created_at > datetime('now', '-7 days'))`).bind(days).run();
 }
 
+// Statement that copies a Business Development study into a new project's feasibility versions (used when an opportunity becomes a project).
+export function feasibilityFromStudy(env, projectId, s, userId, now) {
+  return env.DB.prepare(`INSERT INTO fea_versions (project_id, version, title, notes, study_date, est_cost_paise, est_revenue_paise, saleable_sqft, completion_months, document_id, created_by, created_at)
+    VALUES (?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(projectId, s.title || 'Feasibility (from Business Development)', s.notes || null, s.study_date, s.est_cost_paise, s.est_revenue_paise, s.saleable_sqft, s.completion_months, s.document_id, userId, now);
+}
+
 export function registerFeasibility(router, h) {
   const { withAuth, json, serverError, visibleProjectIds, nowStr } = h;
   const audit = (env, user, action, id, summary) => env.DB.prepare('INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, ?, ?, ?, ?, ?)').bind(user.user_id, action, 'fea_versions', id || 0, String(summary).slice(0, 300), nowStr());

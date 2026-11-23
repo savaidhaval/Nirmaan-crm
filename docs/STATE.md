@@ -173,3 +173,7 @@ All audit items are now built. 32 API suites pass on a clean database (new: rema
 
 ## Drawing files
 No migration (drw_revisions.document_id already existed). 33 API suites pass (new: drawing_files, 14 checks) and a phone walkthrough (4 checks). In the same PR as the rest of the audit.
+
+## Business Development, project life cycle, grouped settings (migration 0039)
+34 API suites pass on a clean database (new: bd, 45 checks) and a phone walkthrough (11 checks). Busiest new route: open as project, 16 statements; project life cycle 12; hourly sweep 39 of 50. Not deployed until Dhaval approves the PR.
+
