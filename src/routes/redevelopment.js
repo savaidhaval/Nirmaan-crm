@@ -47,6 +47,7 @@ const MONTHS_FROM_START = `((CAST(substr(red_transit_schedule.period, 1, 4) AS I
 const REPRICE_SQL = `UPDATE red_transit_schedule SET due_paise = COALESCE((SELECT ${YEAR_RENT(`(${MONTHS_FROM_START} + ${OFFSET})`)} FROM red_transit_terms t JOIN red_members rm ON rm.id = t.member_id WHERE t.member_id = red_transit_schedule.member_id), due_paise)
   WHERE member_id = ? AND NOT EXISTS (SELECT 1 FROM red_transit_payments p WHERE p.schedule_id = red_transit_schedule.id AND p.reversed_at IS NULL)`;
 
+// Day comparisons below use India time (date('now', '+330 minutes')); a UTC date would be a day behind between midnight and 5:30 am IST.
 export async function redevSweep(env, getSetting) {
   const day = Math.min(28, Math.max(1, Math.round(Number(await getSetting(env, 'red.rent_due_day')) || 1)));
   const grace = await ocGrace(env, getSetting);
@@ -59,27 +60,27 @@ export async function redevSweep(env, getSetting) {
     env.DB.prepare(`INSERT INTO notifications (user_id, title, body, link, created_at)
       SELECT u.id, 'Transit rent due soon: ' || x.name, x.n || ' member(s) have rent due within 3 days.', 'redevelopment', datetime('now')
       FROM (SELECT s.id AS sid, s.name, COUNT(*) AS n FROM red_transit_schedule r JOIN red_members m ON m.id = r.member_id AND m.deleted_at IS NULL JOIN red_societies s ON s.id = m.society_id AND s.deleted_at IS NULL
-        WHERE r.due_on BETWEEN date('now') AND date('now', '+3 days') AND r.due_paise > COALESCE((SELECT SUM(p.amount_paise) FROM red_transit_payments p WHERE p.schedule_id = r.id AND p.reversed_at IS NULL), 0) GROUP BY s.id) x
+        WHERE r.due_on BETWEEN date('now', '+330 minutes') AND date('now', '+330 minutes', '+3 days') AND r.due_paise > COALESCE((SELECT SUM(p.amount_paise) FROM red_transit_payments p WHERE p.schedule_id = r.id AND p.reversed_at IS NULL), 0) GROUP BY s.id) x
       JOIN users u ON u.role = 'accounts' AND u.active = 1 AND u.deleted_at IS NULL
       WHERE NOT EXISTS (SELECT 1 FROM notifications n WHERE n.user_id = u.id AND n.title = 'Transit rent due soon: ' || x.name AND date(n.created_at) = date('now'))`),
     // overdue rent: Owner and Accounts
     env.DB.prepare(`INSERT INTO notifications (user_id, title, body, link, created_at)
       SELECT u.id, 'Transit rent overdue: ' || x.name, x.n || ' month(s) of rent are overdue.', 'redevelopment', datetime('now')
       FROM (SELECT s.id AS sid, s.name, COUNT(*) AS n FROM red_transit_schedule r JOIN red_members m ON m.id = r.member_id AND m.deleted_at IS NULL JOIN red_societies s ON s.id = m.society_id AND s.deleted_at IS NULL
-        WHERE r.due_on < date('now') AND r.due_paise > COALESCE((SELECT SUM(p.amount_paise) FROM red_transit_payments p WHERE p.schedule_id = r.id AND p.reversed_at IS NULL), 0) GROUP BY s.id) x
+        WHERE r.due_on < date('now', '+330 minutes') AND r.due_paise > COALESCE((SELECT SUM(p.amount_paise) FROM red_transit_payments p WHERE p.schedule_id = r.id AND p.reversed_at IS NULL), 0) GROUP BY s.id) x
       JOIN users u ON u.role IN ('owner', 'accounts') AND u.active = 1 AND u.deleted_at IS NULL
       WHERE NOT EXISTS (SELECT 1 FROM notifications n WHERE n.user_id = u.id AND n.title = 'Transit rent overdue: ' || x.name AND date(n.created_at) = date('now'))`),
     // bank guarantees expiring within 30 days: Owner and Accounts
     env.DB.prepare(`INSERT INTO notifications (user_id, title, body, link, created_at)
       SELECT u.id, 'Bank guarantee expiring: ' || m.member_name, 'Guarantee ' || COALESCE(t.bg_ref, '') || ' expires on ' || t.bg_expiry || '.', 'redevelopment', datetime('now')
       FROM red_transit_terms t JOIN red_members m ON m.id = t.member_id AND m.deleted_at IS NULL JOIN users u ON u.role IN ('owner', 'accounts') AND u.active = 1 AND u.deleted_at IS NULL
-      WHERE t.bg_expiry BETWEEN date('now') AND date('now', '+30 days')
+      WHERE t.bg_expiry BETWEEN date('now', '+330 minutes') AND date('now', '+330 minutes', '+30 days')
         AND NOT EXISTS (SELECT 1 FROM notifications n WHERE n.user_id = u.id AND n.title = 'Bank guarantee expiring: ' || m.member_name AND date(n.created_at) = date('now'))`),
     // meeting follow-ups due within 2 days: the PMs
     env.DB.prepare(`INSERT INTO notifications (user_id, title, body, link, created_at)
       SELECT u.id, 'Meeting action due: ' || s.name, mt.next_action || ' (due ' || mt.next_action_due || ')', 'redevelopment', datetime('now')
       FROM red_meetings mt JOIN red_societies s ON s.id = mt.society_id AND s.deleted_at IS NULL JOIN users u ON u.role = 'pm' AND u.active = 1 AND u.deleted_at IS NULL
-      WHERE mt.deleted_at IS NULL AND mt.next_action_done = 0 AND mt.next_action_due IS NOT NULL AND mt.next_action_due <= date('now', '+2 days')
+      WHERE mt.deleted_at IS NULL AND mt.next_action_done = 0 AND mt.next_action_due IS NOT NULL AND mt.next_action_due <= date('now', '+330 minutes', '+2 days')
         AND NOT EXISTS (SELECT 1 FROM notifications n WHERE n.user_id = u.id AND n.title = 'Meeting action due: ' || s.name AND n.body = mt.next_action || ' (due ' || mt.next_action_due || ')' AND date(n.created_at) = date('now'))`),
   ]);
 }

@@ -51,8 +51,9 @@ ok('hr cannot read sales', (await hr.call('GET', '/api/sales/leads')).status ===
 
 // site: idempotent report + photo + snag flow
 const uuid = crypto.randomUUID();
-const d1 = await site.call('POST', '/api/site/dprs', { project_id: pid, report_date: '2026-11-21', work_summary: 'Slab', client_uuid: uuid });
-const d2 = await site.call('POST', '/api/site/dprs', { project_id: pid, report_date: '2026-11-21', work_summary: 'Slab', client_uuid: uuid });
+const yesterday = new Date(Date.now() + 19800000 - 86400000).toISOString().slice(0, 10);   // not a fixed date: the site role may not file reports older than 2 days
+const d1 = await site.call('POST', '/api/site/dprs', { project_id: pid, report_date: yesterday, work_summary: 'Slab', client_uuid: uuid });
+const d2 = await site.call('POST', '/api/site/dprs', { project_id: pid, report_date: yesterday, work_summary: 'Slab', client_uuid: uuid });
 ok('DPR retry returns same record', d1.status === 200 && d2.status === 200 && d1.data.id === d2.data.id && d2.data.duplicate === true);
 const ph = new FormData(); ph.append('file', png(), 'p.png'); ph.append('title', 'Site photo'); ph.append('module', 'site'); ph.append('entity', 'site_dprs'); ph.append('entity_id', String(d1.data.id)); ph.append('project_id', String(pid)); ph.append('category', 'photo');
 ok('site engineer can attach a photo', (await site.call('POST', '/api/files/upload', ph)).status === 200);

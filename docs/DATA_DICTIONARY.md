@@ -450,3 +450,7 @@ id TEXT PK, source TEXT, seen_at TEXT
 - Settings: red.rtgs_min_paise (default 20000000 = Rs 2,00,000: lines at or above it are marked RTGS, below it NEFT; confirm with your bank).
 - Site board: nothing stored. Readiness = average of checks that apply (IOD approved, CC or plinth CC approved, site proofs on file, PAAA registered, flats vacated, utilities disconnected). Monday note link: siteboard#monday:<date>, once per day.
 
+## Module 5 screens (migration 0043)
+- Index idx_snag_unit on site_snags(unit_id, status): the Possession list counts open snags per flat. No new table or column.
+- GET /api/possession (perm sales V): per booked, not cancelled flat: stage not_started (no sal_handover row) | in_progress | handed_over, open checklist items (sal_handover_items.done = 0) and open snags (site_snags for that unit_id, status other than verified). The customer name is shown only to Owner, PM, Accounts and Sales.
+
