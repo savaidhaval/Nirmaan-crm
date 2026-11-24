@@ -75,7 +75,9 @@ async function receiveMaterial(poId) {
   // Lines not yet tied to a store item get a picker, so what arrives is counted in the store.
   const stockOpts = d.items.some((i) => !i.stock_item_id) && typeof stockItemOptions === 'function' ? await stockItemOptions() : [];
   const v = await openForm({ title: `Material received · ${d.po.po_no}`, intro: 'Type how much arrived today for each item. Leave blank if nothing came.', fields: [
-    { name: 'received_on', label: 'Date', type: 'date', value: today() }, { name: 'challan_no', label: 'Challan / delivery note no.' },
+    { name: 'received_on', label: 'Date', type: 'date', value: today() }, { name: 'challan_no', label: 'Challan / delivery note no. (required, one use per supplier)', required: true },
+    { name: 'truck_no', label: 'Truck number plate' }, { name: 'weight_kg', label: 'Weighbridge weight on the challan (kg)', type: 'number' },
+    { name: 'photo', label: 'Gate photo: truck number plate, material and challan together', type: 'file', help: 'No photo, no payment: the supplier bill stays on hold until every receipt has its photo. No signal? Save now and add the photo later.' },
     ...d.items.flatMap((i) => [{ name: 'q' + i.id, label: `${i.description} (${i.unit || 'units'})`, type: 'number', placeholder: `${Math.max(0, i.ordered - i.received)} still due of ${i.ordered}` },
       ...(!i.stock_item_id && stockOpts.length ? [{ name: 's' + i.id, label: `Add "${i.description}" to the store as`, type: 'select', options: stockOpts, help: 'Pick the store item so the store count goes up.' }] : [])]),
     { name: 'qty_note', label: 'Condition / remarks' }] });
@@ -90,7 +92,13 @@ async function receiveMaterial(poId) {
     const x = await openForm({ title: 'More than ordered', intro: `"${over.description}": more than the PO quantity. Accept the extra?`, fields: [{ name: 'n', label: 'Why accept it?', type: 'textarea', required: true }] });
     if (!x) return; excess_note = x.n;
   }
-  const r = await postOrQueue(`/api/procurement/pos/${poId}/grn-lines`, { received_on: v.received_on, challan_no: v.challan_no, qty_note: v.qty_note, lines, excess_note }, 'Receipt recorded');
+  const gate = { truck_no: v.truck_no || undefined, weight_kg: v.weight_kg || undefined };
+  try { const pos = await new Promise((ok, no) => navigator.geolocation ? navigator.geolocation.getCurrentPosition(ok, no, { timeout: 4000, maximumAge: 60000 }) : no()); gate.lat = pos.coords.latitude; gate.lng = pos.coords.longitude; gate.accuracy_m = pos.coords.accuracy; } catch (e) { /* location is optional */ }
+  if (v.photo) {
+    try { const fd = new FormData(); fd.append('file', await compressFile(v.photo), v.photo.name); fd.append('title', 'Gate photo ' + (d.po.po_no || '') + ' ' + (v.challan_no || '')); fd.append('category', 'other'); fd.append('module', 'procurement'); fd.append('project_id', String(d.po.project_id)); fd.append('audience', 'internal');
+      gate.photo_doc_id = (await api('/api/files/upload', { method: 'POST', body: fd })).data.id; } catch (e) { toast('The photo could not be saved now (no signal?). The receipt is saved without it: add the photo later or the bill stays on hold.', 8000); }
+  }
+  const r = await postOrQueue(`/api/procurement/pos/${poId}/grn-lines`, { received_on: v.received_on, challan_no: v.challan_no, qty_note: v.qty_note, lines, excess_note, ...gate }, 'Receipt recorded');
   if (r) loadProcurement();
 }
 

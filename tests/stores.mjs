@@ -30,9 +30,9 @@ await pur.call('POST', `/api/procurement/pos/${po.id}/submit`, {}); await o.call
 const pl = (await site.call('GET', `/api/procurement/pos/${po.id}/lines`)).data.items[0];
 ok('stock starts at 0', (await stock(site, pid, cem)) === 0);
 const gu = 'grn-' + run;
-ok('GRN of 100 bags', (await site.call('POST', `/api/procurement/pos/${po.id}/grn-lines`, { client_uuid: gu, lines: [{ po_item_id: pl.id, qty_received: 100 }] })).status === 200);
+ok('GRN of 100 bags', (await site.call('POST', `/api/procurement/pos/${po.id}/grn-lines`, { challan_no: 'CH' + Math.random().toString(36).slice(2, 10), client_uuid: gu, lines: [{ po_item_id: pl.id, qty_received: 100 }] })).status === 200);
 ok('store shows 100 bags', (await stock(site, pid, cem)) === 100);
-await site.call('POST', `/api/procurement/pos/${po.id}/grn-lines`, { client_uuid: gu, lines: [{ po_item_id: pl.id, qty_received: 100 }] });
+await site.call('POST', `/api/procurement/pos/${po.id}/grn-lines`, { challan_no: 'CH' + Math.random().toString(36).slice(2, 10), client_uuid: gu, lines: [{ po_item_id: pl.id, qty_received: 100 }] });
 ok('GRN retry does not double the stock', (await stock(site, pid, cem)) === 100);
 
 // ---------- issue ----------

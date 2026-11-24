@@ -6,9 +6,10 @@ function msActions(m, canE) {
   const pm = ['owner', 'pm'].includes(currentUser.role);
   const chipH = chip(...(MS_CHIP[m.status] || [m.status, '']));
   if (m.status === 'done') return `<div style="text-align:right">${chipH}${pm ? `<br><button class="btn small" data-msundo="${m.id}">Undo</button>` : ''}</div>`;
-  if (pm) return `<div style="text-align:right">${m.status === 'ready' ? chipH + '<br>' : ''}<button class="btn small btn-primary" data-mscert="${m.id}">Certify</button></div>`;
-  if (canE && m.status !== 'ready') return `<button class="btn small btn-primary" data-msready="${m.id}">Reached today</button>`;
-  return chipH;
+  const sign = m.milestone_key && canE ? `<button class="btn small" data-mssign="${m.id}">Sign-offs</button>` : '';
+  if (pm) return `<div style="text-align:right">${m.status === 'ready' ? chipH + '<br>' : ''}${sign}<button class="btn small btn-primary" data-mscert="${m.id}">Certify</button></div>`;
+  if (canE && m.status !== 'ready') return `<div style="text-align:right">${sign}<button class="btn small btn-primary" data-msready="${m.id}">Reached today</button></div>`;
+  return sign ? `<div style="text-align:right">${chipH}${sign}</div>` : chipH;
 }
 async function msUpload(file, projectId, title) {
   const fd = new FormData(); fd.append('file', typeof compressFile === 'function' ? await compressFile(file) : file, file.name);
@@ -17,6 +18,7 @@ async function msUpload(file, projectId, title) {
 }
 function msBind(el, list) {
   const byId = Object.fromEntries(list.map((m) => [String(m.id), m]));
+  el.querySelectorAll('[data-mssign]').forEach((b) => { b.onclick = () => msSignoffs(byId[b.dataset.mssign]); });
   el.querySelectorAll('[data-msready]').forEach((b) => { b.onclick = async () => {
     const v = await openForm({ title: 'Stage reached', intro: 'The PM checks it and records the architect\'s certificate. Buyers are asked to pay only after that.', fields: [
       { name: 'actual_date', label: 'Date reached', type: 'date', value: today(), required: true }, { name: 'note', label: 'Note (optional)' }] });

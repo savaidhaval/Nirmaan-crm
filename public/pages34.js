@@ -116,3 +116,20 @@ async function renderPricing(main) {
   };
   load();
 }
+
+// ---------- Owner override: a call the server refused for the CC floor or the BOQ cap can be repeated by the Owner with a written reason ----------
+async function postWithOwnerOverride(path, body, okMsg) {
+  for (let tries = 0; tries < 3; tries++) {
+    try { const r = await api(path, { method: 'POST', body }); if (okMsg) toast(okMsg); return r; }
+    catch (e) {
+      const code = e.data && e.data.code;
+      if (['cc', 'boq_cap'].includes(code) && currentUser.role === 'owner') {
+        const x = await openForm({ title: 'Go ahead anyway?', intro: e.message, fields: [{ name: 'why', label: 'Your reason (at least 10 letters)', required: true }] });
+        if (!x) return null;
+        body[code === 'cc' ? 'override_note' : 'boq_override_note'] = x.why; continue;
+      }
+      toast(e.message, 7000); return null;
+    }
+  }
+  return null;
+}

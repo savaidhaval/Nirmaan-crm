@@ -7,6 +7,10 @@ class C { constructor() { this.cookie = ''; }
     const r = await fetch(BASE + p, { method: m, headers: h, body, redirect: 'manual' }); const sc = r.headers.get('set-cookie'); if (sc) this.cookie = sc.split(';')[0]; if (raw) return r; let d = null; try { d = await r.json(); } catch (e) { /* */ } return { status: r.status, data: d && d.data, err: d && d.error }; } }
 const run = Date.now().toString(36); const digits = String(Date.now()).slice(-8);
 const o = new C(); await o.call('POST', '/api/auth/login', { email: process.env.OWNER_EMAIL, password: process.env.OWNER_PASSWORD });
+
+// A receipt needs its gate photo before the supplier bill can be paid ("no photo, no payment"): one shared test photo per project.
+let _gp = {}; const gatePhoto = async (project) => { if (_gp[project]) return _gp[project]; const fd = new FormData(); fd.append('file', new Blob([new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])], { type: 'image/png' }), 'g.png'); fd.append('title', 'gate'); fd.append('category', 'other'); fd.append('module', 'procurement'); fd.append('project_id', String(project)); fd.append('audience', 'internal');
+  _gp[project] = (await (await fetch(BASE + '/api/files/upload', { method: 'POST', headers: { 'X-NirmaanCRM': '1', cookie: o.cookie }, body: fd })).json()).data.id; return _gp[project]; };
 let seq = 0;
 const mkUser = async (role, projects) => { const email = `zp-${role}-${++seq}-${run}@test.local`; const r = await o.call('POST', '/api/users', { name: 'zp ' + role, email, role, projects }); const pw = 'ZpStrongPass-' + run; const c = new C(); await c.call('POST', '/api/auth/login', { email, password: r.data.temporaryPassword }); await c.call('POST', '/api/auth/change-password', { currentPassword: r.data.temporaryPassword, newPassword: pw }); c.id = r.data.id; c.email = email; c.pw = pw; return c; };
 const pid = (await o.call('POST', '/api/projects', { rera_no: 'P518000TEST', name: 'zz-wp4 ' + run, code: 'W4' + run.toUpperCase().slice(-6), budget_paise: 50000000 })).data.id;
@@ -54,13 +58,13 @@ const pl = (await site.call('GET', `/api/procurement/pos/${po.data.id}/lines`)).
 ok('site sees quantities but no rates', pl.items.length === 2 && pl.items.every((i) => !('rate_paise' in i) && !('amount_paise' in i)));
 const [pc, ps] = pl.items;
 const gu = 'grn-' + run;
-const g1 = await site.call('POST', `/api/procurement/pos/${po.data.id}/grn-lines`, { client_uuid: gu, lines: [{ po_item_id: pc.id, qty_received: 90 }] });
+const g1 = await site.call('POST', `/api/procurement/pos/${po.data.id}/grn-lines`, { challan_no: 'CH' + Math.random().toString(36).slice(2, 10), photo_doc_id: await gatePhoto(pid), client_uuid: gu, lines: [{ po_item_id: pc.id, qty_received: 90 }] });
 ok('90 of 100 bags received: PO part_received', g1.status === 200 && g1.data.po_status === 'part_received', JSON.stringify(g1));
-const g1b = await site.call('POST', `/api/procurement/pos/${po.data.id}/grn-lines`, { client_uuid: gu, lines: [{ po_item_id: pc.id, qty_received: 90 }] });
+const g1b = await site.call('POST', `/api/procurement/pos/${po.data.id}/grn-lines`, { challan_no: 'CH' + Math.random().toString(36).slice(2, 10), photo_doc_id: await gatePhoto(pid), client_uuid: gu, lines: [{ po_item_id: pc.id, qty_received: 90 }] });
 ok('offline retry does not duplicate', g1b.data.duplicate === true);
 ok('received total stays 90 after retry', (await site.call('GET', `/api/procurement/pos/${po.data.id}/lines`)).data.items.find((i) => i.id === pc.id).received === 90);
-ok('item from another PO refused', (await site.call('POST', `/api/procurement/pos/${po.data.id}/grn-lines`, { lines: [{ po_item_id: 99999999, qty_received: 1 }] })).status === 400);
-await site.call('POST', `/api/procurement/pos/${po.data.id}/grn-lines`, { lines: [{ po_item_id: pc.id, qty_received: 10 }, { po_item_id: ps.id, qty_received: 5 }] });
+ok('item from another PO refused', (await site.call('POST', `/api/procurement/pos/${po.data.id}/grn-lines`, { challan_no: 'CH' + Math.random().toString(36).slice(2, 10), photo_doc_id: await gatePhoto(pid), lines: [{ po_item_id: 99999999, qty_received: 1 }] })).status === 400);
+await site.call('POST', `/api/procurement/pos/${po.data.id}/grn-lines`, { challan_no: 'CH' + Math.random().toString(36).slice(2, 10), photo_doc_id: await gatePhoto(pid), lines: [{ po_item_id: pc.id, qty_received: 10 }, { po_item_id: ps.id, qty_received: 5 }] });
 ok('everything received: PO received', (await o.call('GET', '/api/procurement/pos')).data.pos.find((p) => p.id === po.data.id).status === 'received');
 const rep = (await o.call('GET', '/api/procurement/reports/po-vs-received')).data.rows.filter((r) => r.po_no === po.data.po_no);
 ok('PO vs received report is exact', rep.length === 2 && rep.every((r) => r.received === r.ordered));

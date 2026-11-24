@@ -2,6 +2,7 @@
 // Labour is paid through contractors, so there is no payroll. All money is integer paise; rates for GST/TDS are settings.
 import { emit } from '../core/events.js';
 import { approvalState, isDate, demolitionBlock, ccFloorBlock } from '../core/gates.js';
+import { ccOverFloor, boqCapProblem } from './m3gaps.js';
 
 const rupees = (p) => '₹' + (Number(p) / 100).toLocaleString('en-IN');
 const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
@@ -196,6 +197,15 @@ export function registerContractors(router, h) {
         if (i.wast != null && !(i.wast >= 0 && i.wast <= 5000)) return json({ ok: false, error: 'Allowed wastage looks wrong.' }, 400);
       }
       if (basis !== 'lump_sum' && !items.length) return json({ ok: false, error: 'Add the items with quantity and rate.' }, 400);
+      // CC floor and BOQ cap: the Owner may go ahead only with a written reason; anyone else is stopped.
+      const woWing = String(b.wing || '').trim().slice(0, 20) || null;
+      const woFloor = b.floor === '' || b.floor == null ? null : Math.round(num(b.floor));
+      if (woFloor != null && !(woFloor >= 0 && woFloor <= 200)) return json({ ok: false, error: 'Check the floor number (0 is the plinth).' }, 400);
+      const ccMsg = await ccOverFloor(env, pid, woWing, [woFloor]);
+      const capMsg = await boqCapProblem(env, pid, items.map((i) => ({ boq: i.boq, qty: i.qty, rate: i.rate })));
+      let ccNote = null, boqNote = null;
+      if (ccMsg) { const why = String(b.override_note || '').trim().slice(0, 300); if (req.user.role !== 'owner' || why.length < 10) return json({ ok: false, error: ccMsg + (req.user.role === 'owner' ? ' As the Owner you can go ahead only with a written reason.' : ' A work order for this floor cannot be issued yet.'), code: 'cc' }, 409); ccNote = why; }
+      if (capMsg) { const why = String(b.boq_override_note || '').trim().slice(0, 300); if (req.user.role !== 'owner' || why.length < 10) return json({ ok: false, error: capMsg + (req.user.role === 'owner' ? ' As the Owner you can go ahead only with a written reason.' : ' Ask the Owner, or raise a BOQ change first.'), code: 'boq_cap' }, 409); boqNote = why; }
       const value = items.length ? items.reduce((t, i) => t + Math.round(i.qty * i.rate), 0) : Math.round(num(b.value_paise));
       if (!(value > 0)) return json({ ok: false, error: 'Enter the work order value.' }, 400);
       const ret = Math.round(num(b.retention_bp));
@@ -209,8 +219,8 @@ export function registerContractors(router, h) {
       const c = await env.DB.prepare('INSERT INTO counters (key, value) VALUES (?, 1) ON CONFLICT(key) DO UPDATE SET value = value + 1 RETURNING value').bind(`wo:${pid}`).first();
       const proj = await env.DB.prepare('SELECT code FROM projects WHERE id = ?').bind(pid).first();
       const no = `WO-${proj ? proj.code : pid}-${String(c.value).padStart(4, '0')}`;
-      const r = await env.DB.prepare("INSERT INTO con_work_orders (project_id, contractor_id, wo_no, scope, basis, value_paise, retention_bp, advance_paise, status, created_by, created_at, budget_head_id, advance_recovery_bp, is_demolition) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?)")
-        .bind(pid, cid, no, String(b.scope || '').slice(0, 1000), basis, value, ret, adv, req.user.user_id, nowStr(), headId, adv > 0 ? recBp : null, b.is_demolition ? 1 : 0).run();
+      const r = await env.DB.prepare("INSERT INTO con_work_orders (project_id, contractor_id, wo_no, scope, basis, value_paise, retention_bp, advance_paise, status, created_by, created_at, budget_head_id, advance_recovery_bp, is_demolition, wing, floor, cc_override_note, boq_override_note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+        .bind(pid, cid, no, String(b.scope || '').slice(0, 1000), basis, value, ret, adv, req.user.user_id, nowStr(), headId, adv > 0 ? recBp : null, b.is_demolition ? 1 : 0, woWing, woFloor, ccNote, boqNote).run();
       const id = r.meta.last_row_id;
       await env.DB.batch([
         ...items.map((i) => env.DB.prepare('INSERT INTO con_wo_items (wo_id, description, qty, unit, rate_paise, amount_paise, boq_item_id, drawing_id, stock_item_id, consumption_per_unit, wastage_bp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
@@ -488,6 +498,10 @@ export function registerContractors(router, h) {
       if (cons != null && !(cons > 0)) return json({ ok: false, error: 'Material per unit must be more than zero.' }, 400);
       if (wast != null && !(wast >= 0 && wast <= 5000)) return json({ ok: false, error: 'Allowed wastage looks wrong.' }, 400);
       if (stock && cons == null) return json({ ok: false, error: 'Say how much of the store item one unit of work uses.' }, 400);
+      if (boq && boq !== it.boq_item_id) {   // tying a line to a BOQ item: the BOQ must still have that quantity free, at or above this rate
+        const capMsg = await boqCapProblem(env, it.project_id, [{ boq, qty: it.qty, rate: it.rate_paise }], it.wo_id);
+        if (capMsg) { const why = String(b.boq_override_note || '').trim().slice(0, 300); if (req.user.role !== 'owner' || why.length < 10) return json({ ok: false, error: capMsg + (req.user.role === 'owner' ? ' As the Owner you can go ahead only with a written reason.' : ' Ask the Owner, or raise a BOQ change first.'), code: 'boq_cap' }, 409); await env.DB.prepare('UPDATE con_work_orders SET boq_override_note = ? WHERE id = ?').bind(why, it.wo_id).run(); }
+      }
       await env.DB.batch([
         env.DB.prepare('UPDATE con_wo_items SET boq_item_id = ?, drawing_id = ?, stock_item_id = ?, consumption_per_unit = ?, wastage_bp = ? WHERE id = ?').bind(boq, drw, stock, cons, wast, it.id),
         audit(env, req.user, 'edit', 'con_wo_items', it.id, `${it.wo_no} ${it.description}: links updated`),
@@ -648,9 +662,9 @@ export function registerContractors(router, h) {
       // one batch: number, bill, lines and audit together (all or nothing)
       const res = await env.DB.batch([
         env.DB.prepare('INSERT INTO counters (key, value) VALUES (?, 1) ON CONFLICT(key) DO UPDATE SET value = value + 1').bind(key),
-        env.DB.prepare(`INSERT INTO con_ra_bills (wo_id, ra_no, period_from, period_to, due_date, gross_paise, retention_paise, advance_recovery_paise, other_deductions_paise, gst_bp, gst_paise, tds_bp, tds_paise, net_paise, status, note, created_by, created_at, wing, floor, cc_override_note)
-          VALUES (?, (SELECT value FROM counters WHERE key = ?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?)`)
-          .bind(wo.id, key, b.period_from || null, b.period_to || null, b.due_date || null, gross, retention, rec, other, gstBp, gst, tdsBp, tds, net, note, req.user.user_id, now, raWing, raFloor, raOverride),
+        env.DB.prepare(`INSERT INTO con_ra_bills (wo_id, ra_no, period_from, period_to, due_date, gross_paise, retention_paise, advance_recovery_paise, other_deductions_paise, gst_bp, gst_paise, tds_bp, tds_paise, net_paise, status, note, created_by, created_at, wing, floor, cc_override_note, gst_hold)
+          VALUES (?, (SELECT value FROM counters WHERE key = ?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?)`)
+          .bind(wo.id, key, b.period_from || null, b.period_to || null, b.due_date || null, gross, retention, rec, other, gstBp, gst, tdsBp, tds, net, note, req.user.user_id, now, raWing, raFloor, raOverride, gst > 0 && (await getSetting(env, 'con.gst_hold')) !== 'off' ? 1 : 0),
         ...lines.map((l) => env.DB.prepare(`INSERT INTO con_ra_lines (ra_id, wo_item_id, qty_this_bill, rate_paise, amount_paise) VALUES (${RA}, ?, ?, ?, ?)`).bind(wo.id, key, l.item.id, l.q, l.item.rate_paise, l.amt)),
         env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) SELECT ?, 'create', 'con_ra_bills', id, ?, ? FROM con_ra_bills WHERE id = ${RA}`)
           .bind(req.user.user_id, `RA bill on ${wo.wo_no}: gross ${rupees(gross)}, net ${rupees(net)}`, now, wo.id, key),
@@ -732,7 +746,7 @@ export function registerContractors(router, h) {
       const now = nowStr();
       const res = await env.DB.batch([
         env.DB.prepare(`INSERT INTO con_payments (wo_id, ra_id, kind, amount_paise, paid_on, mode, ref_no, note, client_uuid, created_by, created_at)
-          SELECT ?1, ?2, 'ra', ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10 WHERE (SELECT net_paise FROM con_ra_bills WHERE id = ?2) - COALESCE((SELECT SUM(amount_paise) FROM con_payments WHERE ra_id = ?2 AND kind = 'ra' AND reversed_at IS NULL), 0) >= ?3`)
+          SELECT ?1, ?2, 'ra', ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10 WHERE (SELECT net_paise - CASE WHEN gst_hold = 1 THEN gst_paise ELSE 0 END FROM con_ra_bills WHERE id = ?2) - COALESCE((SELECT SUM(amount_paise) FROM con_payments WHERE ra_id = ?2 AND kind = 'ra' AND reversed_at IS NULL), 0) >= ?3`)
           .bind(ra.wo_id, ra.id, amount, String(b.paid_on || todayIST()).slice(0, 10), String(b.mode || '').slice(0, 20), String(b.ref_no || '').slice(0, 60), String(b.note || '').slice(0, 200), uuid, req.user.user_id, now),
         env.DB.prepare(`INSERT INTO con_ledger (contractor_id, project_id, wo_id, kind, amount_paise, ref_table, ref_id, created_at)
           SELECT ?1, ?2, ?3, 'payment', ?4, 'con_payments', id, ?5 FROM con_payments WHERE client_uuid = ?6`).bind(ra.contractor_id, ra.project_id, ra.wo_id, amount, now, uuid),
@@ -741,11 +755,28 @@ export function registerContractors(router, h) {
       ]);
       if (!res[0].meta.changes) {
         const paid = await env.DB.prepare("SELECT COALESCE(SUM(amount_paise), 0) AS s FROM con_payments WHERE ra_id = ? AND kind = 'ra' AND reversed_at IS NULL").bind(ra.id).first();
+        if (ra.gst_hold) return json({ ok: false, error: `Only ${rupees(Math.max(0, ra.net_paise - ra.gst_paise - paid.s))} can be paid now. The GST part (${rupees(ra.gst_paise)}) is held until Accounts confirm the contractor's GST returns (GSTR-1 and 3B) are filed.`, code: 'gst_hold' }, 400);
         return json({ ok: false, error: `Only ${rupees(ra.net_paise - paid.s)} is still due on this bill.` }, 400);
       }
       const after = await env.DB.prepare('SELECT status FROM con_ra_bills WHERE id = ?').bind(ra.id).first();
       return json({ ok: true, data: { id: res[0].meta.last_row_id, status: after.status } });
     } catch (e) { return serverError(e, 'ra-pay'); }
+  }));
+
+  // Accounts (or the Owner) confirm that the contractor has filed GSTR-1 and GSTR-3B, after checking the GST portal themselves. This releases the GST part of the bill.
+  router.post('/api/contractors/ra-bills/:id/gst-confirm', guard('E', async (req, env) => {
+    try {
+      if (!['accounts', 'owner'].includes(req.user.role)) return json({ ok: false, error: 'Only Accounts or the Owner can confirm the contractor\'s GST filing.' }, 403);
+      const { ra, err } = await loadRa(env, req); if (err) return err;
+      if (!ra.gst_hold) return json({ ok: false, error: 'The GST on this bill is not held.' }, 409);
+      const b = await req.json().catch(() => ({}));
+      const note = String(b.note || '').trim().slice(0, 200);
+      if (note.length < 5) return json({ ok: false, error: 'Write what you checked (for example: GSTR-1 and 3B for the month filed, ARN or date).' }, 400);
+      const r = await env.DB.prepare('UPDATE con_ra_bills SET gst_hold = 0, gst_confirmed_by = ?, gst_confirmed_at = ?, gst_confirm_note = ? WHERE id = ? AND gst_hold = 1').bind(req.user.user_id, nowStr(), note, ra.id).run();
+      if (!r.meta.changes) return json({ ok: false, error: 'The GST on this bill is not held.' }, 409);
+      await audit(env, req.user, 'gst_confirm', 'con_ra_bills', ra.id, `GST filing confirmed for ${ra.wo_no} / RA ${ra.ra_no}: ${note}`).run();
+      return json({ ok: true });
+    } catch (e) { return serverError(e, 'ra-gst-confirm'); }
   }));
 
   router.post('/api/contractors/payments/:id/reverse', guard('E', async (req, env) => {

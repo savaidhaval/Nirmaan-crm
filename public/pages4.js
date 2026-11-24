@@ -285,9 +285,11 @@ renderAudit = PAGES.audit = function (main) {
 
 // ---------- Settings: new controls ----------
 // These switches are ON until someone sets them to Off (nothing is stored for them until then).
-const ON_BY_DEFAULT = ['sales.lock_above_cc', 'sales.hold_needs_token', 'sales.broker_needs_confirmation'];
+const ON_BY_DEFAULT = ['site.dual_signoff', 'con.gst_hold', 'pro.grn_gate', 'sales.lock_above_cc', 'sales.hold_needs_token', 'sales.broker_needs_confirmation'];
 Object.assign(SETTING_LABELS, {
   'sales.max_discount_bp': ['Discount a sales rep may give (basis points; 100 = 1%)', 'number'], 'sales.pm_max_discount_bp': ['Discount a PM may give (basis points)', 'number'], 'sales.max_holds_per_user': ['Flats one rep may hold at a time', 'number'],
+  'site.dual_signoff': ['A stage that releases buyer demands needs the Site Engineer sign-off and the RCC report confirmed by the Owner', 'onoff'], 'con.gst_hold': ['Hold the GST part of a contractor RA bill until Accounts confirm the contractor filed GST returns', 'onoff'],
+  'pro.grn_gate': ['Material receipt: challan compulsory and used once, bill held until the gate photo is on file', 'onoff'], 'stk.wastage_alert_bp': ['Alert when material issued is more than the measured work needs by (basis points; 250 = 2.5%)', 'number'],
   'sales.sla_minutes': ['Minutes to call a new lead before it moves to the next executive (0 = off; checked every 15 minutes)', 'number'], 'sales.rehold_block_hours': ['Hours a closer cannot re-block a flat they released or let lapse', 'number'],
   'sales.lock_above_cc': ['Do not sell flats above the approved CC floor', 'onoff'], 'sales.hold_needs_token': ['Salespeople must enter token details to block a flat', 'onoff'], 'sales.broker_needs_confirmation': ['A broker counts only if the buyer confirmed them at reception', 'onoff'],
   'sales.source_lock_days': ['Days a broker keeps a buyer after the buyer confirms (45 or 60)', 'number'], 'sales.token_cleared_hold_days': ['Days a flat stays blocked after Accounts clears the token', 'number'],

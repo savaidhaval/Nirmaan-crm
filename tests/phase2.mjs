@@ -8,6 +8,7 @@ class C { constructor() { this.cookie = ''; }
     const r = await fetch(BASE + p, { method: m, headers: h, body, redirect: 'manual' }); const sc = r.headers.get('set-cookie'); if (sc) this.cookie = sc.split(';')[0]; if (raw) return r; let d = null; try { d = await r.json(); } catch (e) { /* */ } return { status: r.status, data: d && d.data, err: d && d.error }; } }
 const run = Date.now().toString(36); const digits = String(Date.now()).slice(-8);
 const o = new C(); await o.call('POST', '/api/auth/login', { email: process.env.OWNER_EMAIL, password: process.env.OWNER_PASSWORD });
+await o.call('POST', '/api/settings/site.dual_signoff', { value: 'off' });   // these suites certify payment-linked stages without sign-offs; the sign-off rule is tested in m3_step2
 let seq = 0;
 const mkUser = async (role, projects) => { const email = `zp-${role}-${++seq}-${run}@test.local`; const r = await o.call('POST', '/api/users', { name: 'zp ' + role, email, role, projects }); const pw = 'ZpStrongPass-' + run; const c = new C(); await c.call('POST', '/api/auth/login', { email, password: r.data.temporaryPassword }); await c.call('POST', '/api/auth/change-password', { currentPassword: r.data.temporaryPassword, newPassword: pw }); c.id = r.data.id; c.email = email; c.pw = pw; return c; };
 const pid = (await o.call('POST', '/api/projects', { rera_no: 'P518000TEST', name: 'zz-p2 ' + run, code: 'P2' + run.toUpperCase().slice(-6), budget_paise: 50000000 })).data.id;
@@ -171,4 +172,5 @@ const erased = (await o.call('GET', `/api/sales/bookings/${bk}`)).data;
 ok('erased record keeps amounts and receipts', /^Erased #/.test(erased.booking.customer_name) && erased.booking.phone === '' && erased.receipts.length === 2 && erased.booking.agreed_price_paise === 10000000);
 ok('erasure is audited', (await o.call('GET', '/api/audit?action=privacy_erase')).data.audit.length >= 1);
 
+await o.call('POST', '/api/settings/site.dual_signoff', { value: 'on' });
 console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);

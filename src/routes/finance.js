@@ -207,7 +207,12 @@ export function registerFinance(router, h) {
         const charges = ['transport_paise', 'loading_paise', 'packing_paise', 'insurance_paise', 'other_charges_paise'].reduce((t, k) => t + (po[k] || 0), 0);
         const goodsCap = lines.results[0].n ? rcv.results[0].v : po.amount_paise - charges;
         const allowed = Math.round(goodsCap * (10000 + tol) / 10000) + (lines.results[0].n && !rcv.results[0].v ? 0 : charges) - prev.results[0].v;
-        if (taxable > allowed) hold = lines.results[0].n && !rcv.results[0].v ? 'Nothing has been received against this PO yet.' : `Billed ${rupees(taxable)} (before GST) but only ${rupees(Math.max(0, allowed))} is supported by material received at PO rates (with ${tol / 100}% tolerance).`;
+        // No gate photo, no payment: a receipt without its photo holds the bill (switch pro.grn_gate, on unless Off).
+        if ((await getSetting(env, 'pro.grn_gate')) !== 'off') {
+          const nophoto = await env.DB.prepare('SELECT COUNT(*) AS n FROM pro_grns WHERE po_id = ? AND deleted_at IS NULL AND document_id IS NULL').bind(po.id).first();
+          if (nophoto.n) hold = `${nophoto.n} receipt${nophoto.n === 1 ? '' : 's'} on this PO ${nophoto.n === 1 ? 'has' : 'have'} no gate photo. Add the photo to each receipt before this bill can be paid.`;
+        }
+        if (!hold && taxable > allowed) hold = lines.results[0].n && !rcv.results[0].v ? 'Nothing has been received against this PO yet.' : `Billed ${rupees(taxable)} (before GST) but only ${rupees(Math.max(0, allowed))} is supported by material received at PO rates (with ${tol / 100}% tolerance).`;
       }
       if (bp > 3000) return json({ ok: false, error: 'TDS rate looks wrong.' }, 400);
       const tds = Math.round((taxable * bp) / 10000);

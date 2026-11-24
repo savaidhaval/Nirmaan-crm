@@ -75,15 +75,15 @@ export function registerBudget(router, h) {
       const q = new URL(req.url).searchParams; const pid = Number(q.get('project_id'));
       if (!(await pOk(env, req, pid))) return json({ ok: false, error: 'Pick a project.' }, 400);
       const [items, con, po] = await Promise.all([
-        env.DB.prepare('SELECT b.*, h.code AS head_code, h.name AS head_name FROM bud_items b JOIN bud_heads h ON h.id = b.head_id WHERE b.project_id = ? AND b.deleted_at IS NULL ORDER BY h.sort_order, h.code, b.code, b.id LIMIT 1000').bind(pid).all(),
+        env.DB.prepare(`SELECT b.*, h.code AS head_code, h.name AS head_name FROM bud_items b JOIN bud_heads h ON h.id = b.head_id WHERE b.project_id = ? AND b.deleted_at IS NULL AND (? = '' OR COALESCE(b.wing, '') = ?) AND (? = '' OR b.floor = CAST(? AS INTEGER)) ORDER BY h.sort_order, h.code, b.code, b.id LIMIT 1000`).bind(pid, String(q.get('wing') || ''), String(q.get('wing') || ''), String(q.get('floor') ?? ''), String(q.get('floor') ?? '')).all(),
         boqProgressCon(env, pid), boqProgressPo(env, pid),
       ]);
       const C = Object.fromEntries(con.map((r) => [r.boq, r])), P = Object.fromEntries(po.map((r) => [r.boq, r]));
       const rows = items.results.map((b) => { const c = C[b.id] || {}, p = P[b.id] || {}; const committed = (c.committed || 0) + (p.ordered || 0);
         return { ...b, committed_qty: committed, measured_qty: c.measured || 0, billed_qty: c.billed || 0, committed_paise: (c.committed_paise || 0) + (p.ordered_paise || 0),
           over_qty: committed > b.qty + 1e-9, pct_used: b.qty ? Math.round((committed * 1000) / b.qty) / 10 : 0 }; });
-      if (q.get('csv')) return new Response(csvBom([['Head', 'Code', 'Item', 'Unit', 'BOQ qty', 'Rate', 'BOQ amount', 'Committed qty', 'Measured qty', 'Billed qty', 'Committed value'],
-        ...rows.map((r) => [r.head_code, r.code || '', r.description, r.unit || '', r.qty, (r.rate_paise / 100).toFixed(2), (r.amount_paise / 100).toFixed(2), r.committed_qty, r.measured_qty, r.billed_qty, (r.committed_paise / 100).toFixed(2)])]),
+      if (q.get('csv')) return new Response(csvBom([['Head', 'Code', 'Item', 'Wing / building', 'Floor', 'Unit', 'BOQ qty', 'Rate', 'BOQ amount', 'Committed qty', 'Measured qty', 'Billed qty', 'Committed value'],
+        ...rows.map((r) => [r.head_code, r.code || '', r.description, r.wing || '', r.floor == null ? '' : r.floor, r.unit || '', r.qty, (r.rate_paise / 100).toFixed(2), (r.amount_paise / 100).toFixed(2), r.committed_qty, r.measured_qty, r.billed_qty, (r.committed_paise / 100).toFixed(2)])]),
         { headers: { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': 'attachment; filename="boq-status.csv"', 'Cache-Control': 'no-store' } });
       return json({ ok: true, data: { items: rows } });
     } catch (e) { return serverError(e, 'boq-list'); }
@@ -100,12 +100,14 @@ export function registerBudget(router, h) {
       for (const [n, l] of list.entries()) {
         const desc = String(l.description || '').trim().slice(0, 200), qty = Number(l.qty), rate = Math.round(Number(l.rate_paise));
         if (!desc || !(qty > 0) || !(rate >= 0)) return json({ ok: false, error: `Line ${n + 1}: needs a description, a quantity and a rate.` }, 400);
-        rows.push({ code: String(l.code || '').trim().slice(0, 30) || null, desc, unit: String(l.unit || '').trim().slice(0, 20) || null, qty, rate });
+        const fl = l.floor === '' || l.floor == null ? null : Math.round(Number(l.floor));
+        if (fl != null && !(fl >= -5 && fl <= 200)) return json({ ok: false, error: `Line ${n + 1}: check the floor number.` }, 400);
+        rows.push({ code: String(l.code || '').trim().slice(0, 30) || null, desc, unit: String(l.unit || '').trim().slice(0, 20) || null, qty, rate, wing: String(l.wing || b.wing || '').trim().slice(0, 30) || null, floor: fl });
       }
       const now = nowStr();
       await env.DB.batch([
-        env.DB.prepare(`INSERT INTO bud_items (project_id, head_id, code, description, unit, qty, rate_paise, amount_paise, created_by, created_at)
-          SELECT ?1, ?2, json_extract(value, '$.code'), json_extract(value, '$.desc'), json_extract(value, '$.unit'), json_extract(value, '$.qty'), json_extract(value, '$.rate'), CAST(ROUND(json_extract(value, '$.qty') * json_extract(value, '$.rate')) AS INTEGER), ?3, ?4 FROM json_each(?5)`)
+        env.DB.prepare(`INSERT INTO bud_items (project_id, head_id, code, description, unit, qty, rate_paise, amount_paise, created_by, created_at, wing, floor)
+          SELECT ?1, ?2, json_extract(value, '$.code'), json_extract(value, '$.desc'), json_extract(value, '$.unit'), json_extract(value, '$.qty'), json_extract(value, '$.rate'), CAST(ROUND(json_extract(value, '$.qty') * json_extract(value, '$.rate')) AS INTEGER), ?3, ?4, json_extract(value, '$.wing'), json_extract(value, '$.floor') FROM json_each(?5)`)
           .bind(pid, head, req.user.user_id, now, JSON.stringify(rows)),
         audit(env, req.user, 'create', head, `BOQ: ${rows.length} item(s) added`),
       ]);
@@ -117,6 +119,13 @@ export function registerBudget(router, h) {
       const it = await env.DB.prepare('SELECT * FROM bud_items WHERE id = ? AND deleted_at IS NULL').bind(Number(req.params.id)).first();
       if (!it || !(await pOk(env, req, it.project_id))) return json({ ok: false, error: 'BOQ item not found.' }, 404);
       const b = await req.json();
+      if (b.wing !== undefined || b.floor !== undefined) {   // where the line belongs: no reason needed, no money changes
+        const wing = b.wing !== undefined ? String(b.wing || '').trim().slice(0, 30) || null : it.wing;
+        const fl = b.floor !== undefined ? (b.floor === '' || b.floor == null ? null : Math.round(Number(b.floor))) : it.floor;
+        if (fl != null && !(fl >= -5 && fl <= 200)) return json({ ok: false, error: 'Check the floor number.' }, 400);
+        if (b.qty === undefined && b.rate_paise === undefined) { await env.DB.prepare('UPDATE bud_items SET wing = ?, floor = ? WHERE id = ?').bind(wing, fl, it.id).run(); return json({ ok: true }); }
+        await env.DB.prepare('UPDATE bud_items SET wing = ?, floor = ? WHERE id = ?').bind(wing, fl, it.id).run();
+      }
       const qty = b.qty !== undefined ? Number(b.qty) : it.qty, rate = b.rate_paise !== undefined ? Math.round(Number(b.rate_paise)) : it.rate_paise;
       if (!(qty > 0) || !(rate >= 0)) return json({ ok: false, error: 'Check the quantity and rate.' }, 400);
       const reason = String(b.reason || '').trim().slice(0, 200); if (!reason) return json({ ok: false, error: 'Say why the BOQ changes (revised drawing, client change...).' }, 400);

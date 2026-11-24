@@ -15,6 +15,7 @@ import { registerSales3, ensureDemandNumber, handoverDueSweep } from './routes/s
 import { registerM2Gaps, partnerPayBlock, leadSlaReassign } from './routes/m2gaps.js';
 import { registerM2Step2 } from './routes/m2step2.js';
 import { registerM2Step3 } from './routes/m2step3.js';
+import { ccOverFloor, wastageSweep, signoffBlock, registerM3Gaps } from './routes/m3gaps.js';
 import { registerBulkDemands, demandLetterHtml } from './routes/bulk_demands.js';
 import { registerReports } from './routes/reports.js';
 import { registerFinance } from './routes/finance.js';
@@ -565,7 +566,7 @@ const EDITABLE_SETTINGS = ['po.pm_approval_limit_paise', 'access.allow_second_ow
   'brochure.price_list_default_audience', 'storage.warn_percent', 'sales.max_holds_per_user', 'sales.max_discount_bp', 'sales.pm_max_discount_bp',
   'interest.rate_bp', 'interest.grace_days', 'interest.enabled', 'security.require_mfa_roles', 'tax.stamp_duty_bp', 'tax.metro_cess_bp', 'tax.women_concession_bp', 'tax.registration_bp', 'tax.registration_cap_paise', 'tax.gst_bp',
   'con.enabled', 'con.pm_approval_limit_paise', 'con.gst_bp', 'con.tds_bp', 'budget.gst_basis', 'petty.low_balance_paise', 'ai.enabled', 'ai.daily_limit', 'ai.model', 'rera.designated_pct_bp', 'fea.review_days', 'red.member_doc_checklist', 'red.rent_due_day', 'red.oc_grace_days', 'red.demolition_proofs', 'red.rtgs_min_paise', 'apr.alert_days', 'bank.keep_days', 'drawing.ack_hours', 'sales.bulk_daily_limit', 'sales.bulk_chunk', 'sales.demand_link_days', 'sales.visit_objections', 'sales.visit_radius_m',
-  'sales.sla_minutes', 'sales.rehold_block_hours', 'sales.lock_above_cc', 'sales.hold_needs_token', 'sales.broker_needs_confirmation', 'sales.source_lock_days', 'sales.token_cleared_hold_days', 'sales.brochure_url', 'sales.map_url',
+  'pro.grn_gate', 'stk.wastage_alert_bp', 'site.dual_signoff', 'con.gst_hold', 'sales.sla_minutes', 'sales.rehold_block_hours', 'sales.lock_above_cc', 'sales.hold_needs_token', 'sales.broker_needs_confirmation', 'sales.source_lock_days', 'sales.token_cleared_hold_days', 'sales.brochure_url', 'sales.map_url',
   'sales.receipt_approval_limit_paise', 'sales.discount_pm_limit_paise', 'sales.handover_template', 'apr.designations', 'con.variation_owner_limit_paise', 'con.advance_recovery_bp', 'con.dlp_months', 'pro.tolerance_bp', 'tax.tds_no_pan_bp', 'rera.cert_valid_days', 'qa.pour_checklist', 'qa.cube_7day_pct_bp', 'dpr.activities', 'dpr.safety_checks', 'bd.vacate_to_plinth_months', 'bd.completion_months', 'bd.steps_79a'];
 
 router.post('/api/settings/:key', async (req, env) => {
@@ -875,6 +876,8 @@ async function milestoneCertify(req, env) {
   if (!anyCc) block = 'No Commencement Certificate is marked approved for this project in Approvals.';
   else if (ms.floor != null && (upto == null || ms.floor > upto)) block = `The approved CC covers work up to floor ${upto == null ? '(not recorded)' : upto}; this milestone is floor ${ms.floor}.`;
   { const held = await holdFor(env, ms.project_id, ms.wing); if (held) return json({ ok: false, error: held + '. Release the hold before certifying.', code: 'hold' }, 409); }
+  // Two-signature slab lock: no sign-offs, no certificate, so no buyer demand letters.
+  { const so = await signoffBlock(env, getSetting, ms); if (so) return json({ ok: false, error: so, code: 'signoff' }, 409); }
   // Demolition waits until every society member has vacated (the Owner may go ahead with a reason).
   if (/demoli/i.test(ms.name || '')) {
     const v = await env.DB.prepare("SELECT COUNT(m.id) AS total, COALESCE(SUM(m.vacated_on IS NOT NULL), 0) AS gone FROM red_societies s JOIN red_members m ON m.society_id = s.id AND m.deleted_at IS NULL WHERE s.project_id = ? AND s.deleted_at IS NULL").bind(ms.project_id).first();
@@ -965,6 +968,14 @@ router.post('/api/site/dprs', async (req, env) => {
         wing: String(w.wing || '').trim().slice(0, 20) || null, floor: w.floor === '' || w.floor == null ? null : Math.round(Number(w.floor)), activity: String(w.activity).trim().slice(0, 60),
         qty: w.qty === '' || w.qty == null ? null : Number(w.qty), unit: String(w.unit || '').slice(0, 20) || null }));
       if (work.some((w) => (w.qty != null && !(w.qty >= 0 && w.qty < 1e6)) || (w.floor != null && !(w.floor >= -5 && w.floor <= 200)))) return json({ ok: false, error: 'Check the quantities and floors.' }, 400);
+      // CC floor: a work line above the floor the approved CC covers is refused (the Owner may go ahead with a written reason). No CC floor on record = no lock.
+      let dprCcNote = null;
+      { const st = project_id ? await approvalState(env, Number(project_id)) : null;
+        const wings = [...new Set(work.map((w) => w.wing || wing || null))];
+        for (const wg of wings) {
+          const msg = st && await ccOverFloor(env, Number(project_id), wg, work.filter((w) => (w.wing || wing || null) === wg).map((w) => w.floor), st);
+          if (msg) { const why = String(body.override_note || '').trim().slice(0, 300); if (user.role !== 'owner' || why.length < 10) return json({ ok: false, error: msg + ' No work above this floor can be logged until the next Further CC is approved.' + (user.role === 'owner' ? ' As the Owner you can log it only with a written reason.' : ''), code: 'cc' }, 409); dprCcNote = why; }
+        } }
       const hoursLost = body.hours_lost === '' || body.hours_lost == null ? null : Number(body.hours_lost);
       if (hoursLost != null && !(hoursLost >= 0 && hoursLost <= 24)) return json({ ok: false, error: 'Hours lost must be between 0 and 24.' }, 400);
       // Safety: the day's checks (from the setting dpr.safety_checks) and any incident. An incident needs a description and tells the PM and Owner at once.
@@ -1015,7 +1026,7 @@ router.post('/api/site/dprs', async (req, env) => {
           .bind(project_id, report_date, wing || '', work_summary, labourTotal, weather || '', materials_used || '', issues || '', safety_incident || '', user.user_id, uuid, now),
         ...lines.map((l) => env.DB.prepare('INSERT INTO site_dpr_labour (dpr_id, contractor_id, trade, headcount, created_at) VALUES ((SELECT id FROM site_dprs WHERE client_uuid = ?), ?, ?, ?, ?)').bind(uuid, l.id, l.trade, l.head, now)),
         ...work.map((w) => env.DB.prepare('INSERT INTO site_dpr_work (dpr_id, wing, floor, activity, qty, unit) VALUES ((SELECT id FROM site_dprs WHERE client_uuid = ?), ?, ?, ?, ?, ?)').bind(uuid, w.wing, w.floor, w.activity, w.qty, w.unit)),
-        env.DB.prepare('UPDATE site_dprs SET hours_lost = ?, lost_reason = ?, safety_checks = ?, incident_kind = ? WHERE client_uuid = ?').bind(hoursLost, lostReason, safety, incident, uuid),
+        env.DB.prepare('UPDATE site_dprs SET hours_lost = ?, lost_reason = ?, safety_checks = ?, incident_kind = ?, cc_override_note = ? WHERE client_uuid = ?').bind(hoursLost, lostReason, safety, incident, dprCcNote, uuid),
         ...(incident && incident !== 'none' ? [env.DB.prepare(`INSERT INTO notifications (user_id, title, body, link, created_at) SELECT id, ?, ?, 'site', ? FROM users WHERE role IN ('owner', 'pm') AND active = 1 AND deleted_at IS NULL
           ORDER BY role = 'owner' DESC, id IN (SELECT user_id FROM project_members WHERE project_id = ?) DESC, id DESC LIMIT 20`)
           .bind(`SAFETY: ${{ near_miss: 'Near miss', injury: 'Injury', dangerous: 'Dangerous occurrence' }[incident]} on site (${report_date})`, String(safety_incident).slice(0, 300), now, Number(project_id))] : []),
@@ -1466,10 +1477,9 @@ router.post('/api/procurement/pos/:id/submit', async (req, env) => {
     await env.DB.prepare("UPDATE pro_pos SET status = 'pending_approval' WHERE id = ?").bind(po.id).run();
     const limit = Number(await getSetting(env, 'po.pm_approval_limit_paise')) || 500000;
     const roles = po.total_paise > limit ? "('owner')" : "('owner', 'pm')";
-    const approvers = await env.DB.prepare(`SELECT id FROM users WHERE active = 1 AND deleted_at IS NULL AND role IN ${roles} AND id != ?`).bind(req.user.user_id).all();
-    for (const u of approvers.results) {
-      await env.DB.prepare('INSERT INTO notifications (user_id, title, body, link, created_at) VALUES (?, ?, ?, ?, ?)').bind(u.id, `PO ${po.po_no} needs approval`, `Total ₹${(po.total_paise / 100).toLocaleString('en-IN')}`, 'procurement', nowStr()).run();
-    }
+    // One statement however many approvers there are (the free plan allows about 50 statements per request).
+    await env.DB.prepare(`INSERT INTO notifications (user_id, title, body, link, created_at) SELECT id, ?, ?, 'procurement', ? FROM users WHERE active = 1 AND deleted_at IS NULL AND role IN ${roles} AND id != ? LIMIT 50`)
+      .bind(`PO ${po.po_no} needs approval`, `Total ₹${(po.total_paise / 100).toLocaleString('en-IN')}`, nowStr(), req.user.user_id).run();
     return json({ ok: true });
   });
 });
@@ -1581,8 +1591,10 @@ router.post('/api/procurement/pos/:id/grn', async (req, env) => {
     if ((await env.DB.prepare('SELECT COUNT(*) AS n FROM pro_po_items WHERE po_id = ?').bind(po.id).first()).n) return json({ ok: false, error: 'Enter how much of each item arrived (Material received → item quantities).', code: 'use_lines' }, 409);
     if (b.full && !['owner', 'pm'].includes(req.user.role)) return json({ ok: false, error: 'Only the PM or the Owner can mark a PO as fully received.' }, 403);
     const now = nowStr();
-    const r = await env.DB.prepare('INSERT INTO pro_grns (po_id, received_on, qty_note, challan_no, received_by, client_uuid, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-      .bind(po.id, b.received_on || now.substring(0, 10), b.qty_note || '', b.challan_no || '', req.user.user_id, b.client_uuid || null, now).run();
+    const challanOld = String(b.challan_no || '').trim().slice(0, 40);
+    if (challanOld && (await getSetting(env, 'pro.grn_gate')) !== 'off' && await env.DB.prepare('SELECT id FROM pro_grns WHERE vendor_id = ? AND lower(trim(challan_no)) = lower(?) AND deleted_at IS NULL').bind(po.vendor_id, challanOld).first()) return json({ ok: false, error: `Challan ${challanOld} from this supplier was already received. A challan number can be used only once.`, code: 'challan_reuse' }, 409);
+    const r = await env.DB.prepare('INSERT INTO pro_grns (po_id, received_on, qty_note, challan_no, received_by, client_uuid, created_at, vendor_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+      .bind(po.id, b.received_on || now.substring(0, 10), b.qty_note || '', challanOld, req.user.user_id, b.client_uuid || null, now, po.vendor_id).run();
     await env.DB.prepare('UPDATE pro_pos SET status = ? WHERE id = ?').bind(b.full ? 'received' : 'part_received', po.id).run();
     return json({ ok: true, data: { id: r.meta.last_row_id } });
   });
@@ -1721,7 +1733,7 @@ router.get('/api/export/:what', async (req, env) => {
 // Tables are read in parts so one request or cron run never goes near the free plan's 50-queries-per-run cap.
 const EXPORT_TABLES = ['projects', 'apr_items', 'apr_events', 'drw_drawings', 'drw_revisions', 'site_milestones', 'site_dprs', 'site_snags', 'pro_vendors', 'pro_rfqs', 'pro_quotes', 'pro_pos', 'pro_po_items', 'pro_grns', 'pro_bills',
     'sal_leads', 'sal_activities', 'sal_visits', 'sal_inventory', 'sal_partners', 'sal_bookings', 'sal_plan_stages', 'sal_demands', 'sal_receipts', 'documents', 'audit_log',
-    'pro_grn_items', 'pro_payments', 'ppl_staff', 'ppl_hiring', 'ppl_candidates', 'sal_brokerage_payments', 'sal_refunds', 'sal_interest_waivers', 'sal_hold_log', 'sal_hold_tokens', 'sal_checkins', 'sal_price_matrix', 'sal_plc_rules', 'mkt_spend', 'brands', 'counters',
+    'pro_grn_items', 'pro_payments', 'ppl_staff', 'ppl_hiring', 'ppl_candidates', 'sal_brokerage_payments', 'sal_refunds', 'sal_interest_waivers', 'sal_hold_log', 'sal_hold_tokens', 'sal_checkins', 'site_ms_signoffs', 'site_wing_progress', 'sal_price_matrix', 'sal_plc_rules', 'mkt_spend', 'brands', 'counters',
     'pro_indents', 'pro_indent_items', 'pro_rfq_items', 'pro_quote_items',
     'site_dpr_labour', 'bud_heads', 'stk_items', 'stk_balance', 'stk_moves', 'pro_party_docs', 'pro_professionals', 'ai_log', 'sal_receipt_requests', 'sal_adjustments', 'sal_booking_parties', 'sal_cost_sheets', 'sal_cost_sheet_lines', 'sal_handover', 'sal_handover_items', 'sal_booking_loans', 'rera_account_entries', 'eng_kudos', 'fea_versions', 'sal_bulk_runs', 'sal_bulk_items', 'drw_acks', 'tally_export_log', 'brand_profiles', 'project_members', 'drive_folders', 'bank_profiles', 'bank_import_batches', 'bank_import_rows', 'red_societies', 'red_members', 'red_consent_events', 'red_member_docs', 'red_rehab_allotments', 'red_transit_terms', 'red_transit_schedule', 'red_transit_payments', 'red_corpus_entries', 'red_meetings', 'red_meeting_attendees', 'red_rent_changes', 'red_site_proofs', 'red_payout_batches', 'prj_autodcr_history', 'apr_steps', 'apr_deps', 'con_variations', 'con_measurements', 'rera_certificates', 'qa_pours', 'qa_cubes', 'qa_ncrs', 'site_dpr_work', 'site_ms_changes', 'prj_holds', 'con_debit_notes', 'bud_items', 'bd_opportunities', 'bd_followups', 'bd_studies', 'bd_steps', 'prj_lifecycle', 'pty_funds', 'pty_entries', 'con_contractors', 'con_work_orders', 'con_wo_items', 'con_ra_bills', 'con_ra_lines', 'con_payments', 'con_ledger'];
 const EXPORT_PARTS = 3;
@@ -2331,6 +2343,7 @@ registerTally(router, { withAuth, json, serverError, visibleProjectIds, nowStr, 
 registerBank(router, { withAuth, json, serverError, visibleProjectIds, nowStr, getSetting, csvBom });
 registerBulkDemands(router, { withAuth, json, serverError, visibleProjectIds, getSetting, nowStr, printBrand, csvBom });
 registerM2Gaps(router, { withAuth, json, serverError, visibleProjectIds, getSetting, nowStr, encryptSetting });
+registerM3Gaps(router, { withAuth, json, serverError, visibleProjectIds, getSetting, nowStr });
 registerM2Step3(router, { withAuth, json, serverError, visibleProjectIds, nowStr });
 registerM2Step2(router, { withAuth, json, serverError, visibleProjectIds, getSetting, nowStr, checkRateLimit, clientIp, printBrand });
 registerSales3(router, { withAuth, json, serverError, visibleProjectIds, getSetting, nowStr, encryptSetting, decryptSetting, csvBom, printBrand, shared: salesShared });
@@ -3426,6 +3439,7 @@ async function runCron(cron, env) {
     await retryFailedEmails(env);
     await leadSlaNudges(env);
     await expireHolds(env);
+    await wastageSweep(env, getSetting, nowStr);
     await raDueSweep(env, getSetting);
     await continueBackup(env);
     await lowStockSweep(env);
