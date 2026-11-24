@@ -1,4 +1,5 @@
 import { ccFloorBlock } from '../core/gates.js';
+import { indentBoqFlags } from './m3gaps.js';
 
 // routes/procurement2.js — WP-4 procurement addendum: indents, multi-line RFQ + per-line quotes,
 // GRN by PO line, bill part-payments (reversed, never deleted), and procurement reports.
@@ -127,6 +128,7 @@ export function registerProcurement2(router, h) {
     try {
       const b = await req.json();
       const items = (Array.isArray(b.items) ? b.items : []).filter((i) => i && String(i.description || '').trim() && num(i.qty) > 0).slice(0, 40);
+      const rawBoq = (Array.isArray(b.items) ? b.items : []).filter((i) => i && String(i.description || '').trim() && num(i.qty) > 0).slice(0, 40).map((i) => Number(i.boq_item_id) || null);
       const pid = Number(b.project_id);
       if (!pid || !items.length) return json({ ok: false, error: 'Pick the project and add at least one item with a quantity.' }, 400);
       if (!(await visibleProjectIds(env, req.user)).includes(pid)) return json({ ok: false, error: 'Not allowed.' }, 403);
@@ -153,12 +155,14 @@ export function registerProcurement2(router, h) {
       const r = await env.DB.prepare("INSERT INTO pro_indents (project_id, indent_no, needed_by, note, status, requested_by, client_uuid, created_at, wing, floor, cc_override_note) VALUES (?, ?, ?, ?, 'submitted', ?, ?, ?, ?, ?, ?)")
         .bind(pid, no, b.needed_by || null, String(b.note || '').slice(0, 500), req.user.user_id, b.client_uuid || null, now, wing, floor, ccOverride).run();
       const id = r.meta.last_row_id;
+      // BOQ allowance: a line that passes the BOQ quantity (counting earlier requests) is marked "over BOQ" and the PM is told.
+      const { flags, names } = await indentBoqFlags(env, pid, items.map((i, k) => ({ boq: rawBoq[k], qty: num(i.qty) })));
       await env.DB.batch([
-        ...items.map((i) => env.DB.prepare('INSERT INTO pro_indent_items (indent_id, description, qty, unit) VALUES (?, ?, ?, ?)').bind(id, String(i.description).trim().slice(0, 200), num(i.qty), String(i.unit || '').slice(0, 20))),
-        audit(env, req.user, 'create', 'pro_indents', id, `Indent ${no} raised (${items.length} items)`),
+        ...items.map((i, k) => env.DB.prepare('INSERT INTO pro_indent_items (indent_id, description, qty, unit, boq_item_id, over_boq) VALUES (?, ?, ?, ?, ?, ?)').bind(id, String(i.description).trim().slice(0, 200), num(i.qty), String(i.unit || '').slice(0, 20), rawBoq[k], flags.get(k) ? 1 : 0)),
+        audit(env, req.user, 'create', 'pro_indents', id, `Indent ${no} raised (${items.length} items${flags.size ? ', ' + flags.size + ' over BOQ' : ''})`),
       ]);
-      await notifyRoles(env, ['pm'], `Indent to approve: ${no}`, `${req.user.name} needs ${items.length} item(s).`, 'procurement');
-      return json({ ok: true, data: { id, indent_no: no } });
+      await notifyRoles(env, ['pm'], `Indent to approve: ${no}`, `${req.user.name} needs ${items.length} item(s).${flags.size ? ' OVER BOQ: ' + Object.values(names).slice(0, 3).join('; ') : ''}`, 'procurement');
+      return json({ ok: true, data: { id, indent_no: no, over_boq: flags.size } });
     } catch (e) { return serverError(e, 'indent-create'); }
   }));
 
@@ -345,6 +349,21 @@ export function registerProcurement2(router, h) {
       const uuid = String(b.client_uuid || crypto.randomUUID());
       const dup = await env.DB.prepare('SELECT id FROM pro_grns WHERE client_uuid = ?').bind(uuid).first();
       if (dup) return json({ ok: true, data: { id: dup.id, duplicate: true } });
+      // Gate rules (switch: pro.grn_gate, on unless set to Off): a challan number is compulsory and can be used once per supplier.
+      const gate = (await getSetting(env, 'pro.grn_gate')) !== 'off';
+      const challan = String(b.challan_no || '').trim().slice(0, 40);
+      if (gate) {
+        if (challan.length < 3) return json({ ok: false, error: 'Enter the challan / delivery note number from the truck. It cannot be left blank.', code: 'challan' }, 400);
+        const used = await env.DB.prepare('SELECT g.id, g.received_on, p.po_no FROM pro_grns g JOIN pro_pos p ON p.id = g.po_id WHERE g.vendor_id = ? AND lower(trim(g.challan_no)) = lower(?) AND g.deleted_at IS NULL LIMIT 1').bind(po.vendor_id, challan).first();
+        if (used) return json({ ok: false, error: `Challan ${challan} from this supplier was already received on ${used.received_on} against ${used.po_no}. A challan number can be used only once.`, code: 'challan_reuse' }, 409);
+      }
+      const photoDoc = b.photo_doc_id ? Number(b.photo_doc_id) : null;
+      if (photoDoc && !(await env.DB.prepare('SELECT id FROM documents WHERE id = ? AND deleted_at IS NULL AND project_id = ?').bind(photoDoc, po.project_id).first())) return json({ ok: false, error: 'The gate photo was not found.' }, 400);
+      const truck = String(b.truck_no || '').trim().toUpperCase().slice(0, 20) || null;
+      const weight = b.weight_kg === '' || b.weight_kg == null ? null : num(b.weight_kg);
+      if (weight != null && !(weight > 0 && weight < 1e6)) return json({ ok: false, error: 'Check the weighbridge weight (in kg).' }, 400);
+      const lat = b.lat == null || b.lat === '' ? null : num(b.lat), lng = b.lng == null || b.lng === '' ? null : num(b.lng), acc = b.accuracy_m == null || b.accuracy_m === '' ? null : num(b.accuracy_m);
+      if ((lat != null || lng != null) && !(lat >= -90 && lat <= 90 && lng >= -180 && lng <= 180)) return json({ ok: false, error: 'The location looks wrong.' }, 400);
       const stockOf = Object.fromEntries((await env.DB.prepare('SELECT id, stock_item_id FROM pro_po_items WHERE po_id = ?').bind(po.id).all()).results.map((r) => [r.id, r.stock_item_id]));
       const valid = new Set(Object.keys(stockOf).map(Number));
       const lines = (Array.isArray(b.lines) ? b.lines : []).map((l) => ({ id: Number(l.po_item_id), qty: num(l.qty_received), link: Number(l.stock_item_id) || 0 })).filter((l) => l.qty > 0);
@@ -364,8 +383,8 @@ export function registerProcurement2(router, h) {
       const summary = String(b.qty_note || '').slice(0, 300);
       // One batch: receipt, its lines, and the PO status computed from the totals. All or nothing.
       await env.DB.batch([
-        env.DB.prepare('INSERT INTO pro_grns (po_id, received_on, qty_note, challan_no, received_by, client_uuid, created_at, excess_note) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-          .bind(po.id, b.received_on || now.substring(0, 10), summary, String(b.challan_no || '').slice(0, 40), req.user.user_id, uuid, now, over.length ? excessNote : null),
+        env.DB.prepare('INSERT INTO pro_grns (po_id, received_on, qty_note, challan_no, received_by, client_uuid, created_at, excess_note, vendor_id, truck_no, weight_kg, lat, lng, accuracy_m, document_id, photo_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+          .bind(po.id, b.received_on || now.substring(0, 10), summary, challan, req.user.user_id, uuid, now, over.length ? excessNote : null, po.vendor_id, truck, weight, lat, lng, acc, photoDoc, photoDoc ? now : null),
         ...links.map((l) => env.DB.prepare('UPDATE pro_po_items SET stock_item_id = ? WHERE id = ? AND stock_item_id IS NULL').bind(l.link, l.id)),
         ...lines.map((l) => env.DB.prepare('INSERT INTO pro_grn_items (grn_id, po_item_id, qty_received, created_at) VALUES ((SELECT id FROM pro_grns WHERE client_uuid = ?), ?, ?, ?)').bind(uuid, l.id, l.qty, now)),
         // Items tied to a stock item also go into the store, in this same batch.
@@ -378,8 +397,22 @@ export function registerProcurement2(router, h) {
       const g = await env.DB.prepare('SELECT id FROM pro_grns WHERE client_uuid = ?').bind(uuid).first();
       const after = await env.DB.prepare('SELECT status FROM pro_pos WHERE id = ?').bind(po.id).first();
       await notifyRoles(env, ['purchase', 'pm'], `Material received: ${po.po_no}`, after.status === 'received' ? 'Order complete.' : 'Part delivery.', 'procurement');
-      return json({ ok: true, data: { id: g.id, po_status: after.status } });
+      return json({ ok: true, data: { id: g.id, po_status: after.status, photo_missing: !photoDoc } });
     } catch (e) { return serverError(e, 'grn-lines'); }
+  }));
+
+  // Attach (or add later) the gate photo of a receipt, for example when the phone had no signal at the gate.
+  router.post('/api/procurement/grns/:id/photo', async (req, env) => withAuth(req, env, 'procurement', 'C', async (req, env) => {
+    try {
+      const g = await env.DB.prepare('SELECT g.id, g.document_id, p.project_id FROM pro_grns g JOIN pro_pos p ON p.id = g.po_id WHERE g.id = ? AND g.deleted_at IS NULL').bind(Number(req.params.id)).first();
+      if (!g || !(await visibleProjectIds(env, req.user)).includes(g.project_id)) return json({ ok: false, error: 'Receipt not found.' }, 404);
+      if (g.document_id) return json({ ok: false, error: 'This receipt already has its gate photo.' }, 409);
+      const b = await req.json().catch(() => ({}));
+      const d = await env.DB.prepare('SELECT id FROM documents WHERE id = ? AND deleted_at IS NULL AND project_id = ?').bind(Number(b.document_id), g.project_id).first();
+      if (!d) return json({ ok: false, error: 'The photo was not found.' }, 400);
+      await env.DB.batch([env.DB.prepare('UPDATE pro_grns SET document_id = ?, photo_at = ? WHERE id = ? AND document_id IS NULL').bind(d.id, nowStr(), g.id), audit(env, req.user, 'grn_photo', 'pro_grns', g.id, 'Gate photo added to a receipt')]);
+      return json({ ok: true });
+    } catch (e) { return serverError(e, 'grn-photo'); }
   }));
 
   // ---------- Bill payments (part payments, reversal instead of delete) ----------

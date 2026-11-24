@@ -2,6 +2,7 @@
 // Labour is paid through contractors, so there is no payroll. All money is integer paise; rates for GST/TDS are settings.
 import { emit } from '../core/events.js';
 import { approvalState, isDate, demolitionBlock, ccFloorBlock } from '../core/gates.js';
+import { ccOverFloor, boqCapProblem } from './m3gaps.js';
 
 const rupees = (p) => '₹' + (Number(p) / 100).toLocaleString('en-IN');
 const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
@@ -196,6 +197,15 @@ export function registerContractors(router, h) {
         if (i.wast != null && !(i.wast >= 0 && i.wast <= 5000)) return json({ ok: false, error: 'Allowed wastage looks wrong.' }, 400);
       }
       if (basis !== 'lump_sum' && !items.length) return json({ ok: false, error: 'Add the items with quantity and rate.' }, 400);
+      // CC floor and BOQ cap: the Owner may go ahead only with a written reason; anyone else is stopped.
+      const woWing = String(b.wing || '').trim().slice(0, 20) || null;
+      const woFloor = b.floor === '' || b.floor == null ? null : Math.round(num(b.floor));
+      if (woFloor != null && !(woFloor >= 0 && woFloor <= 200)) return json({ ok: false, error: 'Check the floor number (0 is the plinth).' }, 400);
+      const ccMsg = await ccOverFloor(env, pid, woWing, [woFloor]);
+      const capMsg = await boqCapProblem(env, pid, items.map((i) => ({ boq: i.boq, qty: i.qty, rate: i.rate })));
+      let ccNote = null, boqNote = null;
+      if (ccMsg) { const why = String(b.override_note || '').trim().slice(0, 300); if (req.user.role !== 'owner' || why.length < 10) return json({ ok: false, error: ccMsg + (req.user.role === 'owner' ? ' As the Owner you can go ahead only with a written reason.' : ' A work order for this floor cannot be issued yet.'), code: 'cc' }, 409); ccNote = why; }
+      if (capMsg) { const why = String(b.boq_override_note || '').trim().slice(0, 300); if (req.user.role !== 'owner' || why.length < 10) return json({ ok: false, error: capMsg + (req.user.role === 'owner' ? ' As the Owner you can go ahead only with a written reason.' : ' Ask the Owner, or raise a BOQ change first.'), code: 'boq_cap' }, 409); boqNote = why; }
       const value = items.length ? items.reduce((t, i) => t + Math.round(i.qty * i.rate), 0) : Math.round(num(b.value_paise));
       if (!(value > 0)) return json({ ok: false, error: 'Enter the work order value.' }, 400);
       const ret = Math.round(num(b.retention_bp));
@@ -209,8 +219,8 @@ export function registerContractors(router, h) {
       const c = await env.DB.prepare('INSERT INTO counters (key, value) VALUES (?, 1) ON CONFLICT(key) DO UPDATE SET value = value + 1 RETURNING value').bind(`wo:${pid}`).first();
       const proj = await env.DB.prepare('SELECT code FROM projects WHERE id = ?').bind(pid).first();
       const no = `WO-${proj ? proj.code : pid}-${String(c.value).padStart(4, '0')}`;
-      const r = await env.DB.prepare("INSERT INTO con_work_orders (project_id, contractor_id, wo_no, scope, basis, value_paise, retention_bp, advance_paise, status, created_by, created_at, budget_head_id, advance_recovery_bp, is_demolition) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?)")
-        .bind(pid, cid, no, String(b.scope || '').slice(0, 1000), basis, value, ret, adv, req.user.user_id, nowStr(), headId, adv > 0 ? recBp : null, b.is_demolition ? 1 : 0).run();
+      const r = await env.DB.prepare("INSERT INTO con_work_orders (project_id, contractor_id, wo_no, scope, basis, value_paise, retention_bp, advance_paise, status, created_by, created_at, budget_head_id, advance_recovery_bp, is_demolition, wing, floor, cc_override_note, boq_override_note) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+        .bind(pid, cid, no, String(b.scope || '').slice(0, 1000), basis, value, ret, adv, req.user.user_id, nowStr(), headId, adv > 0 ? recBp : null, b.is_demolition ? 1 : 0, woWing, woFloor, ccNote, boqNote).run();
       const id = r.meta.last_row_id;
       await env.DB.batch([
         ...items.map((i) => env.DB.prepare('INSERT INTO con_wo_items (wo_id, description, qty, unit, rate_paise, amount_paise, boq_item_id, drawing_id, stock_item_id, consumption_per_unit, wastage_bp) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
@@ -488,6 +498,10 @@ export function registerContractors(router, h) {
       if (cons != null && !(cons > 0)) return json({ ok: false, error: 'Material per unit must be more than zero.' }, 400);
       if (wast != null && !(wast >= 0 && wast <= 5000)) return json({ ok: false, error: 'Allowed wastage looks wrong.' }, 400);
       if (stock && cons == null) return json({ ok: false, error: 'Say how much of the store item one unit of work uses.' }, 400);
+      if (boq && boq !== it.boq_item_id) {   // tying a line to a BOQ item: the BOQ must still have that quantity free, at or above this rate
+        const capMsg = await boqCapProblem(env, it.project_id, [{ boq, qty: it.qty, rate: it.rate_paise }], it.wo_id);
+        if (capMsg) { const why = String(b.boq_override_note || '').trim().slice(0, 300); if (req.user.role !== 'owner' || why.length < 10) return json({ ok: false, error: capMsg + (req.user.role === 'owner' ? ' As the Owner you can go ahead only with a written reason.' : ' Ask the Owner, or raise a BOQ change first.'), code: 'boq_cap' }, 409); await env.DB.prepare('UPDATE con_work_orders SET boq_override_note = ? WHERE id = ?').bind(why, it.wo_id).run(); }
+      }
       await env.DB.batch([
         env.DB.prepare('UPDATE con_wo_items SET boq_item_id = ?, drawing_id = ?, stock_item_id = ?, consumption_per_unit = ?, wastage_bp = ? WHERE id = ?').bind(boq, drw, stock, cons, wast, it.id),
         audit(env, req.user, 'edit', 'con_wo_items', it.id, `${it.wo_no} ${it.description}: links updated`),

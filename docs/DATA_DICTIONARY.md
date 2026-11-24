@@ -480,3 +480,11 @@ id TEXT PK, source TEXT, seen_at TEXT
 - Apply (POST /api/sales/price-matrix/apply) rewrites price_paise and floor_rise_paise for flats with status available or held (never booked), audited.
 - Token proof: sal_hold_tokens.proof_doc_id points to a documents row with category kyc, module sales (visible only to Owner, PM, Sales, Accounts).
 
+## Module 3 gaps, step 1 (migration 0047)
+- pro_grns: vendor_id (the PO's supplier at receipt time), truck_no (capitals), weight_kg (weighbridge), lat, lng, accuracy_m (phone location, optional), photo_at; document_id (existing column) now holds the gate photo. Unique index uq_grn_challan on (vendor_id, lower(trim(challan_no))) for live rows with a vendor and a challan; rows from before this change have no vendor_id and are not affected.
+- con_work_orders: wing, floor (highest floor the order covers, optional), cc_override_note (Owner's reason when above the approved CC), boq_override_note (Owner's reason when a line passed the BOQ quantity or rate).
+- pro_indent_items: boq_item_id (bud_items.id), over_boq (1 = the total asked for this BOQ item, not counting rejected indents, passes the BOQ quantity).
+- site_dprs.cc_override_note: Owner's reason when a work line was above the approved CC floor.
+- Rules: a work-order line tied to a BOQ item may use only the BOQ quantity not already used by other work orders that are not rejected, cancelled or closed (draft, pending and approved all count), at a rate no higher than the BOQ rate. The CC check applies only when a CC floor is on record for the wing (apr_items.cc_upto_floor).
+- Settings: pro.grn_gate (on unless Off), stk.wastage_alert_bp (default 250). Alert text link wastage:<project>:<item>:<year-week>, once per week per user.
+

@@ -148,9 +148,9 @@ ok('the Owner approves their own count correction', (await o.call('POST', `/api/
 const cem = (await pur.call('POST', '/api/stores/items', { name: 'Cement ' + run, unit: 'bags' })).data.id;
 const lines = (await pur.call('GET', `/api/procurement/pos/${opo}/lines`)).data.items;
 ok('the receipt form knows the line is not tied to a store item', lines[0].stock_item_id === null);
-await site.call('POST', `/api/procurement/pos/${opo}/grn-lines`, { lines: [{ po_item_id: lines[0].id, qty_received: 60, stock_item_id: cem }] });
+await site.call('POST', `/api/procurement/pos/${opo}/grn-lines`, { challan_no: 'CH' + Math.random().toString(36).slice(2, 10), lines: [{ po_item_id: lines[0].id, qty_received: 60, stock_item_id: cem }] });
 ok('material received is added to the store once tied', (await pm.call('GET', `/api/stores/stock?project_id=${pid}`)).data.stock.find((s) => s.item_id === cem).qty === 60);
-await site.call('POST', `/api/procurement/pos/${opo}/grn-lines`, { lines: [{ po_item_id: lines[0].id, qty_received: 40 }] });
+await site.call('POST', `/api/procurement/pos/${opo}/grn-lines`, { challan_no: 'CH' + Math.random().toString(36).slice(2, 10), lines: [{ po_item_id: lines[0].id, qty_received: 40 }] });
 ok('the next delivery goes in by itself (60 + 40 = 100)', (await pm.call('GET', `/api/stores/stock?project_id=${pid}`)).data.stock.find((s) => s.item_id === cem).qty === 100);
 
 // ============ 1: see files without downloading ============

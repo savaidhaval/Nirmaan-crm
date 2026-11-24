@@ -54,13 +54,13 @@ const pl = (await site.call('GET', `/api/procurement/pos/${po.data.id}/lines`)).
 ok('site sees quantities but no rates', pl.items.length === 2 && pl.items.every((i) => !('rate_paise' in i) && !('amount_paise' in i)));
 const [pc, ps] = pl.items;
 const gu = 'grn-' + run;
-const g1 = await site.call('POST', `/api/procurement/pos/${po.data.id}/grn-lines`, { client_uuid: gu, lines: [{ po_item_id: pc.id, qty_received: 90 }] });
+const g1 = await site.call('POST', `/api/procurement/pos/${po.data.id}/grn-lines`, { challan_no: 'CH' + Math.random().toString(36).slice(2, 10), client_uuid: gu, lines: [{ po_item_id: pc.id, qty_received: 90 }] });
 ok('90 of 100 bags received: PO part_received', g1.status === 200 && g1.data.po_status === 'part_received', JSON.stringify(g1));
-const g1b = await site.call('POST', `/api/procurement/pos/${po.data.id}/grn-lines`, { client_uuid: gu, lines: [{ po_item_id: pc.id, qty_received: 90 }] });
+const g1b = await site.call('POST', `/api/procurement/pos/${po.data.id}/grn-lines`, { challan_no: 'CH' + Math.random().toString(36).slice(2, 10), client_uuid: gu, lines: [{ po_item_id: pc.id, qty_received: 90 }] });
 ok('offline retry does not duplicate', g1b.data.duplicate === true);
 ok('received total stays 90 after retry', (await site.call('GET', `/api/procurement/pos/${po.data.id}/lines`)).data.items.find((i) => i.id === pc.id).received === 90);
-ok('item from another PO refused', (await site.call('POST', `/api/procurement/pos/${po.data.id}/grn-lines`, { lines: [{ po_item_id: 99999999, qty_received: 1 }] })).status === 400);
-await site.call('POST', `/api/procurement/pos/${po.data.id}/grn-lines`, { lines: [{ po_item_id: pc.id, qty_received: 10 }, { po_item_id: ps.id, qty_received: 5 }] });
+ok('item from another PO refused', (await site.call('POST', `/api/procurement/pos/${po.data.id}/grn-lines`, { challan_no: 'CH' + Math.random().toString(36).slice(2, 10), lines: [{ po_item_id: 99999999, qty_received: 1 }] })).status === 400);
+await site.call('POST', `/api/procurement/pos/${po.data.id}/grn-lines`, { challan_no: 'CH' + Math.random().toString(36).slice(2, 10), lines: [{ po_item_id: pc.id, qty_received: 10 }, { po_item_id: ps.id, qty_received: 5 }] });
 ok('everything received: PO received', (await o.call('GET', '/api/procurement/pos')).data.pos.find((p) => p.id === po.data.id).status === 'received');
 const rep = (await o.call('GET', '/api/procurement/reports/po-vs-received')).data.rows.filter((r) => r.po_no === po.data.po_no);
 ok('PO vs received report is exact', rep.length === 2 && rep.every((r) => r.received === r.ordered));

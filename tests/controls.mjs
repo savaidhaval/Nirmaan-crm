@@ -142,11 +142,11 @@ const po = (await pur.call('POST', '/api/procurement/pos', { project_id: pid, ve
 await pur.call('POST', `/api/procurement/pos/${po.id}/submit`); await o.call('POST', `/api/procurement/pos/${po.id}/approve`);
 const lines = (await pur.call('GET', `/api/procurement/pos/${po.id}/lines`)).data.items;
 ok('the note-only receipt is refused for a PO with items', (await site.call('POST', `/api/procurement/pos/${po.id}/grn`, { qty_note: 'came', full: true })).code === 'use_lines');
-const ex = await site.call('POST', `/api/procurement/pos/${po.id}/grn-lines`, { lines: [{ po_item_id: lines[0].id, qty_received: 10.5 }] });
+const ex = await site.call('POST', `/api/procurement/pos/${po.id}/grn-lines`, { challan_no: 'CH' + Math.random().toString(36).slice(2, 10), lines: [{ po_item_id: lines[0].id, qty_received: 10.5 }] });
 ok('receiving 10.5 MT against 10 (over 3%) is refused for site', ex.status === 409 && ex.code === 'excess');
-ok('9 MT (within the order) is accepted', (await site.call('POST', `/api/procurement/pos/${po.id}/grn-lines`, { lines: [{ po_item_id: lines[0].id, qty_received: 9 }] })).status === 200);
-ok('the PM accepts extra only with a reason', (await pm.call('POST', `/api/procurement/pos/${po.id}/grn-lines`, { lines: [{ po_item_id: lines[0].id, qty_received: 1.5 }] })).code === 'excess'
-  && (await pm.call('POST', `/api/procurement/pos/${po.id}/grn-lines`, { lines: [{ po_item_id: lines[0].id, qty_received: 1.5 }], excess_note: 'Cut lengths, agreed' })).status === 200);
+ok('9 MT (within the order) is accepted', (await site.call('POST', `/api/procurement/pos/${po.id}/grn-lines`, { challan_no: 'CH' + Math.random().toString(36).slice(2, 10), lines: [{ po_item_id: lines[0].id, qty_received: 9 }] })).status === 200);
+ok('the PM accepts extra only with a reason', (await pm.call('POST', `/api/procurement/pos/${po.id}/grn-lines`, { challan_no: 'CH' + Math.random().toString(36).slice(2, 10), lines: [{ po_item_id: lines[0].id, qty_received: 1.5 }] })).code === 'excess'
+  && (await pm.call('POST', `/api/procurement/pos/${po.id}/grn-lines`, { challan_no: 'CH' + Math.random().toString(36).slice(2, 10), lines: [{ po_item_id: lines[0].id, qty_received: 1.5 }], excess_note: 'Cut lengths, agreed' })).status === 200);
 ok('a bill from a different vendor than the PO is refused', (await acc.call('POST', '/api/procurement/bills', { po_id: po.id, vendor_id: v2, bill_no: 'X1', amount_paise: 100 * L })).status === 400);
 const good = await acc.call('POST', '/api/procurement/bills', { po_id: po.id, vendor_id: v1, bill_no: 'SB-' + run, amount_paise: 3540 * L, gst_paise: 540 * L });
 ok('a bill within what was received (6 MT of 10.5) is not held', good.status === 200 && good.data.on_hold === false, JSON.stringify(good));
