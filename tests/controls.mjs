@@ -15,6 +15,7 @@ const L = 100000; // Rs 1,000 in paise
 
 const pid = (await o.call('POST', '/api/projects', { name: 'zz-ctl ' + run, code: 'CT' + run.toUpperCase().slice(-6), type: 'new_build' })).data.id;
 const pm = await mkUser('pm', []); const pm2 = await mkUser('pm', []); const site = await mkUser('site', [pid]); const pur = await mkUser('purchase', []); const acc = await mkUser('accounts', []); const sales = await mkUser('sales', []);
+await o.call('POST', '/api/settings/sales.lock_above_cc', { value: 'off' });   // this suite books on floor 3 with a plinth-only CC; the CC-floor lock is tested in m2_step2
 await o.call('POST', '/api/settings/con.enabled', { value: 'on' });
 await o.call('POST', '/api/settings/con.pm_approval_limit_paise', { value: 50000000 });  // Rs 5 lakh
 
@@ -172,5 +173,6 @@ await o.call('POST', `/api/redev/members/${mem}/transit-term`, { monthly_rent_pa
 const months = (await o.call('GET', `/api/redev/members/${mem}/transit`)).data.months;
 ok('a rent term that started 50 months ago is scheduled past month 48', months.length > 50, String(months.length));
 
+await o.call('POST', '/api/settings/sales.lock_above_cc', { value: 'on' });
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

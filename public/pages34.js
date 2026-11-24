@@ -1,7 +1,7 @@
 // pages34.js — Module 2, step 2: Reception check-in (buyer confirms on their own phone), Token holds (Accounts clears), Site updates (one-tap WhatsApp).
-Object.assign(ICONS, { reception: 'M12 12a4 4 0 100-8 4 4 0 000 8zM4 21a8 8 0 0116 0', tokens: 'M12 3v18M17 7H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6', updates: 'M4 5h16v11H8l-4 4zM8 9h8M8 12h5' });
-Object.assign(ROUTE_TITLES, { reception: 'Reception check-in', tokens: 'Token holds', updates: 'Site updates' });
-Object.assign(PAGES, { reception: renderReception, tokens: renderTokens, updates: renderUpdates });
+Object.assign(ICONS, { pricing: 'M4 7h16M4 12h16M4 17h10M18 15v4M16 17h4', reception: 'M12 12a4 4 0 100-8 4 4 0 000 8zM4 21a8 8 0 0116 0', tokens: 'M12 3v18M17 7H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6', updates: 'M4 5h16v11H8l-4 4zM8 9h8M8 12h5' });
+Object.assign(ROUTE_TITLES, { pricing: 'Price list', reception: 'Reception check-in', tokens: 'Token holds', updates: 'Site updates' });
+Object.assign(PAGES, { pricing: renderPricing, reception: renderReception, tokens: renderTokens, updates: renderUpdates });
 
 const _sidebarItems34 = sidebarItems;
 sidebarItems = function (role) {
@@ -11,6 +11,7 @@ sidebarItems = function (role) {
     groups[groups.length - 1][1].push({ label, route, icon: route });
   };
   if (['owner', 'pm', 'sales'].includes(role)) { add('Reception check-in', 'reception', 'sales'); add('Site updates', 'updates', 'reception'); }
+  if (['owner', 'pm'].includes(role)) add('Price list', 'pricing', 'stacking');
   if (['owner', 'pm', 'accounts'].includes(role)) add('Token holds', 'tokens', ['owner', 'pm', 'sales'].includes(role) ? 'reception' : 'sales');
   return groups;
 };
@@ -60,7 +61,7 @@ async function renderTokens(main) {
   const load = async () => {
     try {
       const rows = (await api('/api/sales/token-holds')).data.tokens;
-      $('tk-list').innerHTML = rows.map((t) => `<div class="card"><div class="row"><div><b>${esc(t.wing ? t.wing + '-' : '')}${esc(t.unit_no)} · ${moneyP(t.amount_paise)}</b><p class="muted">${esc(String(t.mode).toUpperCase())} ref <b>${esc(t.ref_no)}</b><br>${esc(t.lead_name || '')} · by ${esc(t.holder || '')}<br>Goes back on sale ${esc(dateIST(t.blocked_till))}</p></div></div>
+      $('tk-list').innerHTML = rows.map((t) => `<div class="card"><div class="row"><div><b>${esc(t.wing ? t.wing + '-' : '')}${esc(t.unit_no)} · ${moneyP(t.amount_paise)}</b><p class="muted">${esc(String(t.mode).toUpperCase())} ref <b>${esc(t.ref_no)}</b>${t.proof_doc_id ? ` · <a href="/api/files/download/${t.proof_doc_id}" target="_blank" rel="noopener">see the photo</a>` : ''}<br>${esc(t.lead_name || '')} · by ${esc(t.holder || '')}<br>Goes back on sale ${esc(dateIST(t.blocked_till))}</p></div></div>
         <div class="row-btns"><button class="btn small btn-primary" data-ok="${t.id}">Cleared</button><button class="btn small" data-no="${t.id}">Not received</button></div></div>`).join('') || '<div class="empty-state"><p>No tokens waiting.</p></div>';
       $('tk-list').querySelectorAll('[data-ok]').forEach((b) => { b.onclick = async () => { if (await act(api(`/api/sales/token-holds/${b.dataset.ok}/clear`, { method: 'POST' }), 'Token cleared')) load(); }; });
       $('tk-list').querySelectorAll('[data-no]').forEach((b) => { b.onclick = async () => { const v = await openForm({ title: 'Token not received', fields: [{ name: 'note', label: 'Why?', required: true }] }); if (v && await act(api(`/api/sales/token-holds/${b.dataset.no}/reject`, { method: 'POST', body: v }), 'The flat is back on sale')) load(); }; });
@@ -83,4 +84,35 @@ async function renderUpdates(main) {
     const paint = () => { const m = d.milestones[Number($('up-ms').value)]; $('up-leads').innerHTML = d.leads.map((l) => `<div class="card"><div class="row"><div><b>${esc(l.name)}</b><p class="muted">${esc(l.phone)}</p></div><a class="btn small btn-primary" target="_blank" rel="noopener" href="${waLink(l.phone, msgFor(l, m))}">WhatsApp</a></div></div>`).join('') || '<div class="empty-state"><p>No warm buyers with consent yet. Mark visit feedback as Warm to see them here.</p></div>'; };
     $('up-ms').onchange = paint; paint();
   } catch (e) { $('up-out').innerHTML = `<div class="error">${esc(e.message)}</div>`; }
+}
+
+// ---------- Price list (pricing matrix) ----------
+async function renderPricing(main) {
+  main.innerHTML = '<h1>Price list</h1><p class="help">One place for the rate the whole team quotes from: base rate per RERA carpet sq ft, floor rise, location charges (PLC), parking, club and development charges. Cost sheets then fill themselves from it. The Owner changes it; every change is recorded with a reason. Confirm the figures with your CA.</p><div id="pm-out">Loading...</div>';
+  const projects = await getProjects().catch(() => []);
+  const pid = scopeProject && projects.some((p) => p.id === scopeProject) ? scopeProject : (projects[0] || {}).id;
+  if (!pid) { $('pm-out').innerHTML = '<p>Create a project first.</p>'; return; }
+  const owner = currentUser.role === 'owner';
+  const load = async () => {
+    try {
+      const d = (await api('/api/sales/price-matrix?project_id=' + pid)).data, m = d.matrix;
+      $('pm-out').innerHTML = (m ? `<div class="card"><div class="kv"><span>Base rate</span><b>${moneyP(m.base_rate_paise)} / sq ft</b><span>Floor rise</span><b>${moneyP(m.rise_paise_per_floor)} / sq ft per floor, from floor ${m.rise_from_floor}</b><span>Car parking</span><b>${moneyP(m.parking_paise)} each</b><span>Club membership</span><b>${moneyP(m.club_paise)}</b><span>Development charges</span><b>${moneyP(m.dev_paise)}</b></div></div>
+        <h3>Location charges (PLC)</h3>${d.plc.map((r) => `<p>• <b>${esc(r.label)}</b> for flats tagged <b>${esc(r.tag)}</b>: ${moneyP(r.amount_paise)}${r.kind === 'per_sqft' ? ' / sq ft' : ' per flat'}</p>`).join('') || '<p class="muted">None.</p>'}`
+        : '<div class="empty-state"><p>No price list for this project yet.</p></div>')
+        + (owner ? `<div class="row-btns"><button class="btn btn-primary" id="pm-edit">${m ? 'Change the price list' : 'Set the price list'}</button>${m ? '<button class="btn" id="pm-apply">Write it into the rate card of unbooked flats</button>' : ''}</div>` : '');
+      if (!owner) return;
+      $('pm-edit').onclick = async () => {
+        const v = await openForm({ title: 'Price list', intro: 'Amounts in rupees. Floor rise is per sq ft for each floor from the floor you name upward. Tag flats (for example garden, corner) from the flat card on the Stacking plan.', fields: [
+          { name: 'base_rate_paise', label: 'Base rate per sq ft (₹)', type: 'money', required: true, value: m ? m.base_rate_paise / 100 : '' }, { name: 'rise_paise_per_floor', label: 'Floor rise per sq ft per floor (₹)', type: 'money', value: m ? m.rise_paise_per_floor / 100 : '' }, { name: 'rise_from_floor', label: 'Floor rise starts from floor', type: 'number', value: m ? m.rise_from_floor : 1 },
+          { name: 'parking_paise', label: 'Car parking, each (₹)', type: 'money', value: m ? m.parking_paise / 100 : '' }, { name: 'club_paise', label: 'Club membership (₹)', type: 'money', value: m ? m.club_paise / 100 : '' }, { name: 'dev_paise', label: 'Development charges (₹)', type: 'money', value: m ? m.dev_paise / 100 : '' },
+          { name: 'plc', label: 'Location charges, one per line: tag | name | per_sqft or flat | amount', type: 'textarea', placeholder: 'garden | Garden view | per_sqft | 15000\ncorner | Corner flat | flat | 500000', value: d.plc.map((r) => `${r.tag} | ${r.label} | ${r.kind} | ${r.amount_paise / 100}`).join('\n') },
+          { name: 'reason', label: 'Reason for the change', required: true }] });
+        if (!v) return;
+        const plc = String(v.plc || '').split('\n').map((l) => l.trim()).filter(Boolean).map((l) => { const [tag, label, kind, amt] = l.split('|').map((x) => x.trim()); return { tag, label, kind: kind === 'flat' ? 'flat' : 'per_sqft', amount_paise: rupeesToPaise(amt || '') }; });
+        if (await act(api('/api/sales/price-matrix', { method: 'POST', body: { project_id: pid, ...v, rise_from_floor: Number(v.rise_from_floor) || 1, plc } }), 'Saved')) load();
+      };
+      if ($('pm-apply')) $('pm-apply').onclick = async () => { const v = await openForm({ title: 'Write into the rate card', intro: 'Sets the price and floor rise of every flat that is not booked, from the price list. Booked flats are never changed.', fields: [{ name: 'reason', label: 'Reason', required: true }] }); if (v) { const r = await act(api('/api/sales/price-matrix/apply', { method: 'POST', body: { project_id: pid, reason: v.reason } })); if (r) toast(r.data.changed + ' flats updated'); } };
+    } catch (e) { $('pm-out').innerHTML = `<div class="error">${esc(e.message)}</div>`; }
+  };
+  load();
 }

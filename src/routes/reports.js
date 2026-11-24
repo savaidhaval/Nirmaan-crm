@@ -18,7 +18,7 @@ export function registerReports(router, h) {
       const pid = Number(new URL(req.url).searchParams.get('project_id'));
       const ids = await scopeIds(env, req.user, pid);
       if (!pid || !ids.length) return json({ ok: false, error: 'Pick a project.' }, 400);
-      const rows = await env.DB.prepare(`SELECT i.id, i.wing, i.floor, i.unit_no, i.type, i.category, i.status, i.price_paise, i.floor_rise_paise, i.msp_paise, i.carpet_sqft, i.rera_carpet_sqft, i.blocked_till, i.hold_by,
+      const rows = await env.DB.prepare(`SELECT i.id, i.wing, i.floor, i.unit_no, i.type, i.category, i.status, i.price_paise, i.floor_rise_paise, i.msp_paise, i.plc_tags, i.carpet_sqft, i.rera_carpet_sqft, i.blocked_till, i.hold_by,
         hu.name AS holder, hl.name AS holder_lead, b.id AS booking_id, b.customer_name, b.agreed_price_paise, b.registration_date, b.status AS booking_status
         FROM sal_inventory i LEFT JOIN users hu ON hu.id = i.hold_by LEFT JOIN sal_leads hl ON hl.id = i.hold_lead_id
         LEFT JOIN sal_bookings b ON b.unit_id = i.id AND b.status <> 'cancelled' AND b.deleted_at IS NULL
@@ -36,7 +36,7 @@ export function registerReports(router, h) {
         else if (u.status === 'held') state = 'token_locked';
         else if (st && u.floor != null && st.ccUpto(u.wing || null) != null && u.floor > st.ccUpto(u.wing || null)) state = 'not_open';   // above the approved CC floor
         const list = u.price_paise + (u.floor_rise_paise || 0);
-        return { id: u.id, wing: u.wing || '', floor: u.floor, unit_no: u.unit_no, type: u.type, state, list_paise: list, msp_paise: ['owner', 'pm'].includes(req.user.role) ? u.msp_paise : null, carpet_sqft: u.carpet_sqft, rera_carpet_sqft: u.rera_carpet_sqft,
+        return { id: u.id, wing: u.wing || '', floor: u.floor, unit_no: u.unit_no, type: u.type, state, list_paise: list, msp_paise: ['owner', 'pm'].includes(req.user.role) ? u.msp_paise : null, plc_tags: ['owner', 'pm'].includes(req.user.role) ? (u.plc_tags || '') : null, carpet_sqft: u.carpet_sqft, rera_carpet_sqft: u.rera_carpet_sqft,
           rate_sqft_paise: u.rera_carpet_sqft ? Math.round(list / u.rera_carpet_sqft) : null, holder: state === 'token_locked' ? u.holder : null, holder_lead: state === 'token_locked' && seeNames ? u.holder_lead : null, blocked_till: state === 'token_locked' ? u.blocked_till : null,
           booking_id: seeNames ? u.booking_id : null, customer: seeNames && state !== 'available' ? u.customer_name : null, agreed_paise: seeNames ? u.agreed_price_paise : null };
       });

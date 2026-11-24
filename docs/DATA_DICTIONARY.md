@@ -472,3 +472,11 @@ id TEXT PK, source TEXT, seen_at TEXT
 - Cron: a fifth trigger "*/15 * * * *" runs only the lead call-deadline check (business hours 09:00-19:00 IST); it was removed from the hourly sweep. Production only; staging has no crons.
 - Routes: POST/GET /api/sales/checkins, GET /api/sales/partner-names, GET/POST /api/public/checkin/:token, GET /c/:token (page), GET /api/sales/token-holds, POST /api/sales/token-holds/:id/clear|reject, GET /api/sales/leads/:id/welcome, GET /api/sales/reengage.
 
+## Module 2 gaps, step 3 (migration 0046)
+- sal_price_matrix (one row per project): base_rate_paise (per RERA carpet sq ft), rise_paise_per_floor (per sq ft, for each floor from rise_from_floor upward), rise_from_floor, parking_paise (per slot), club_paise and dev_paise (per flat), updated_by, updated_at. In the backup list.
+- sal_plc_rules (project_id, tag, label, kind per_sqft|flat, amount_paise, retired): location charges. A change retires the old rules and adds new ones (nothing deleted). In the backup list.
+- sal_inventory.plc_tags: comma-separated lower-case tags (for example garden,corner); a PLC rule applies to flats carrying its tag.
+- Quote (GET /api/sales/units/:id/quote?parking=N) is computed, not stored: floor rise = rise x max(0, floor - from + 1) x RERA carpet; PLC per sq ft x carpet or flat amount; parking x slots; club; development. matches_rate_card says whether the flat's price already equals base rate x carpet.
+- Apply (POST /api/sales/price-matrix/apply) rewrites price_paise and floor_rise_paise for flats with status available or held (never booked), audited.
+- Token proof: sal_hold_tokens.proof_doc_id points to a documents row with category kyc, module sales (visible only to Owner, PM, Sales, Accounts).
+

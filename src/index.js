@@ -14,6 +14,7 @@ import { registerSalesOps, expireHolds, LEAD_TRANSITIONS, shared as salesShared 
 import { registerSales3, ensureDemandNumber, handoverDueSweep } from './routes/sales3.js';
 import { registerM2Gaps, partnerPayBlock, leadSlaReassign } from './routes/m2gaps.js';
 import { registerM2Step2 } from './routes/m2step2.js';
+import { registerM2Step3 } from './routes/m2step3.js';
 import { registerBulkDemands, demandLetterHtml } from './routes/bulk_demands.js';
 import { registerReports } from './routes/reports.js';
 import { registerFinance } from './routes/finance.js';
@@ -1720,7 +1721,7 @@ router.get('/api/export/:what', async (req, env) => {
 // Tables are read in parts so one request or cron run never goes near the free plan's 50-queries-per-run cap.
 const EXPORT_TABLES = ['projects', 'apr_items', 'apr_events', 'drw_drawings', 'drw_revisions', 'site_milestones', 'site_dprs', 'site_snags', 'pro_vendors', 'pro_rfqs', 'pro_quotes', 'pro_pos', 'pro_po_items', 'pro_grns', 'pro_bills',
     'sal_leads', 'sal_activities', 'sal_visits', 'sal_inventory', 'sal_partners', 'sal_bookings', 'sal_plan_stages', 'sal_demands', 'sal_receipts', 'documents', 'audit_log',
-    'pro_grn_items', 'pro_payments', 'ppl_staff', 'ppl_hiring', 'ppl_candidates', 'sal_brokerage_payments', 'sal_refunds', 'sal_interest_waivers', 'sal_hold_log', 'sal_hold_tokens', 'sal_checkins', 'mkt_spend', 'brands', 'counters',
+    'pro_grn_items', 'pro_payments', 'ppl_staff', 'ppl_hiring', 'ppl_candidates', 'sal_brokerage_payments', 'sal_refunds', 'sal_interest_waivers', 'sal_hold_log', 'sal_hold_tokens', 'sal_checkins', 'sal_price_matrix', 'sal_plc_rules', 'mkt_spend', 'brands', 'counters',
     'pro_indents', 'pro_indent_items', 'pro_rfq_items', 'pro_quote_items',
     'site_dpr_labour', 'bud_heads', 'stk_items', 'stk_balance', 'stk_moves', 'pro_party_docs', 'pro_professionals', 'ai_log', 'sal_receipt_requests', 'sal_adjustments', 'sal_booking_parties', 'sal_cost_sheets', 'sal_cost_sheet_lines', 'sal_handover', 'sal_handover_items', 'sal_booking_loans', 'rera_account_entries', 'eng_kudos', 'fea_versions', 'sal_bulk_runs', 'sal_bulk_items', 'drw_acks', 'tally_export_log', 'brand_profiles', 'project_members', 'drive_folders', 'bank_profiles', 'bank_import_batches', 'bank_import_rows', 'red_societies', 'red_members', 'red_consent_events', 'red_member_docs', 'red_rehab_allotments', 'red_transit_terms', 'red_transit_schedule', 'red_transit_payments', 'red_corpus_entries', 'red_meetings', 'red_meeting_attendees', 'red_rent_changes', 'red_site_proofs', 'red_payout_batches', 'prj_autodcr_history', 'apr_steps', 'apr_deps', 'con_variations', 'con_measurements', 'rera_certificates', 'qa_pours', 'qa_cubes', 'qa_ncrs', 'site_dpr_work', 'site_ms_changes', 'prj_holds', 'con_debit_notes', 'bud_items', 'bd_opportunities', 'bd_followups', 'bd_studies', 'bd_steps', 'prj_lifecycle', 'pty_funds', 'pty_entries', 'con_contractors', 'con_work_orders', 'con_wo_items', 'con_ra_bills', 'con_ra_lines', 'con_payments', 'con_ledger'];
 const EXPORT_PARTS = 3;
@@ -2330,6 +2331,7 @@ registerTally(router, { withAuth, json, serverError, visibleProjectIds, nowStr, 
 registerBank(router, { withAuth, json, serverError, visibleProjectIds, nowStr, getSetting, csvBom });
 registerBulkDemands(router, { withAuth, json, serverError, visibleProjectIds, getSetting, nowStr, printBrand, csvBom });
 registerM2Gaps(router, { withAuth, json, serverError, visibleProjectIds, getSetting, nowStr, encryptSetting });
+registerM2Step3(router, { withAuth, json, serverError, visibleProjectIds, nowStr });
 registerM2Step2(router, { withAuth, json, serverError, visibleProjectIds, getSetting, nowStr, checkRateLimit, clientIp, printBrand });
 registerSales3(router, { withAuth, json, serverError, visibleProjectIds, getSetting, nowStr, encryptSetting, decryptSetting, csvBom, printBrand, shared: salesShared });
 
@@ -2619,7 +2621,7 @@ router.post('/api/files/upload', async (req, env) => {
       const user = req.user;
       const formData = await req.formData();
       const modForPerm = formData.get('module');
-      const mayUpload = userCan(user, 'projects', 'C') || (['site', 'procurement', 'petty', 'rera', 'drawings'].includes(modForPerm) && userCan(user, modForPerm, 'C') && !formData.get('series_key')) || (modForPerm === 'statement' && ['owner', 'accounts'].includes(user.role) && formData.get('category') === 'statement' && !formData.get('series_key'));
+      const mayUpload = userCan(user, 'projects', 'C') || (['site', 'procurement', 'petty', 'rera', 'drawings'].includes(modForPerm) && userCan(user, modForPerm, 'C') && !formData.get('series_key')) || (modForPerm === 'sales' && formData.get('category') === 'kyc' && userCan(user, 'sales', 'C') && !formData.get('series_key')) || (modForPerm === 'statement' && ['owner', 'accounts'].includes(user.role) && formData.get('category') === 'statement' && !formData.get('series_key'));
       if (!mayUpload) return json({ ok: false, error: 'Not allowed.' }, 403);
       const file = formData.get('file');
       const projectId = formData.get('project_id');
