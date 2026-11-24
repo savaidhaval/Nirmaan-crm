@@ -64,12 +64,14 @@ async function newWorkOrder() {
     { name: 'scope', label: 'Scope of work', type: 'textarea', required: true },
     { name: 'basis', label: 'Paid on', type: 'select', options: [['lump_sum', 'Lump sum'], ['item_rate', 'Item rates'], ['measured', 'Measured quantities']] },
     { name: 'value_paise', label: 'Lump-sum value (₹) — leave blank if you list items next', type: 'money' },
+    { name: 'value_psf', label: 'Or the lump sum as ₹ per sq ft of the project (worked out from the project area)', type: 'money' },
     { name: 'retention', label: 'Retention held back (%)', type: 'number', value: 5, help: 'Usually 5%. Set per work order.' },
     { name: 'advance_paise', label: 'Advance agreed (₹)', type: 'money' },
     { name: 'wing', label: 'Wing (if it is for one wing)' }, { name: 'floor', label: 'Highest floor it covers (0 = plinth; blank if not floor work)', type: 'number', help: 'Checked against the approved CC floor.' },
     { name: 'is_demolition', type: 'checkbox', checkLabel: 'This work order starts demolition (needs the IOD and the site proofs first)' },
     ...(heads.length ? [{ name: 'budget_head_id', label: 'Budget head', type: 'select', options: heads, help: 'Which cost this belongs to. Used to watch the budget.' }] : [])] });
   if (!v) return;
+  if (!v.value_paise && v.value_psf) { const a = await areaFor(v.project_id); if (!a || !a.area_sqft) { toast(psfNeedArea(a), 8000); return; } v.value_paise = psfTotal(v.value_psf, a.area_sqft); }
   let items = [];
   if (v.basis !== 'lump_sum' || !v.value_paise) { items = await woItemsEditor('List each item with quantity and rate. The value is added up for you.'); if (!items) return; }
   const body = { is_demolition: !!v.is_demolition, project_id: Number(v.project_id), contractor_id: Number(v.contractor_id), scope: v.scope, basis: v.basis, value_paise: v.value_paise || 0, retention_bp: Math.round((Number(v.retention) || 0) * 100), advance_paise: v.advance_paise || 0, budget_head_id: v.budget_head_id ? Number(v.budget_head_id) : null, items };

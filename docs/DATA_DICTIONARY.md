@@ -521,3 +521,9 @@ id TEXT PK, source TEXT, seen_at TEXT
 - Settings: sales.letter_signatory, sales.collection_account_text, sales.cancel_cap_bp (1000), sales.refund_days (45), sales.cancel_admin_paise (0).
 - Interest waivers: POST /api/sales/demands/:id/interest-waiver by the Owner, and POST /api/sales/waivers/:id/approve, need a valid approval PIN in the body (pin).
 
+## Per sq ft (migration 0052)
+- projects.builtup_sqft (the PM's figure for the whole project, optional), projects.area_basis (saleable | carpet_all | builtup | plot; default saleable). projects.plot_area_sqm (existing) x 10.7639 gives the plot in sq ft.
+- GET /api/areas?project_id (or without project_id for every visible project) returns saleable_sqft, rehab_sqft, landowner_sqft, carpet_all_sqft (sums of sal_inventory.rera_carpet_sqft by category), builtup_sqft, plot_sqft, the chosen basis and area_sqft (null when the chosen area is not known), and flats_without_area. POST /api/areas (Owner, PM) sets builtup_sqft and area_basis; audited.
+- Per-sq-ft figures are computed on the screen (paise / area / 100 = rupees per sq ft, rounded to the rupee); a rate typed instead of a total is turned into paise (rate in paise x area) before it is sent, so the server sees the same amounts as before.
+- GET /api/redev/societies/:id/corpus now carries area_sqft (certified area, else carpet) for each entry.
+

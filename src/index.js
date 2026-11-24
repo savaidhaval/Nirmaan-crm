@@ -18,6 +18,7 @@ import { registerM2Step3 } from './routes/m2step3.js';
 import { ccOverFloor, wastageSweep, signoffBlock, registerM3Gaps, metres } from './routes/m3gaps.js';
 import { registerM4Gaps, afsGateOn } from './routes/m4gaps.js';
 import { registerM4Letters } from './routes/m4letters.js';
+import { registerAreas } from './routes/areas.js';
 import { registerBulkDemands, demandLetterHtml } from './routes/bulk_demands.js';
 import { registerReports } from './routes/reports.js';
 import { registerFinance } from './routes/finance.js';
@@ -2372,6 +2373,7 @@ registerTally(router, { withAuth, json, serverError, visibleProjectIds, nowStr, 
 registerBank(router, { withAuth, json, serverError, visibleProjectIds, nowStr, getSetting, csvBom });
 registerBulkDemands(router, { withAuth, json, serverError, visibleProjectIds, getSetting, nowStr, printBrand, csvBom });
 registerM2Gaps(router, { withAuth, json, serverError, visibleProjectIds, getSetting, nowStr, encryptSetting });
+registerAreas(router, { withAuth, json, serverError, visibleProjectIds, nowStr });
 registerM4Letters(router, { withAuth, json, serverError, visibleProjectIds, getSetting, nowStr, printBrand });
 registerM4Gaps(router, { withAuth, json, serverError, visibleProjectIds, getSetting, nowStr });
 registerM3Gaps(router, { withAuth, json, serverError, visibleProjectIds, getSetting, nowStr });

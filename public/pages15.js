@@ -190,12 +190,16 @@ async function rdHistory(memberId, pane, month) {
 async function rdCorpus(pane) {
   const c = (await api(`/api/redev/societies/${RD.soc}/corpus`)).data, canC = isRole('owner', 'accounts');
   pane.innerHTML = `<p class="muted">Corpus due ${moneyP(c.due_paise)} · received ${moneyP(c.paid_paise)}</p>${canC ? '<button class="btn btn-primary" id="cp-add">+ Add corpus item</button>' : ''} <a class="btn small" href="/api/redev/reports/corpus?csv=1">Report (Excel)</a>
-    ${c.entries.map((e) => `<div class="card" style="${e.reversed_at ? 'opacity:.6' : ''}"><div class="row"><div><b>${esc(e.label)}</b> · ${moneyP(e.amount_paise)}<p class="muted">${esc(e.member_name)} (${esc(e.unit_label)})${e.due_on ? ' · due ' + esc(e.due_on) : ''}${e.paid_on ? ' · paid ' + esc(e.paid_on) + ' ' + esc(e.ref_no || '') : ''}</p></div>${e.reversed_at ? chip('Reversed', '') : e.paid_on ? chip('Paid', 'good') : chip('Due', 'warn')}</div>
+    ${c.entries.map((e) => `<div class="card" style="${e.reversed_at ? 'opacity:.6' : ''}"><div class="row"><div><b>${esc(e.label)}</b> · ${moneyP(e.amount_paise)}${e.area_sqft ? psfTag(e.amount_paise, e.area_sqft) : ''}<p class="muted">${esc(e.member_name)} (${esc(e.unit_label)})${e.due_on ? ' · due ' + esc(e.due_on) : ''}${e.paid_on ? ' · paid ' + esc(e.paid_on) + ' ' + esc(e.ref_no || '') : ''}</p></div>${e.reversed_at ? chip('Reversed', '') : e.paid_on ? chip('Paid', 'good') : chip('Due', 'warn')}</div>
       ${e.reversal_note ? `<p class="muted">Reversed: ${esc(e.reversal_note)}</p>` : ''}${canC && !e.reversed_at ? `<div class="row-btns">${e.paid_on ? '' : `<button class="btn small" data-cpay="${e.id}">Mark paid</button>`}<button class="btn small" data-crev="${e.id}">Reverse</button></div>` : ''}</div>`).join('') || '<p class="muted">No corpus items yet.</p>'}`;
   if ($('cp-add')) $('cp-add').onclick = async () => {
     const ms = (await api(`/api/redev/societies/${RD.soc}/members?page=1`)).data.members;
-    const v = await openForm({ title: 'Corpus item', fields: [{ name: 'member_id', label: 'Member', type: 'select', options: ms.map((m) => [m.id, `${m.wing ? m.wing + '-' : ''}${m.unit_label} · ${m.member_name}`]) }, { name: 'label', label: 'What is it for?', required: true }, { name: 'amount_paise', label: 'Amount (₹)', type: 'money', required: true }, { name: 'due_on', label: 'Due on', type: 'date' }] });
-    if (v && await act(api(`/api/redev/members/${v.member_id}/corpus`, { method: 'POST', body: v }), 'Added')) rdCorpus(pane);
+    const v = await openForm({ title: 'Corpus item', fields: [{ name: 'member_id', label: 'Member', type: 'select', options: ms.map((m) => [m.id, `${m.wing ? m.wing + '-' : ''}${m.unit_label} · ${m.member_name}`]) }, { name: 'label', label: 'What is it for?', required: true }, { name: 'amount_paise', label: 'Amount (₹)', type: 'money' }, { name: 'rate_psf', label: 'Or ₹ per sq ft of the member\'s area (certified area, else carpet); replaces the amount', type: 'money' }, { name: 'due_on', label: 'Due on', type: 'date' }] });
+    if (!v) return;
+    if (v.rate_psf) { const m = ms.find((x) => String(x.id) === String(v.member_id)); const ar = Number(m && (m.certified_area_sqft || m.carpet_sqft)); if (!(ar > 0)) { toast('This member has no area recorded. Enter it under Rent, corpus & area.', 7000); return; } v.amount_paise = psfTotal(v.rate_psf, ar); }
+    if (!v.amount_paise) { toast('Enter the amount, or the rate per sq ft.'); return; }
+    delete v.rate_psf;
+    if (await act(api(`/api/redev/members/${v.member_id}/corpus`, { method: 'POST', body: v }), 'Added')) rdCorpus(pane);
   };
   pane.querySelectorAll('[data-cpay]').forEach((b) => { b.onclick = async () => { const v = await openForm({ title: 'Mark paid', fields: [{ name: 'paid_on', label: 'Date', type: 'date', value: today() }, { name: 'ref_no', label: 'Reference' }] }); if (v && await act(api(`/api/redev/corpus/${b.dataset.cpay}/pay`, { method: 'POST', body: v }), 'Saved')) rdCorpus(pane); }; });
   pane.querySelectorAll('[data-crev]').forEach((b) => { b.onclick = async () => { const v = await openForm({ title: 'Reverse', fields: [{ name: 'reason', label: 'Why?', required: true }] }); if (v && await act(api(`/api/redev/corpus/${b.dataset.crev}/reverse`, { method: 'POST', body: v }), 'Reversed')) rdCorpus(pane); }; });
@@ -211,12 +215,15 @@ async function rdTerms(memberId, pane) {
     { name: 'extra_area_pct', label: 'Proposed extra area on RERA carpet (%)', type: 'number', value: t.extra_area_bp == null ? '' : t.extra_area_bp / 100, help: t.new_rera_sqft ? `New RERA carpet now: ${t.new_rera_sqft} sq ft` : 'e.g. 35 for 35% more' },
     { name: 'rent_basis', label: 'Rent is', type: 'select', value: t.rent_basis || 'monthly', options: [['monthly', 'A monthly amount (₹ per month)'], ['per_sqft', '₹ per sq ft per month']] },
     ...[1, 2, 3, 4, 5].map((y) => ({ name: 'y' + y, label: `Year ${y} rent`, type: 'money', value: rs(t['rent_y' + y + '_paise']), placeholder: y > 1 ? 'Leave empty if not agreed' : '' })),
-    { name: 'corpus', label: 'Corpus fund (₹)', type: 'money', value: rs(t.corpus_paise) },
+    { name: 'corpus', label: 'Corpus fund (₹)', type: 'money', value: rs(t.corpus_paise), help: (t.corpus_paise && (t.certified_area_sqft || t.carpet_sqft)) ? 'That is ' + psfText(t.corpus_paise, t.certified_area_sqft || t.carpet_sqft) + ' on the member\'s area.' : '' },
+    { name: 'corpus_psf', label: 'Or corpus as ₹ per sq ft of the member\'s area (replaces the figure above)', type: 'money' },
     { name: 'shifting', label: 'Shifting charges (₹)', type: 'money', value: rs(t.shifting_paise) },
     { name: 'car_parks', label: 'Number of car parkings', type: 'number', value: t.car_parks ?? '' },
     { name: 'buys_extra', type: 'checkbox', checkLabel: 'Member is buying extra area', value: !!t.buys_extra },
     { name: 'buys_extra_sqft', label: 'Extra area being bought (sq ft)', type: 'number', value: t.buys_extra_sqft ?? '' }] });
   if (!v) return;
+  const memberArea = Number(v.certified_area_sqft || t.certified_area_sqft || v.carpet_sqft || t.carpet_sqft);
+  if (v.corpus_psf) { if (!(memberArea > 0)) { toast('Enter the member\'s area first.', 6000); return; } v.corpus = psfTotal(v.corpus_psf, memberArea); }
   const body = { carpet_sqft: v.carpet_sqft, certified_area_sqft: v.certified_area_sqft, extra_area_pct: v.extra_area_pct, rent_basis: v.rent_basis, corpus_paise: v.corpus || '', shifting_paise: v.shifting || '', car_parks: v.car_parks, buys_extra: v.buys_extra, buys_extra_sqft: v.buys_extra_sqft };
   [1, 2, 3, 4, 5].forEach((y) => { body['rent_y' + y + '_paise'] = v['y' + y] || ''; });
   const r = await m1RentSave('PUT', `/api/redev/members/${memberId}/terms`, body);

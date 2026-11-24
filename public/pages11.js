@@ -10,10 +10,12 @@ bookUnit = async function (unit) {
   try { sheets = (await api('/api/sales/cost-sheets?unit_id=' + unit.id)).data.sheets.filter((s) => s.status === 'approved' && !s.booking_id); } catch (e) { /* no access to sheets: type the price */ }
   const fields = [{ name: 'customer_name', label: 'Customer name', required: true }, { name: 'phone', label: 'Mobile' }, { name: 'email', label: 'Email', type: 'email' },
     ...(sheets.length ? [{ name: 'cost_sheet_id', label: 'Price from an approved cost sheet', type: 'select', options: [['', 'No, I will type the price'], ...sheets.map((s) => [s.id, `Version ${s.version} · ${moneyP(s.agreement_value_paise)}${s.lead_name ? ' · ' + s.lead_name : ''}`])], help: 'If you pick one, the price below is ignored.' }] : []),
-    { name: 'agreed_price_paise', label: 'Agreed price (₹)', type: 'money', value: ((unit.price_paise + (unit.floor_rise_paise || 0)) / 100) }, { name: 'token_paise', label: 'Token received (₹)', type: 'money' }];
+    { name: 'agreed_price_paise', label: 'Agreed price (₹)', type: 'money', value: ((unit.price_paise + (unit.floor_rise_paise || 0)) / 100) }, ...(unit.rera_carpet_sqft > 0 ? [{ name: 'rate_psf', label: `Or the agreed rate in ₹ per sq ft (RERA carpet ${unit.rera_carpet_sqft} sq ft); replaces the price above`, type: 'money' }] : []), { name: 'token_paise', label: 'Token received (₹)', type: 'money' }];
   const v = await openForm({ title: `Book ${unit.wing ? unit.wing + '-' : ''}${unit.unit_no}`, intro: 'Payment demands are created from the project payment plan, to the paisa.', fields });
   if (!v) return;
   const body = { unit_id: unit.id, ...v };
+  if (v.rate_psf && unit.rera_carpet_sqft > 0 && !v.cost_sheet_id) body.agreed_price_paise = psfTotal(v.rate_psf, unit.rera_carpet_sqft);
+  delete body.rate_psf;
   if (v.cost_sheet_id) { body.cost_sheet_id = Number(v.cost_sheet_id); const s = sheets.find((x) => x.id === body.cost_sheet_id); if (s && s.lead_id) body.lead_id = s.lead_id; } else delete body.cost_sheet_id;
   const r = await act(api('/api/sales/bookings', { method: 'POST', body }), 'Booked');
   if (r) { if (r.data.warning) alert(r.data.warning); loadSales(); }
