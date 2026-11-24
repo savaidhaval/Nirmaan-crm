@@ -95,7 +95,7 @@ async function loadStacking() {
     const legend = Object.entries(STACK).map(([k, [l, bg, fg]]) => `<span class="chip" style="background:${bg};color:${fg};text-transform:none">${l}: <b>${d.counts[k] || 0}</b></span>`).join(' ');
     const sold = (d.counts.booked || 0) + (d.counts.registered || 0); const forSale = d.units.filter((u) => u.state !== 'rehab' && u.state !== 'landowner').length;
     let html = `<div class="card stk-top"><div>${SV.donut(Object.entries(STACK).map(([k, [l, , fg]]) => ({ label: l, value: d.counts[k] || 0, color: fg })), { label: 'flats' })}</div>
-      <div><div class="row-btns" style="margin:0 0 8px">${legend}</div><p style="margin:4px 0"><b>${forSale ? Math.round((sold / forSale) * 100) : 0}%</b> of saleable flats sold · list value ${moneyP(d.total_list_value_paise)}${['owner', 'pm', 'accounts', 'sales'].includes(currentUser.role) ? ` · sold ${moneyP(d.sold_value_paise)}` : ''}</p><p class="muted">Tap a flat for details, hold or book.</p></div></div>`;
+      <div><div class="row-btns" style="margin:0 0 8px">${legend}</div>${(() => { const sale = d.units.filter((u) => !['rehab', 'landowner', 'not_open'].includes(u.state) && u.rera_carpet_sqft > 0), soldU = sale.filter((u) => ['booked', 'registered', 'possessed'].includes(u.state) && u.agreed_paise); const aL = sale.reduce((t, u) => t + u.rera_carpet_sqft, 0), aS = soldU.reduce((t, u) => t + u.rera_carpet_sqft, 0); return aL ? `<p style="margin:4px 0"><b>Average rate</b>: rate card ${esc(psfText(sale.reduce((t, u) => t + u.list_paise, 0), aL))}${aS ? ` · sold ${esc(psfText(soldU.reduce((t, u) => t + u.agreed_paise, 0), aS))}` : ''} <span class="muted">(on RERA carpet)</span></p>` : ''; })()}<p style="margin:4px 0"><b>${forSale ? Math.round((sold / forSale) * 100) : 0}%</b> of saleable flats sold · list value ${moneyP(d.total_list_value_paise)}${['owner', 'pm', 'accounts', 'sales'].includes(currentUser.role) ? ` · sold ${moneyP(d.sold_value_paise)}` : ''}</p><p class="muted">Tap a flat for details, hold or book.</p></div></div>`;
     for (const w of wings) {
       const us = d.units.filter((u) => u.wing === w);
       const floors = [...new Set(us.map((u) => u.floor))].sort((a, b) => (b ?? -1) - (a ?? -1));
@@ -134,7 +134,7 @@ async function unitDrill(u) {
   };
   if ($('ud-rel')) $('ud-rel').onclick = async () => { if (await act(api(`/api/sales/inventory/${u.id}/release`, { method: 'POST' }), 'Released')) done(); };
   if ($('ud-ext')) $('ud-ext').onclick = async () => { const v = await openForm({ title: 'Extend hold', fields: [{ name: 'reason', label: 'Reason', required: true }] }); if (v && await act(api(`/api/sales/inventory/${u.id}/extend`, { method: 'POST', body: v }), 'Extended 24h')) done(); };
-  if ($('ud-book')) $('ud-book').onclick = () => { ov.remove(); bookUnit({ id: u.id, wing: u.wing, unit_no: u.unit_no, price_paise: u.list_paise, floor_rise_paise: 0, status: u.state }).then(loadStacking); };
+  if ($('ud-book')) $('ud-book').onclick = () => { ov.remove(); bookUnit({ id: u.id, wing: u.wing, unit_no: u.unit_no, price_paise: u.list_paise, floor_rise_paise: 0, status: u.state, rera_carpet_sqft: u.rera_carpet_sqft }).then(loadStacking); };
   if ($('ud-bk')) $('ud-bk').onclick = () => { ov.remove(); bookingDetail(u.booking_id); };
   $('ud-cs').onclick = () => costSheet(u.list_paise, u.rera_carpet_sqft);
   if ($('ud-price')) $('ud-price').onclick = async () => {
@@ -268,8 +268,10 @@ newUnit = async function () {
     { name: 'wing', label: 'Wing / tower' }, { name: 'floor', label: 'Floor', type: 'number' }, { name: 'unit_no', label: 'Flat number', required: true },
     { name: 'type', label: 'Type (1BHK, 2BHK, Jodi…)' }, { name: 'category', label: 'Kind', type: 'select', options: [['sale', 'Free sale'], ['rehab', 'Rehab (existing members)'], ['landowner', 'Landowner / partner share']] },
     { name: 'carpet_sqft', label: 'Carpet area (sq ft)', type: 'number' }, { name: 'rera_carpet_sqft', label: 'RERA carpet area (sq ft)', type: 'number', help: 'Sale is priced on RERA carpet area.' },
-    { name: 'price_paise', label: 'Rate-card price (₹)', type: 'money' }, { name: 'floor_rise_paise', label: 'Floor-rise / PLC (₹)', type: 'money' }] });
+    { name: 'price_paise', label: 'Rate-card price (₹)', type: 'money' }, { name: 'rate_psf', label: 'Or the rate-card price as ₹ per sq ft of RERA carpet (replaces the price above)', type: 'money' }, { name: 'floor_rise_paise', label: 'Floor-rise / PLC (₹)', type: 'money' }] });
   if (!v) return;
+  if (v.rate_psf) { if (!(Number(v.rera_carpet_sqft) > 0)) { toast('Enter the RERA carpet area to price by the sq ft.', 6000); return; } v.price_paise = psfTotal(v.rate_psf, Number(v.rera_carpet_sqft)); }
+  delete v.rate_psf;
   v.project_id = Number(v.project_id);
   if (await act(api('/api/sales/inventory', { method: 'POST', body: v }), 'Flat added')) { if ($('sales-list')) loadSales(); if ($('stacking-out')) loadStacking(); }
 };

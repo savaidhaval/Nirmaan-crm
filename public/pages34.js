@@ -100,6 +100,7 @@ async function renderPricing(main) {
         <h3>Location charges (PLC)</h3>${d.plc.map((r) => `<p>• <b>${esc(r.label)}</b> for flats tagged <b>${esc(r.tag)}</b>: ${moneyP(r.amount_paise)}${r.kind === 'per_sqft' ? ' / sq ft' : ' per flat'}</p>`).join('') || '<p class="muted">None.</p>'}`
         : '<div class="empty-state"><p>No price list for this project yet.</p></div>')
         + (owner ? `<div class="row-btns"><button class="btn btn-primary" id="pm-edit">${m ? 'Change the price list' : 'Set the price list'}</button>${m ? '<button class="btn" id="pm-apply">Write it into the rate card of unbooked flats</button>' : ''}</div>` : '');
+      psfAreaCard($('pm-out'), pid);
       if (!owner) return;
       $('pm-edit').onclick = async () => {
         const v = await openForm({ title: 'Price list', intro: 'Amounts in rupees. Floor rise is per sq ft for each floor from the floor you name upward. Tag flats (for example garden, corner) from the flat card on the Stacking plan.', fields: [

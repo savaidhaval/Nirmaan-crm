@@ -891,7 +891,7 @@ export function registerRedevelopment(router, h) {
   router.get('/api/redev/societies/:id/corpus', async (req, env) => withAuth(req, env, 'transit', 'V', async (req, env) => {
     try {
       const { soc, err } = await loadSociety(env, req, Number(req.params.id)); if (err) return err;
-      const rows = (await env.DB.prepare(`SELECT c.id, c.member_id, m.member_name, m.unit_label, m.wing, c.label, c.amount_paise, c.due_on, c.paid_on, c.ref_no, c.reversed_at, c.reversal_note FROM red_corpus_entries c JOIN red_members m ON m.id = c.member_id
+      const rows = (await env.DB.prepare(`SELECT c.id, c.member_id, m.member_name, m.unit_label, m.wing, COALESCE(m.certified_area_sqft, m.carpet_sqft) AS area_sqft, c.label, c.amount_paise, c.due_on, c.paid_on, c.ref_no, c.reversed_at, c.reversal_note FROM red_corpus_entries c JOIN red_members m ON m.id = c.member_id
         WHERE m.society_id = ? ORDER BY c.id DESC LIMIT 300`).bind(soc.id).all()).results;
       const live = rows.filter((r) => !r.reversed_at);
       return json({ ok: true, data: { entries: rows, due_paise: live.reduce((s, r) => s + r.amount_paise, 0), paid_paise: live.filter((r) => r.paid_on).reduce((s, r) => s + r.amount_paise, 0) } });

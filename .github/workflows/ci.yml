@@ -41,7 +41,7 @@ jobs:
         run: |
           set -e
           node tests/units.mjs
-          for t in security features multibrand sales2 audit reports phase2 procurement2 contractors dprlabour budget stores partydocs petty professionals ai sales3 rera_visits profile bulk_demands redevelopment bank drw_acks tally enquiry statements dash hardening projectplus controls quality remaining drawing_files bd m1_step1 m1_step2 m1_step3 m5_possession m2_step1 m2_step2 m2_step3 m3_step1 m3_step2 m3_step3 m4_step1 m4_step2 docx; do
+          for t in security features multibrand sales2 audit reports phase2 procurement2 contractors dprlabour budget stores partydocs petty professionals ai sales3 rera_visits profile bulk_demands redevelopment bank drw_acks tally enquiry statements dash hardening projectplus controls quality remaining drawing_files bd m1_step1 m1_step2 m1_step3 m5_possession m2_step1 m2_step2 m2_step3 m3_step1 m3_step2 m3_step3 m4_step1 m4_step2 docx areas; do
             echo "== $t"; node tests/$t.mjs
             # the login limiter counts failures only, but clear any leftovers between suites
             npx wrangler d1 execute nirmaan-db --local --command "DELETE FROM rate_limits" > /dev/null
