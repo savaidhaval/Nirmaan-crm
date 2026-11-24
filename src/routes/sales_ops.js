@@ -2,6 +2,7 @@
 // atomic unit holds/bookings, lead protection, discount approval, receipt integrity, refunds, cost sheet, lead-intake webhook.
 // D1 has no SELECT ... FOR UPDATE; every claim below is a single conditional UPDATE whose `changes` count decides the winner.
 import { saleBlock, holdFor } from '../core/gates.js';
+import { ccSaleBlock } from './m2gaps.js';
 
 export const LEAD_TRANSITIONS = {
   new: ['contacted', 'interested', 'visit_scheduled', 'lost'],
@@ -161,6 +162,12 @@ export function registerSalesOps(router, h) {
         const mine = await env.DB.prepare("SELECT COUNT(*) AS n FROM sal_inventory WHERE hold_by = ? AND status = 'held'").bind(req.user.user_id).first();
         if (Number(mine.n) >= max) return json({ ok: false, error: `You already hold ${max} flats. Release one or convert a hold into a booking first.` }, 400);
       }
+      { const cc = await ccSaleBlock(env, getSetting, u); if (cc) return json({ ok: false, error: cc, code: 'cc_floor' }, 409); }
+      if (!MANAGER.includes(req.user.role)) {   // a closer cannot keep re-blocking a flat they already let lapse or released without a token
+        const hrs = await num(env, 'sales.rehold_block_hours', 24);
+        const prev = await env.DB.prepare("SELECT ended_at FROM sal_hold_log WHERE unit_id = ? AND user_id = ? AND ended_at > datetime('now', '-' || ? || ' hours') ORDER BY id DESC LIMIT 1").bind(u.id, req.user.user_id, hrs).first();
+        if (prev) return json({ ok: false, error: `You already held this flat and it went back without a token. You cannot block it again for ${hrs} hours. Ask a manager if the buyer is ready to pay.`, code: 'rehold' }, 409);
+      }
       const hours = Math.min(48, Math.max(1, Number(b.hours) || 48));
       const until = new Date(Date.now() + hours * 3600000).toISOString().replace('T', ' ').substring(0, 19);
       const r = await env.DB.prepare("UPDATE sal_inventory SET status = 'held', hold_by = ?, hold_lead_id = ?, hold_at = ?, blocked_till = ? WHERE id = ? AND status = 'available' AND deleted_at IS NULL")
@@ -177,7 +184,10 @@ export function registerSalesOps(router, h) {
       if (!u || u.status !== 'held') return json({ ok: false, error: 'That flat is not on hold.' }, 400);
       if (!(await visibleProjectIds(env, req.user)).includes(u.project_id)) return json({ ok: false, error: 'Not allowed.' }, 403);
       if (!MANAGER.includes(req.user.role) && u.hold_by !== req.user.user_id) return json({ ok: false, error: 'Only the person who holds it, or a manager, can release it.' }, 403);
-      await env.DB.prepare("UPDATE sal_inventory SET status = 'available', hold_by = NULL, hold_lead_id = NULL, hold_at = NULL, blocked_till = NULL WHERE id = ? AND status = 'held'").bind(u.id).run();
+      await env.DB.batch([
+        env.DB.prepare("INSERT INTO sal_hold_log (unit_id, user_id, lead_id, held_at, ended_at, reason) VALUES (?, ?, ?, ?, ?, 'released')").bind(u.id, u.hold_by, u.hold_lead_id, u.hold_at, nowStr()),
+        env.DB.prepare("UPDATE sal_inventory SET status = 'available', hold_by = NULL, hold_lead_id = NULL, hold_at = NULL, blocked_till = NULL WHERE id = ? AND status = 'held'").bind(u.id),
+      ]);
       await audit(env, req.user, 'release', 'sal_inventory', u.id, `${u.wing || ''}-${u.unit_no} hold released`);
       return json({ ok: true });
     } catch (e) { return serverError(e, 'release'); }
@@ -233,6 +243,7 @@ export function registerSalesOps(router, h) {
       if (unit.category === 'landowner') return json({ ok: false, error: 'This flat belongs to the landowner or partner share and cannot be sold from here.' }, 400);
       { const blk = await saleBlock(env, unit.project_id); if (blk) return json({ ok: false, error: blk, code: 'rera' }, 409); }
       { const held = await holdFor(env, unit.project_id, unit.wing); if (held) return json({ ok: false, error: held + '. Flats in it cannot be booked until the hold is released.', code: 'hold' }, 409); }
+      { const cc = await ccSaleBlock(env, getSetting, unit); if (cc) return json({ ok: false, error: cc, code: 'cc_floor' }, 409); }
       const name = String(b.customer_name || '').trim().slice(0, 150);
       if (!name) return json({ ok: false, error: 'Customer name is required.' }, 400);
       const manager = MANAGER.includes(user.role);
@@ -249,6 +260,8 @@ export function registerSalesOps(router, h) {
       }
       const agreed = sheet ? sheet.agreement_value_paise : Math.round(Number(b.agreed_price_paise) || list);
       if (!(agreed > 0) || !(list > 0)) return json({ ok: false, error: 'Agreed price is required.' }, 400);
+      // Minimum selling price: below it only an Owner-approved (with approval PIN) cost sheet can price the booking.
+      if (unit.msp_paise && agreed < unit.msp_paise && !(sheet && sheet.below_msp && sheet.msp_approved_by)) return json({ ok: false, error: `${rupees(agreed)} is below this flat's minimum selling price (${rupees(unit.msp_paise)}). Make a cost sheet and get the Owner's approval with the approval PIN first.`, code: 'msp' }, 403);
       const token = Math.round(Number(b.token_paise) || 0);
       if (token < 0) return json({ ok: false, error: 'Invalid token amount.' }, 400);
       if (unit.status === 'held' && !(token > 0)) return json({ ok: false, error: 'Record the token amount received to convert a hold into a booking.' }, 400);
@@ -270,7 +283,16 @@ export function registerSalesOps(router, h) {
       const stages = (await env.DB.prepare('SELECT * FROM sal_plan_stages WHERE project_id = ? AND retired = 0 ORDER BY sort_order, id').bind(unit.project_id).all()).results;
       if (stages.length && stages.reduce((t, s) => t + s.pct_bp, 0) !== 10000) return json({ ok: false, error: 'The payment plan stages must total 100% before booking.' }, 400);
       const gstBp = b.gst_bp !== undefined ? Number(b.gst_bp) : 500;
-      const partnerId = b.channel_partner_id && (await env.DB.prepare('SELECT id FROM sal_partners WHERE id = ? AND deleted_at IS NULL').bind(Number(b.channel_partner_id)).first()) ? Number(b.channel_partner_id) : null;
+      // The broker is whoever registered the lead (locked at registration). A booking inherits it; tagging a different broker afterwards needs the Owner and a written reason.
+      const asked = b.channel_partner_id && (await env.DB.prepare('SELECT id FROM sal_partners WHERE id = ? AND deleted_at IS NULL').bind(Number(b.channel_partner_id)).first()) ? Number(b.channel_partner_id) : null;
+      const bookLeadId = b.lead_id ? Number(b.lead_id) : ((sheet && sheet.lead_id) || unit.hold_lead_id || null);
+      const leadRow = bookLeadId ? await env.DB.prepare('SELECT channel_partner_id FROM sal_leads WHERE id = ?').bind(bookLeadId).first() : null;
+      const lockedPartner = leadRow && leadRow.channel_partner_id ? Number(leadRow.channel_partner_id) : null;
+      let partnerId = lockedPartner, partnerNote = '';
+      if (asked && asked !== lockedPartner) {
+        if (user.role !== 'owner' || String(b.partner_override_reason || '').trim().length < 10) return json({ ok: false, error: lockedPartner ? 'This lead was registered by another channel partner. The broker cannot be changed at booking.' : 'A broker can be tagged only when the lead is registered, before the visit. Only the Owner can add one now, with a written reason.', code: 'partner_lock' }, 409);
+        partnerId = asked; partnerNote = ` Broker set by Owner override: ${String(b.partner_override_reason).trim().slice(0, 150)}.`;
+      }
 
       // Atomic claim: only one caller can flip this unit; everyone else gets 0 changes.
       const claim = await env.DB.prepare("UPDATE sal_inventory SET status = 'booked', blocked_till = NULL, hold_by = NULL, hold_lead_id = NULL, hold_at = NULL WHERE id = ? AND deleted_at IS NULL AND (status = 'available' OR (status = 'held' AND (hold_by = ? OR ? = 1)))")
@@ -298,7 +320,7 @@ export function registerSalesOps(router, h) {
       const leadId = b.lead_id ? Number(b.lead_id) : unit.hold_lead_id;
       if (leadId) stmts.push(env.DB.prepare("UPDATE sal_leads SET status = 'booked', next_followup_at = NULL WHERE id = ?").bind(leadId));
       stmts.push(env.DB.prepare('INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, ?, ?, ?, ?, ?)')
-        .bind(user.user_id, 'create', 'sal_bookings', bookingId, `Booked ${unit.wing ? unit.wing + '-' : ''}${unit.unit_no} for ${name}: agreed ${rupees(agreed)} vs rate card ${rupees(list)}${discountBp ? ` (discount ${(discountBp / 100).toFixed(2)}%, reason: ${b.discount_reason}${approvedBy ? ', approved by user ' + approvedBy : ''})` : ''}, token ${rupees(token)}`, now));
+        .bind(user.user_id, 'create', 'sal_bookings', bookingId, `Booked ${unit.wing ? unit.wing + '-' : ''}${unit.unit_no} for ${name}: agreed ${rupees(agreed)} vs rate card ${rupees(list)}${partnerNote}${discountBp ? ` (discount ${(discountBp / 100).toFixed(2)}%, reason: ${b.discount_reason}${approvedBy ? ', approved by user ' + approvedBy : ''})` : ''}, token ${rupees(token)}`, now));
       await env.DB.batch(stmts);
       return json({ ok: true, data: { id: bookingId, demands: stages.length, discount_bp: discountBp, warning: null } });
     } catch (e) {
@@ -590,7 +612,9 @@ export async function expireHolds(env) {
     env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at)
       SELECT NULL, 'hold_expired', 'sal_inventory', i.id, COALESCE(i.wing || '-', '') || i.unit_no || ' hold expired and was released', datetime('now')
       FROM sal_inventory i WHERE i.status = 'held' AND i.blocked_till IS NOT NULL AND i.blocked_till < datetime('now') AND i.deleted_at IS NULL`),
-    // 3) release them, all at once
+    // 3) remember who let which flat lapse (a closer cannot re-block it straight away), then release them, all at once
+    env.DB.prepare(`INSERT INTO sal_hold_log (unit_id, user_id, lead_id, held_at, ended_at, reason)
+      SELECT i.id, i.hold_by, i.hold_lead_id, i.hold_at, datetime('now'), 'expired' FROM sal_inventory i WHERE i.status = 'held' AND i.blocked_till IS NOT NULL AND i.blocked_till < datetime('now') AND i.deleted_at IS NULL`),
     env.DB.prepare(`UPDATE sal_inventory SET status = 'available', hold_by = NULL, hold_lead_id = NULL, hold_at = NULL, blocked_till = NULL
       WHERE status = 'held' AND blocked_till IS NOT NULL AND blocked_till < datetime('now') AND deleted_at IS NULL`),
   ]);

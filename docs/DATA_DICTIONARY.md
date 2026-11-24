@@ -454,3 +454,13 @@ id TEXT PK, source TEXT, seen_at TEXT
 - Index idx_snag_unit on site_snags(unit_id, status): the Possession list counts open snags per flat. No new table or column.
 - GET /api/possession (perm sales V): per booked, not cancelled flat: stage not_started (no sal_handover row) | in_progress | handed_over, open checklist items (sal_handover_items.done = 0) and open snags (site_snags for that unit_id, status other than verified). The customer name is shown only to Owner, PM, Accounts and Sales.
 
+## Module 2 gaps, step 1 (migration 0044)
+- sal_inventory.msp_paise: the lowest agreement value allowed for the flat (NULL = no floor). Set by the Owner only (POST /api/sales/msp, per flat or per project rate per RERA sq ft; audited).
+- sal_cost_sheets: below_msp (1 = agreement value was under the MSP when the sheet was made), msp_paise (the MSP at that moment), msp_approved_by (Owner who approved it with the approval PIN). A booking under the flat's MSP is allowed only through a sheet with below_msp = 1 and msp_approved_by set.
+- sal_partners: pan_enc (encrypted, never returned or exported), pan_last4, gstin, rera_valid_till (YYYY-MM-DD), rera_doc_id (documents.id of the certificate scan), kyc_status (pending | approved), kyc_by, kyc_at. Any change to PAN, GSTIN or RERA details sets kyc_status back to pending. Brokerage payment (sal_brokerage_payments) is refused unless kyc_status = approved and rera_valid_till is today or later.
+- sal_leads: sla_reassigns (times moved for not being called in time, max 3), sla_assigned_at (when it was last moved). The move is an audit_log row (sla_reassign) and a timeline note.
+- sal_hold_log (unit_id, user_id, lead_id, held_at, ended_at, reason expired | released): a hold that ended without a booking. In the backup list. A non-manager cannot hold a flat again within sales.rehold_block_hours of their own entry here.
+- Bookings: the broker is taken from the lead (sal_leads.channel_partner_id). A different broker needs role Owner and partner_override_reason of at least 10 letters; the audit text records the override.
+- Settings: sales.sla_minutes (default 15, 0 = off; checked at the hourly sweep, 09:00-19:00 IST), sales.rehold_block_hours (default 24), sales.lock_above_cc (on | off, default off; when on, hold, cost sheet and booking are refused for floors above the approved CC / plinth CC / further CC floor of the wing, and the stacking plan shows them as "Not open yet"; no CC floor recorded = no lock).
+- Stacking plan (GET /api/reports/stacking): rehab and landowner flats are returned only to Owner, PM and Accounts; msp_paise only to Owner and PM.
+

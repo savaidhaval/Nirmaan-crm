@@ -36,9 +36,9 @@ async function costSheetsModal(u) {
   const ov = document.createElement('div'); ov.className = 'modal-overlay';
   ov.innerHTML = `<div class="modal"><h2>Cost sheets · ${esc(u.wing ? u.wing + '-' : '')}${esc(u.unit_no)}</h2><p class="muted">Rate card ${moneyP(u.list_paise)}. A booking can take its price from an approved sheet.</p>
     ${isRole(...SALES_WORKERS) ? '<button class="btn btn-primary btn-full" id="cs-new">+ New cost sheet</button>' : ''}
-    ${sheets.map((s) => `<div class="card"><div class="row"><div><b>Version ${s.version}${s.lead_name ? ' · ' + esc(s.lead_name) : ''}</b><p class="muted">Agreement ${moneyP(s.agreement_value_paise)} · total with taxes ${moneyP(s.total_paise)}${s.below_list_paise ? `<br><b>${moneyP(s.below_list_paise)} below the rate card</b>` : ''}</p></div>${chip(String(s.status).replace(/_/g, ' '), CS_TONE[s.status])}</div>
+    ${sheets.map((s) => `<div class="card"><div class="row"><div><b>Version ${s.version}${s.lead_name ? ' · ' + esc(s.lead_name) : ''}</b><p class="muted">Agreement ${moneyP(s.agreement_value_paise)} · total with taxes ${moneyP(s.total_paise)}${s.below_list_paise ? `<br><b>${moneyP(s.below_list_paise)} below the rate card</b>` : ''}${s.below_msp ? `<br><b style="color:#b91c1c">Below the minimum selling price (${moneyP(s.msp_paise)}): Owner approval PIN needed</b>` : ''}</p></div>${chip(String(s.status).replace(/_/g, ' '), CS_TONE[s.status])}</div>
       <div class="row-btns"><button class="btn small" data-csp="${s.id}">Print / save as PDF</button>${['draft', 'rejected'].includes(s.status) && (s.created_by === currentUser.id || isRole('owner')) ? `<button class="btn small btn-primary" data-css="${s.id}">Send for approval</button>` : ''}
-      ${s.status === 'pending_approval' && isRole(...SALES_APPROVERS) && (s.created_by !== currentUser.id || currentUser.role === 'owner') ? `<button class="btn small btn-primary" data-csa="approve" data-id="${s.id}">Approve</button><button class="btn small" data-csa="reject" data-id="${s.id}">Reject</button>` : ''}</div></div>`).join('') || '<p class="muted">No cost sheet yet.</p>'}
+      ${s.status === 'pending_approval' && isRole(...SALES_APPROVERS) && (s.created_by !== currentUser.id || currentUser.role === 'owner') ? `<button class="btn small btn-primary" data-csa="approve" data-id="${s.id}" data-msp="${s.below_msp ? 1 : 0}">Approve</button><button class="btn small" data-csa="reject" data-id="${s.id}">Reject</button>` : ''}</div></div>`).join('') || '<p class="muted">No cost sheet yet.</p>'}
     <div class="modal-actions"><button class="btn btn-primary" id="cs-x">Close</button></div></div>`;
   document.body.appendChild(ov); $('cs-x').onclick = () => ov.remove();
   const again = () => { ov.remove(); costSheetsModal(u); };
@@ -46,6 +46,7 @@ async function costSheetsModal(u) {
   ov.querySelectorAll('[data-css]').forEach((x) => { x.onclick = async () => { if (await act(api(`/api/sales/cost-sheets/${x.dataset.css}/submit`, { method: 'POST' }), 'Sent for approval')) again(); }; });
   ov.querySelectorAll('[data-csa]').forEach((x) => { x.onclick = async () => {
     let body = {}; if (x.dataset.csa === 'reject') { const v = await openForm({ title: 'Reject cost sheet', fields: [{ name: 'note', label: 'Why?', type: 'textarea', required: true }] }); if (!v) return; body = v; }
+    if (x.dataset.csa === 'approve' && x.dataset.msp === '1') { const v = await openForm({ title: 'Approve below the minimum price', intro: 'This price is under the minimum selling price. Only the Owner can approve it, with the approval PIN.', fields: [{ name: 'pin', label: 'Approval PIN (6 digits)', type: 'password', required: true }] }); if (!v) return; body = { pin: v.pin }; }
     if (await act(api(`/api/sales/cost-sheets/${x.dataset.id}/${x.dataset.csa}`, { method: 'POST', body }), 'Done')) again();
   }; });
   if ($('cs-new')) $('cs-new').onclick = async () => {
@@ -174,4 +175,19 @@ loadSales = async function () {
     const v = await openForm({ title: 'Numbering check', intro: 'Lists every receipt, demand letter and credit note number issued this year and any numbers that are missing.', fields: [{ name: 'project_id', label: 'Project', type: 'select', options: await projectOptions() }], submit: 'Download CSV' });
     if (v) window.location.href = `/api/sales/reports/numbering?project_id=${v.project_id}&csv=1`;
   };
+};
+
+// ---------- Minimum selling price (MSP): Owner only, from the flat card ----------
+const _unitDrillMSP = unitDrill;
+unitDrill = async function (u) {
+  await _unitDrillMSP(u);
+  const ov = [...document.querySelectorAll('.modal-overlay')].pop(); if (!ov || currentUser.role !== 'owner' || u.state === 'rehab' || u.state === 'landowner' || u.booking_id) return;
+  const kv = ov.querySelector('.kv'); if (kv && u.msp_paise) kv.insertAdjacentHTML('beforeend', `<span>Minimum selling price</span><b>${moneyP(u.msp_paise)}</b>`);
+  const row = ov.querySelector('.row-btns'); if (!row) return;
+  const b = document.createElement('button'); b.className = 'btn small'; b.textContent = 'Minimum price (MSP)';
+  b.onclick = async () => {
+    const v = await openForm({ title: 'Minimum selling price', intro: 'The lowest agreement value allowed for this flat. A cost sheet or booking below it needs your approval PIN. Leave blank to remove.', fields: [{ name: 'msp_paise', label: 'Minimum agreement value (₹)', type: 'money', value: u.msp_paise ? u.msp_paise / 100 : '' }, { name: 'reason', label: 'Reason', required: true }] });
+    if (v && await act(api('/api/sales/msp', { method: 'POST', body: { unit_id: u.id, msp_paise: v.msp_paise === '' ? null : v.msp_paise, reason: v.reason } }), 'Saved')) { ov.remove(); loadStacking(); }
+  };
+  row.appendChild(b);
 };

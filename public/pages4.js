@@ -60,7 +60,7 @@ function shortMoney(p) { const r = Number(p) / 100; if (r >= 1e7) return (r / 1e
 const emptyIllus = (msg) => `<div class="empty-state">${SV.building()}<p>${esc(msg)}</p></div>`;
 
 // ---------- Stacking plan ----------
-const STACK = { available: ['Available', '#dcfce7', '#166534'], token_locked: ['Token locked', '#fef3c7', '#92400e'], booked: ['Booked', '#dbeafe', '#1e40af'], registered: ['Registered', '#e9d5ff', '#6b21a8'], possessed: ['Handed over', '#ccfbf1', '#115e59'], rehab: ['Rehab', '#e5e7eb', '#374151'], landowner: ['Landowner', '#e0e7ff', '#3730a3'] };
+const STACK = { available: ['Available', '#dcfce7', '#166534'], token_locked: ['Token locked', '#fef3c7', '#92400e'], booked: ['Booked', '#dbeafe', '#1e40af'], registered: ['Registered', '#e9d5ff', '#6b21a8'], possessed: ['Handed over', '#ccfbf1', '#115e59'], rehab: ['Rehab', '#e5e7eb', '#374151'], landowner: ['Landowner', '#e0e7ff', '#3730a3'], not_open: ['Not open yet (above CC)', '#f3f4f6', '#6b7280'] };
 let stackProject = 0;
 
 async function renderStacking(main) {
@@ -73,6 +73,17 @@ async function renderStacking(main) {
   const canAdd = ['owner', 'pm'].includes(currentUser.role);
   if (canAdd) $('stk-add').onclick = newUnit; else $('stk-add').hidden = true;
   loadStacking();
+}
+
+// Live countdown on held (yellow) flats. Server times are UTC; the timer stops when the plan is no longer on screen.
+let stkTimer = null;
+function tickHoldTimers(root) {
+  clearInterval(stkTimer);
+  const paint = () => {
+    if (!document.body.contains(root)) { clearInterval(stkTimer); return; }
+    root.querySelectorAll('[data-till]').forEach((s) => { const ms = Date.parse(String(s.dataset.till).replace(' ', 'T') + 'Z') - Date.now(); s.textContent = ms <= 0 ? 'expiring' : Math.floor(ms / 3600000) + 'h ' + String(Math.floor((ms % 3600000) / 60000)).padStart(2, '0') + 'm'; });
+  };
+  paint(); stkTimer = setInterval(paint, 30000);
 }
 
 async function loadStacking() {
@@ -88,10 +99,11 @@ async function loadStacking() {
     for (const w of wings) {
       const us = d.units.filter((u) => u.wing === w);
       const floors = [...new Set(us.map((u) => u.floor))].sort((a, b) => (b ?? -1) - (a ?? -1));
-      html += `<h3>${w ? 'Wing ' + esc(w) : 'Flats'}</h3><div class="stk">${floors.map((f) => `<div class="stk-row"><div class="stk-floor">${f == null ? '—' : esc(f)}</div><div class="stk-cells">${us.filter((u) => u.floor === f).map((u) => { const [l, bg, fg] = STACK[u.state]; return `<button class="stk-cell" data-u="${u.id}" style="background:${bg};color:${fg}" title="${esc(l)}"><b>${esc(u.unit_no)}</b><span>${esc(u.type || '')}</span></button>`; }).join('')}</div></div>`).join('')}</div>`;
+      html += `<h3>${w ? 'Wing ' + esc(w) : 'Flats'}</h3><div class="stk">${floors.map((f) => `<div class="stk-row"><div class="stk-floor">${f == null ? '—' : esc(f)}</div><div class="stk-cells">${us.filter((u) => u.floor === f).map((u) => { const [l, bg, fg] = STACK[u.state]; return `<button class="stk-cell" data-u="${u.id}" style="background:${bg};color:${fg}" title="${esc(l)}"><b>${esc(u.unit_no)}</b><span>${esc(u.type || '')}</span>${u.state === 'token_locked' && u.blocked_till ? `<span class="stk-timer" data-till="${esc(u.blocked_till)}"></span>` : ''}</button>`; }).join('')}</div></div>`).join('')}</div>`;
     }
     out.innerHTML = html;
     out.querySelectorAll('[data-u]').forEach((b) => { b.onclick = () => unitDrill(d.units.find((u) => String(u.id) === b.dataset.u)); });
+    tickHoldTimers(out);
   } catch (e) { out.innerHTML = `<div class="error">${esc(e.message)}</div>`; }
 }
 
