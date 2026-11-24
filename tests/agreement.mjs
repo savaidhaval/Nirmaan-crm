@@ -5,6 +5,10 @@ const ok = (n, c, x = '') => { c ? pass++ : fail++; console.log(`${c ? 'PASS' : 
 class C { constructor() { this.cookie = ''; } async call(m, p, b) { const h = { 'X-NirmaanCRM': '1' }; if (this.cookie) h.cookie = this.cookie; if (b) h['Content-Type'] = 'application/json';
   const res = await fetch(BASE + p, { method: m, headers: h, body: b ? JSON.stringify(b) : undefined }); const sc = res.headers.get('set-cookie'); if (sc) this.cookie = sc.split(';')[0]; let d = null; try { d = await res.json(); } catch (x) { /* */ } return { status: res.status, data: d && d.data, err: d && d.error, code: d && d.code }; } }
 const o = new C(); await o.call('POST', '/api/auth/login', { email: process.env.OWNER_EMAIL, password: process.env.OWNER_PASSWORD });
+
+// If a check throws, put the shared switches back so the suites that follow are not affected.
+const putBack = async () => { try { await o.call('POST', '/api/settings/site.dual_signoff', { value: 'on' }); await o.call('POST', '/api/settings/sales.afs_gate', { value: 'on' }); } catch (e) { /* ignore */ } };
+process.on('uncaughtException', async (e) => { console.error(e); await putBack(); process.exit(1); });
 const run = Date.now().toString(36); let seq = 0;
 await o.call('POST', '/api/settings/sales.afs_gate', { value: 'off' }); await o.call('POST', '/api/settings/site.dual_signoff', { value: 'off' });
 const pid = (await o.call('POST', '/api/projects', { rera_no: 'P518000TEST', name: 'zz-agr ' + run, code: 'AG' + run.toUpperCase().slice(-6), target_date: '2028-03-31' })).data.id;

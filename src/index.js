@@ -18,6 +18,7 @@ import { registerM2Step3 } from './routes/m2step3.js';
 import { ccOverFloor, wastageSweep, signoffBlock, registerM3Gaps, metres } from './routes/m3gaps.js';
 import { registerM4Gaps, afsGateOn } from './routes/m4gaps.js';
 import { registerM4Letters } from './routes/m4letters.js';
+import { registerM5, vaultBlock } from './routes/m5.js';
 import { registerAreas } from './routes/areas.js';
 import { registerBulkDemands, demandLetterHtml } from './routes/bulk_demands.js';
 import { registerReports } from './routes/reports.js';
@@ -263,6 +264,17 @@ router.put('/api/projects/:id', async (req, env) => {
     let pct = null;
     if (body.percent_complete !== undefined) { pct = Math.round(Number(body.percent_complete)); if (!(pct >= 0 && pct <= 100)) return json({ ok: false, error: 'Completion must be between 0 and 100.' }, 400); }
     if (body.status === 'archived') return json({ ok: false, error: 'Use Archive on the Projects screen (Owner only).' }, 400);
+    if (body.status === 'completed') {
+      const was = await env.DB.prepare('SELECT status FROM projects WHERE id = ?').bind(id).first();
+      if (was && was.status !== 'completed') {
+        const vb = await vaultBlock(env, id);
+        if (vb) {
+          const why = String(body.vault_override_note || '').trim();
+          if (user.role !== 'owner' || why.length < 10) return json({ ok: false, error: vb + (user.role === 'owner' ? ' The Owner can close it anyway by writing a reason (at least 10 letters).' : ' Only the Owner can close it without the vault.'), code: 'chs_vault' }, 409);
+          await env.DB.prepare("INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, 'chs_vault_override', 'projects', ?, ?, ?)").bind(user.user_id, id, `Project closed without a complete society vault. Reason: ${why.slice(0, 200)}`, now).run();
+        }
+      }
+    }
     if (body.brand_id && user.role !== 'owner') return json({ ok: false, error: 'Only the Owner can change a project\'s brand.' }, 403);
     let brandId = null;
     if (body.brand_id) {
@@ -564,7 +576,7 @@ router.get('/api/settings', async (req, env) => {
   });
 });
 
-const EDITABLE_SETTINGS = ['partners.rera_check_days', 'sales.agreement_defect_years', 'po.pm_approval_limit_paise', 'access.allow_second_owner', 'access.limit_roles_to_assigned_projects', 'sales.share_all_leads',
+const EDITABLE_SETTINGS = ['dlp.sla_days', 'sales.nodues_strict', 'sales.nodues_funds_required', 'partners.rera_check_days', 'sales.agreement_defect_years', 'po.pm_approval_limit_paise', 'access.allow_second_owner', 'access.limit_roles_to_assigned_projects', 'sales.share_all_leads',
   'demand.due_days_after_milestone', 'share.default_expiry_days', 'share.default_max_views', 'files.brochure_max_mb', 'branding.apply_colours_to_app',
   'brochure.price_list_default_audience', 'storage.warn_percent', 'sales.max_holds_per_user', 'sales.max_discount_bp', 'sales.pm_max_discount_bp',
   'interest.rate_bp', 'interest.grace_days', 'interest.enabled', 'security.require_mfa_roles', 'tax.stamp_duty_bp', 'tax.metro_cess_bp', 'tax.women_concession_bp', 'tax.registration_bp', 'tax.registration_cap_paise', 'tax.gst_bp',
@@ -1763,7 +1775,7 @@ router.get('/api/export/:what', async (req, env) => {
 // Tables are read in parts so one request or cron run never goes near the free plan's 50-queries-per-run cap.
 const EXPORT_TABLES = ['projects', 'apr_items', 'apr_events', 'drw_drawings', 'drw_revisions', 'site_milestones', 'site_dprs', 'site_snags', 'pro_vendors', 'pro_rfqs', 'pro_quotes', 'pro_pos', 'pro_po_items', 'pro_grns', 'pro_bills',
     'sal_leads', 'sal_activities', 'sal_visits', 'sal_inventory', 'sal_partners', 'sal_bookings', 'sal_plan_stages', 'sal_demands', 'sal_receipts', 'documents', 'audit_log',
-    'pro_grn_items', 'pro_payments', 'ppl_staff', 'ppl_hiring', 'ppl_candidates', 'sal_brokerage_payments', 'sal_refunds', 'sal_interest_waivers', 'sal_hold_log', 'sal_hold_tokens', 'sal_checkins', 'sal_tds_credits', 'sal_letter_templates', 'site_ms_signoffs', 'site_wing_progress', 'sal_price_matrix', 'sal_plc_rules', 'mkt_spend', 'brands', 'counters',
+    'pro_grn_items', 'pro_payments', 'ppl_staff', 'ppl_hiring', 'ppl_candidates', 'sal_brokerage_payments', 'sal_refunds', 'sal_interest_waivers', 'sal_hold_log', 'sal_hold_tokens', 'sal_checkins', 'sal_tds_credits', 'sal_letter_templates', 'sal_possession_funds', 'dlp_tickets', 'chs_vault_items', 'site_ms_signoffs', 'site_wing_progress', 'sal_price_matrix', 'sal_plc_rules', 'mkt_spend', 'brands', 'counters',
     'pro_indents', 'pro_indent_items', 'pro_rfq_items', 'pro_quote_items',
     'site_dpr_labour', 'bud_heads', 'stk_items', 'stk_balance', 'stk_moves', 'pro_party_docs', 'pro_professionals', 'ai_log', 'sal_receipt_requests', 'sal_adjustments', 'sal_booking_parties', 'sal_cost_sheets', 'sal_cost_sheet_lines', 'sal_handover', 'sal_handover_items', 'sal_booking_loans', 'rera_account_entries', 'eng_kudos', 'fea_versions', 'sal_bulk_runs', 'sal_bulk_items', 'drw_acks', 'tally_export_log', 'brand_profiles', 'project_members', 'drive_folders', 'bank_profiles', 'bank_import_batches', 'bank_import_rows', 'red_societies', 'red_members', 'red_consent_events', 'red_member_docs', 'red_rehab_allotments', 'red_transit_terms', 'red_transit_schedule', 'red_transit_payments', 'red_corpus_entries', 'red_meetings', 'red_meeting_attendees', 'red_rent_changes', 'red_site_proofs', 'red_payout_batches', 'prj_autodcr_history', 'apr_steps', 'apr_deps', 'con_variations', 'con_measurements', 'rera_certificates', 'qa_pours', 'qa_cubes', 'qa_ncrs', 'site_dpr_work', 'site_ms_changes', 'prj_holds', 'con_debit_notes', 'bud_items', 'bd_opportunities', 'bd_followups', 'bd_studies', 'bd_steps', 'prj_lifecycle', 'pty_funds', 'pty_entries', 'con_contractors', 'con_work_orders', 'con_wo_items', 'con_ra_bills', 'con_ra_lines', 'con_payments', 'con_ledger'];
 const EXPORT_PARTS = 3;
@@ -1956,7 +1968,8 @@ router.post('/api/site/snags/:id/status', async (req, env) => {
     const { status } = await req.json();
     if (!['open', 'fixed', 'verified'].includes(status)) return json({ ok: false, error: 'Unknown status.' }, 400);
     if (status === 'verified' && !userCan(req.user, 'site', 'A')) return json({ ok: false, error: 'Only a PM or Owner can verify a fix.' }, 403);
-    await env.DB.prepare('UPDATE site_snags SET status = ?, closed_at = ? WHERE id = ?').bind(status, status === 'verified' ? nowStr() : null, s.id).run();
+    if (status === 'fixed' && s.wo_id && !(await env.DB.prepare("SELECT 1 AS x FROM documents WHERE entity = 'site_snags' AND entity_id = ? AND deleted_at IS NULL AND title LIKE 'After%' LIMIT 1").bind(s.id).first())) return json({ ok: false, error: 'This snag belongs to a contractor\'s work order. Add the "After" photo of the repair before marking it fixed.', code: 'after_photo' }, 409);
+    await env.DB.prepare("UPDATE site_snags SET status = ?, closed_at = ?, fixed_at = CASE WHEN ? = 'fixed' THEN ? ELSE fixed_at END WHERE id = ?").bind(status, status === 'verified' ? nowStr() : null, status, nowStr(), s.id).run();
     return json({ ok: true });
   });
 });
@@ -2375,6 +2388,7 @@ registerBulkDemands(router, { withAuth, json, serverError, visibleProjectIds, ge
 registerM2Gaps(router, { withAuth, json, serverError, visibleProjectIds, getSetting, nowStr, encryptSetting });
 registerAreas(router, { withAuth, json, serverError, visibleProjectIds, nowStr });
 registerM4Letters(router, { withAuth, json, serverError, visibleProjectIds, getSetting, nowStr, printBrand });
+registerM5(router, { withAuth, json, serverError, visibleProjectIds, getSetting, nowStr, printBrand });
 registerM4Gaps(router, { withAuth, json, serverError, visibleProjectIds, getSetting, nowStr });
 registerM3Gaps(router, { withAuth, json, serverError, visibleProjectIds, getSetting, nowStr });
 registerM2Step3(router, { withAuth, json, serverError, visibleProjectIds, nowStr });

@@ -323,6 +323,14 @@ export function registerContractors(router, h) {
     if (!(amount > 0)) return json({ ok: false, error: 'Enter the amount.' }, 400);
     let early = '';
     if (kind === 'retention_release') {
+      // Zero-snag lock: nothing is released while a snag assigned to this work order is still open, and money held against a back-charge stays held.
+      const open = await env.DB.prepare("SELECT COUNT(*) AS n FROM site_snags WHERE wo_id = ? AND deleted_at IS NULL AND status <> 'verified'").bind(wo.id).first();
+      if (open.n) return json({ ok: false, error: `${open.n} snag${open.n === 1 ? ' is' : 's are'} still open against this work order. Retention cannot be released until every one is verified fixed.`, code: 'open_snags' }, 409);
+      const pend = await env.DB.prepare("SELECT COALESCE(SUM(backcharge_paise), 0) AS p FROM dlp_tickets WHERE wo_id = ? AND backcharge_status = 'pending' AND deleted_at IS NULL").bind(wo.id).first();
+      if (pend.p > 0) {
+        const heldNow = (await env.DB.prepare("SELECT COALESCE(SUM(CASE kind WHEN 'retention_held' THEN amount_paise WHEN 'retention_released' THEN -amount_paise END), 0) AS h FROM con_ledger WHERE wo_id = ?").bind(wo.id).first()).h;
+        if (amount > heldNow - pend.p) return json({ ok: false, error: `${rupees(pend.p)} of this retention is held against a repair back-charge. At most ${rupees(Math.max(0, heldNow - pend.p))} can be released now.`, code: 'backcharge' }, 409);
+      }
       // Retention is held for the defect liability period, counted from the OC.
       const months = Math.round(num(await getSetting(env, 'con.dlp_months'))) || 60;
       const oc = (await approvalState(env, wo.project_id)).ocDate(null);

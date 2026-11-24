@@ -5,6 +5,7 @@
 //   WP-14 handover / possession checklist, home-loan details
 // Money is integer paise. Tax and stamp-duty rates are inputs taken from Settings: nothing is hard-coded (confirm with your CA / advocate).
 import { emit } from '../core/events.js';
+import { noDuesPoints } from './m5.js';
 import { saleBlock, approvalState, holdFor } from '../core/gates.js';
 import { checkPin } from '../core/pin.js';
 import { ccSaleBlock } from './m2gaps.js';
@@ -544,6 +545,12 @@ export function registerSales3(router, h) {
       const b = await req.json().catch(() => ({}));
       const reason = String(b.override_note || '').trim().slice(0, 300);
       const problems = [];
+      // Strict mode (Setting sales.nodues_strict = on): all six no-dues points must be green. No override.
+      if ((await getSetting(env, 'sales.nodues_strict')) === 'on') {
+        const nd = await noDuesPoints(env, getSetting, booking);
+        const red = nd.points.filter((p) => !p.ok);
+        if (red.length) return json({ ok: false, error: `Keys cannot be released: ${red.map((p) => p.label + ' (' + p.detail + ')').join('; ')}.`, code: 'nodues', points: nd.points }, 409);
+      }
       // No-dues: the buyer's 1% TDS (s.194-IA) must be verified (challan / Form 16B) before possession. This one has no override.
       const tdsOpen = await env.DB.prepare("SELECT COUNT(*) AS n, COALESCE(SUM(amount_paise), 0) AS a FROM sal_tds_credits WHERE booking_id = ? AND status = 'pending'").bind(booking.id).first();
       if (tdsOpen.n) return json({ ok: false, error: `The buyer's TDS of ${rupees(tdsOpen.a)} (s.194-IA, 1%) is not yet verified. Get the Form 26QB challan / Form 16B and verify it under Collections before possession.`, code: 'tds_pending' }, 409);

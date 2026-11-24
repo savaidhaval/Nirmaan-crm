@@ -81,3 +81,11 @@ Use a real phone for the site steps. Tick each line. Anything that fails: note t
 2. Booking > WhatsApp: balance / demand / last receipt / agreement ready / thanks. WhatsApp opens with the message ready; nothing is sent until you press Send.
 3. Sales > Channel partners > Checked on MahaRERA: look the number up on the MahaRERA website, write what you saw. Paying brokerage before this check is refused with a plain message.
 4. More > Email settings: Save, send the test email (arrives in the Owner's inbox), then ask for a login code from the sign-in page.
+
+## Module 5, step 1
+1. Snags: open a snag, "Contractor / spot": pick the contractor's work order, add the floor plan picture, tap the spot. "See spot" shows the red dot.
+2. Mark that snag fixed: refused until you add an "After photo". Then the PM verifies it.
+3. Contractors: release retention on that work order while a snag is open: refused with the number of open snags.
+4. A booking: "Possession: six no-dues points". Set corpus and maintenance due, record the money received, upload the signed letter and the undertaking. When all six are green, hand over; then "Possession certificate".
+5. Defect helpdesk: log a defect for a flat, give it to the work order. After the time limit, "Repair by outside vendor"; Accounts confirms; check the retention fell by that amount.
+6. Society handover vault: load the standard checklist, upload and acknowledge each item; the project can then be set to Completed.
