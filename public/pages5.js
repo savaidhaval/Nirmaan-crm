@@ -217,9 +217,9 @@ bookingDetail = async function (id) {
     $('stmt').onclick = () => openPrint('statement', id);
     const refresh = () => { document.querySelectorAll('.modal-overlay').forEach((x) => x.remove()); bookingDetail(id); };
     box.querySelectorAll('[data-waive]').forEach((b) => { b.onclick = async () => {
-      const v = await openForm({ title: 'Waive interest', fields: [{ name: 'amount_paise', label: 'Amount to waive (₹)', type: 'money', required: true }, { name: 'reason', label: 'Reason', required: true }] });
+      const v = await openForm({ title: 'Waive interest', intro: currentUser.role === 'owner' ? 'Enter your approval PIN: every waiver is signed with it.' : 'The Owner will approve it with the approval PIN.', fields: [{ name: 'amount_paise', label: 'Amount to waive (₹)', type: 'money', required: true }, { name: 'reason', label: 'Reason', required: true }, ...(currentUser.role === 'owner' ? [{ name: 'pin', label: 'Approval PIN (6 digits)', type: 'password', required: true }] : [])] });
       if (v && await act(api(`/api/sales/demands/${b.dataset.waive}/interest-waiver`, { method: 'POST', body: v }), currentUser.role === 'owner' ? 'Waived' : 'Sent to the Owner')) refresh(); }; });
-    box.querySelectorAll('[data-wok]').forEach((b) => { b.onclick = async () => { if (await act(api(`/api/sales/waivers/${b.dataset.wok}/approve`, { method: 'POST', body: {} }), 'Approved')) refresh(); }; });
+    box.querySelectorAll('[data-wok]').forEach((b) => { b.onclick = async () => { const v = await openForm({ title: 'Approve the waiver', intro: 'Enter your approval PIN.', fields: [{ name: 'pin', label: 'Approval PIN (6 digits)', type: 'password', required: true }] }); if (v && await act(api(`/api/sales/waivers/${b.dataset.wok}/approve`, { method: 'POST', body: { pin: v.pin } }), 'Approved')) refresh(); }; });
     box.querySelectorAll('[data-wno]').forEach((b) => { b.onclick = async () => { if (await act(api(`/api/sales/waivers/${b.dataset.wno}/reject`, { method: 'POST', body: {} }), 'Rejected')) refresh(); }; });
     const ir = $('int-rcpt');
     if (ir) ir.onclick = async () => {

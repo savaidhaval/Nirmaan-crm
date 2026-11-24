@@ -1,3 +1,4 @@
+import { checkPin } from '../core/pin.js';
 // routes/finance.js — late-payment interest, project financials, vendor TDS/GST, Tally exports, customer statement.
 
 const MONEY = ['owner', 'pm', 'accounts'];
@@ -88,6 +89,8 @@ export function registerFinance(router, h) {
       const amount = Math.round(Number(b.amount_paise) || room);
       if (!(amount > 0) || amount > room) return json({ ok: false, error: `Interest available to waive on this demand is ${rupees(room)}.` }, 400);
       const owner = req.user.role === 'owner';
+      // Every waiver is approved with the Owner's approval PIN, including a waiver the Owner makes directly.
+      if (owner) { const pe = await checkPin(env, req.user.user_id, b.pin); if (pe) return json({ ok: false, error: pe, code: 'pin_required' }, 400); }
       const r = await env.DB.prepare('INSERT INTO sal_interest_waivers (demand_id, amount_paise, reason, status, requested_by, approved_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
         .bind(d.id, amount, String(b.reason).slice(0, 300), owner ? 'approved' : 'requested', req.user.user_id, owner ? req.user.user_id : null, nowStr()).run();
       await audit(env, req.user, owner ? 'interest_waived' : 'interest_waiver_request', 'sal_interest_waivers', r.meta.last_row_id, `Interest ${rupees(amount)} on "${d.label}" for ${d.customer_name} ${owner ? 'waived' : 'waiver requested'}. Reason: ${b.reason}`);
@@ -102,6 +105,7 @@ export function registerFinance(router, h) {
       if (!w || !(await visibleProjectIds(env, req.user)).includes(w.project_id)) return json({ ok: false, error: 'Not found.' }, 404);
       if (w.status !== 'requested') return json({ ok: false, error: 'Already decided.' }, 400);
       if (w.requested_by === req.user.user_id && req.user.role !== 'owner') return json({ ok: false, error: 'You cannot approve your own request.' }, 403);
+      if (status === 'approved') { const bd = await req.json().catch(() => ({})); const pe = await checkPin(env, req.user.user_id, bd.pin); if (pe) return json({ ok: false, error: pe, code: 'pin_required' }, 400); }
       await env.DB.prepare('UPDATE sal_interest_waivers SET status = ?, approved_by = ? WHERE id = ? AND status = \'requested\'').bind(status, req.user.user_id, w.id).run();
       await audit(env, req.user, `interest_waiver_${status}`, 'sal_interest_waivers', w.id, `Waiver of ${rupees(w.amount_paise)} ${status}${w.requested_by === req.user.user_id ? ' (approved by Owner as maker)' : ''}`);
       return json({ ok: true });
