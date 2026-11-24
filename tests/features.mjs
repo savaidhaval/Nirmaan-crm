@@ -48,6 +48,10 @@ ok('interview-day list shows them', (await hr.call('GET', '/api/people/interview
 const hired = await hr.call('POST', `/api/people/candidates/${cand}/status`, { status: 'hired' });
 ok('hired converts to staff', hired.data.converted === true && (await hr.call('GET', '/api/people/staff')).data.staff.some((s) => s.name === 'Zz Candidate'));
 ok('sales cannot see staff', (await sales.call('GET', '/api/people/staff')).status === 403);
+{ const st = (await hr.call('GET', '/api/people/staff')).data.staff.find((x) => x.name === 'Zz Candidate');
+  ok('HR cannot delete a person from the staff list', (await hr.call('DELETE', `/api/people/staff/${st.id}`)).status === 403);
+  ok('the Owner deletes a person; they disappear from the list', (await o.call('DELETE', `/api/people/staff/${st.id}`)).status === 200 && !(await hr.call('GET', '/api/people/staff')).data.staff.some((x) => x.id === st.id));
+  ok('deleting again says not found, and the deletion is audited', (await o.call('DELETE', `/api/people/staff/${st.id}`)).status === 404 && (await o.call('GET', '/api/audit?action=delete')).data.audit.some((a) => /Zz Candidate/.test(a.summary))); }
 ok('hr cannot read sales', (await hr.call('GET', '/api/sales/leads')).status === 403);
 
 // site: idempotent report + photo + snag flow

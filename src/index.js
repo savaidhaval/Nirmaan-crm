@@ -2002,6 +2002,22 @@ router.put('/api/people/staff/:id', async (req, env) => {
   });
 });
 
+// Remove a person from the staff list (Owner only). The row is kept, hidden and audited, never destroyed.
+router.delete('/api/people/staff/:id', async (req, env) => {
+  return withAuth(req, env, 'people', 'A', async (req, env) => {
+    try {
+      if (req.user.role !== 'owner') return json({ ok: false, error: 'Only the Owner can delete a person from the staff list. HR can mark them as left.' }, 403);
+      const s = await env.DB.prepare('SELECT id, name, role_title FROM ppl_staff WHERE id = ? AND deleted_at IS NULL').bind(Number(req.params.id)).first();
+      if (!s) return json({ ok: false, error: 'Person not found.' }, 404);
+      await env.DB.batch([
+        env.DB.prepare('UPDATE ppl_staff SET deleted_at = ?, active = 0 WHERE id = ? AND deleted_at IS NULL').bind(nowStr(), s.id),
+        env.DB.prepare("INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, 'delete', 'ppl_staff', ?, ?, ?)").bind(req.user.user_id, s.id, `Removed ${String(s.name).slice(0, 80)}${s.role_title ? ' (' + String(s.role_title).slice(0, 60) + ')' : ''} from the staff list`, nowStr()),
+      ]);
+      return json({ ok: true });
+    } catch (e) { return serverError(e, 'staff-delete'); }
+  });
+});
+
 router.get('/api/people/hiring', async (req, env) => {
   return withAuth(req, env, 'people', 'V', async (req, env) => {
     const rows = await env.DB.prepare(`SELECT h.*, p.name AS project, (SELECT COUNT(*) FROM ppl_candidates c WHERE c.hiring_id = h.id AND c.deleted_at IS NULL) AS candidates FROM ppl_hiring h LEFT JOIN projects p ON p.id = h.project_id WHERE h.deleted_at IS NULL ORDER BY h.status, h.id DESC`).all();
