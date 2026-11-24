@@ -75,3 +75,9 @@ Use a real phone for the site steps. Tick each line. Anything that fails: note t
 14. **Dashboard**: Owner home shows Needs your attention; each line opens its list; Insights downloads open in Excel.
 15. **Delete**: PM and Accounts cannot delete anything; Owner can.
 16. **Backup**: More → Everything backup (3 files) downloads; run the restore drill on staging.
+
+## Agreement, WhatsApp, MahaRERA check, email
+1. Letter templates > Agreement for Sale: see "Built-in text: advocate must review". Open a booking > Agreement (Word): the file says DRAFT. Write your own wording, Save, then (as Owner) "Advocate has approved" and type the advocate's name. Download again: no DRAFT line.
+2. Booking > WhatsApp: balance / demand / last receipt / agreement ready / thanks. WhatsApp opens with the message ready; nothing is sent until you press Send.
+3. Sales > Channel partners > Checked on MahaRERA: look the number up on the MahaRERA website, write what you saw. Paying brokerage before this check is refused with a plain message.
+4. More > Email settings: Save, send the test email (arrives in the Owner's inbox), then ask for a login code from the sign-in page.

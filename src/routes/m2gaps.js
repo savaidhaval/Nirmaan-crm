@@ -12,12 +12,16 @@ const phone10 = (p) => String(p || '').replace(/\D/g, '').slice(-10);
 
 // Brokerage may be paid only to a partner whose KYC the Owner/Accounts approved and whose MahaRERA registration has not expired.
 // Returns a plain message, or null when payment is allowed.
-export async function partnerPayBlock(env, partnerId) {
-  const p = await env.DB.prepare('SELECT firm, rera_no, rera_valid_till, kyc_status FROM sal_partners WHERE id = ? AND deleted_at IS NULL').bind(partnerId).first();
+export async function partnerPayBlock(env, partnerId, getSetting) {
+  const p = await env.DB.prepare('SELECT firm, rera_no, rera_valid_till, kyc_status, rera_verified_on FROM sal_partners WHERE id = ? AND deleted_at IS NULL').bind(partnerId).first();
   if (!p) return 'Channel partner not found.';
   if (p.kyc_status !== 'approved') return `${p.firm}: KYC is not approved yet. Add the MahaRERA certificate, PAN and GSTIN, then approve it, before paying brokerage.`;
   if (!String(p.rera_no || '').trim() || !p.rera_valid_till) return `${p.firm}: the MahaRERA registration number or expiry date is missing.`;
   if (p.rera_valid_till < todayIST()) return `${p.firm}: MahaRERA registration expired on ${p.rera_valid_till}. Brokerage cannot be paid until it is renewed and updated.`;
+  // The number must have been looked up on the MahaRERA website (Owner/Accounts record it), and the check must be recent. Setting partners.rera_check_days (default 365; 0 = never goes stale).
+  if (!p.rera_verified_on) return `${p.firm}: the MahaRERA registration has not been checked on the MahaRERA website yet. Look it up, then press "Checked on MahaRERA" on the partner.`;
+  const raw = getSetting ? await getSetting(env, 'partners.rera_check_days') : null; const n = raw == null || raw === '' ? 365 : Number(raw); const lim = Number.isFinite(n) && n >= 0 ? n : 365;
+  if (lim > 0 && p.rera_verified_on < new Date(Date.now() + 19800000 - lim * 86400000).toISOString().slice(0, 10)) return `${p.firm}: the MahaRERA check is older than ${lim} days (${p.rera_verified_on}). Look the registration up again and record it.`;
   return null;
 }
 
@@ -119,6 +123,7 @@ export function registerM2Gaps(router, h) {
         if (g && !GSTIN_RE.test(g)) return json({ ok: false, error: 'GSTIN looks wrong (15 characters).' }, 400);
         sets.push('gstin = ?'); vals.push(g);
       }
+      if (b.rera_no !== undefined && String(b.rera_no).trim() !== String(p.rera_no || '').trim()) sets.push('rera_verified_on = NULL', 'rera_verified_by = NULL', 'rera_verify_note = NULL');   // a new number must be looked up again
       if (b.rera_no !== undefined) { sets.push('rera_no = ?'); vals.push(String(b.rera_no).trim().slice(0, 40)); }
       if (b.rera_valid_till !== undefined) {
         if (b.rera_valid_till && !isDate(b.rera_valid_till)) return json({ ok: false, error: 'Enter the expiry date as a proper date.' }, 400);
@@ -135,6 +140,24 @@ export function registerM2Gaps(router, h) {
       await audit(env, req.user, 'kyc_update', 'sal_partners', p.id, `KYC details of ${p.firm} updated; approval needed again.`);
       return json({ ok: true });
     } catch (e) { return serverError(e, 'kyc'); }
+  }));
+
+  // Someone looked the partner's registration up on the MahaRERA website. There is no public API to do this automatically, so the check is recorded by hand: who, when, what they saw.
+  router.post('/api/sales/partners/:id/verify-rera', async (req, env) => withAuth(req, env, 'sales', 'E', async (req, env) => {
+    try {
+      if (!['owner', 'accounts'].includes(req.user.role)) return json({ ok: false, error: 'Only the Owner or Accounts can record a MahaRERA check.' }, 403);
+      const p = await env.DB.prepare('SELECT id, firm, rera_no, rera_valid_till FROM sal_partners WHERE id = ? AND deleted_at IS NULL').bind(Number(req.params.id)).first();
+      if (!p) return json({ ok: false, error: 'Partner not found.' }, 404);
+      if (!String(p.rera_no || '').trim()) return json({ ok: false, error: 'Add the MahaRERA registration number first.' }, 400);
+      const b = await req.json().catch(() => ({}));
+      const note = String(b.note || '').trim();
+      if (note.length < 5) return json({ ok: false, error: 'Write what you saw on the MahaRERA website (for example: "Registered agent, valid till 2028-03-31, name matches").' }, 400);
+      const on = b.checked_on ? String(b.checked_on) : todayIST();
+      if (!isDate(on) || on > todayIST()) return json({ ok: false, error: 'Enter the check date as a proper date, not in the future.' }, 400);
+      await env.DB.prepare('UPDATE sal_partners SET rera_verified_on = ?, rera_verified_by = ?, rera_verify_note = ? WHERE id = ?').bind(on, req.user.user_id, note.slice(0, 300), p.id).run();
+      await audit(env, req.user, 'rera_verified', 'sal_partners', p.id, `MahaRERA registration ${p.rera_no} of ${p.firm} checked on the MahaRERA website on ${on}: ${note.slice(0, 120)}`);
+      return json({ ok: true });
+    } catch (e) { return serverError(e, 'verify-rera'); }
   }));
 
   router.post('/api/sales/partners/:id/kyc/approve', async (req, env) => withAuth(req, env, 'sales', 'E', async (req, env) => {

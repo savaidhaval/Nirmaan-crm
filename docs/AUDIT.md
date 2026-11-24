@@ -20,11 +20,11 @@ Scope: the whole repository (Cloudflare Worker + D1 + vanilla JS). Status as of 
 | Redevelopment: rehab vs free-sale segregation | **Fixed**: flats have a kind (rehab/sale); rehab flats cannot be sold; stacking plan shows them |
 | Redevelopment: member corpus, rent/transit tracking, hardship allowance | **Open.** A separate member ledger module; needs your society agreement terms before modelling |
 | Channel partner: 48-hour holds, first-registration-wins | **Fixed**: holds (max 48h), lead registration by partner, duplicate numbers refused in any format |
-| MahaRERA broker registration *verification* | **Open.** The RERA number is stored; there is no public API to verify it automatically |
+| MahaRERA broker registration *verification* | **Fixed (manual record).** There is no public API, so Owner/Accounts look the number up on the MahaRERA website and record who/when/what they saw; brokerage is blocked without a check under a year old, and a changed number clears it |
 | OTP-verified site-visit tagging | **Open.** Needs an SMS/WhatsApp gateway account (DLT-registered templates in India) |
 | Commission/GST payout ledger | **Partly fixed**: brokerage earned vs paid per partner, payments with TDS. GST on commission is not computed |
 | Webhooks: 99acres / MagicBricks / Housing / Meta | **Fixed (generic)**: signed (`HMAC-SHA256`, timestamp, replay-safe) `POST /api/webhooks/leads/:source`; set the `WEBHOOK_SECRET` secret. Each portal's own payload format still needs a small adapter once you have their documentation |
-| Official WhatsApp Business API acknowledgements and CLP reminders | **Open.** Needs a Meta WABA account + approved templates; wa.me links are built into the lead screen meanwhile |
+| Official WhatsApp Business API acknowledgements and CLP reminders | **Open.** Needs a Meta WABA account + approved templates; wa.me links are built into the lead screen and, since 0053, on every booking (balance, demand, receipt, agreement ready, thanks); each share is audited. The API stays a future option |
 
 ## Phase 2 — Functional / architectural gaps
 
