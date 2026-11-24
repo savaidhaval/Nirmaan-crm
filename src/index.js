@@ -19,6 +19,7 @@ import { ccOverFloor, wastageSweep, signoffBlock, registerM3Gaps, metres } from 
 import { registerM4Gaps, afsGateOn } from './routes/m4gaps.js';
 import { registerM4Letters } from './routes/m4letters.js';
 import { registerM5, vaultBlock } from './routes/m5.js';
+import { registerM5b } from './routes/m5b.js';
 import { registerAreas } from './routes/areas.js';
 import { registerBulkDemands, demandLetterHtml } from './routes/bulk_demands.js';
 import { registerReports } from './routes/reports.js';
@@ -576,7 +577,7 @@ router.get('/api/settings', async (req, env) => {
   });
 });
 
-const EDITABLE_SETTINGS = ['dlp.sla_days', 'sales.nodues_strict', 'sales.nodues_funds_required', 'partners.rera_check_days', 'sales.agreement_defect_years', 'po.pm_approval_limit_paise', 'access.allow_second_owner', 'access.limit_roles_to_assigned_projects', 'sales.share_all_leads',
+const EDITABLE_SETTINGS = ['sales.possession_notice_days', 'hv.link_days', 'hv.touchup_days', 'dlp.sla_days', 'sales.nodues_strict', 'sales.nodues_funds_required', 'partners.rera_check_days', 'sales.agreement_defect_years', 'po.pm_approval_limit_paise', 'access.allow_second_owner', 'access.limit_roles_to_assigned_projects', 'sales.share_all_leads',
   'demand.due_days_after_milestone', 'share.default_expiry_days', 'share.default_max_views', 'files.brochure_max_mb', 'branding.apply_colours_to_app',
   'brochure.price_list_default_audience', 'storage.warn_percent', 'sales.max_holds_per_user', 'sales.max_discount_bp', 'sales.pm_max_discount_bp',
   'interest.rate_bp', 'interest.grace_days', 'interest.enabled', 'security.require_mfa_roles', 'tax.stamp_duty_bp', 'tax.metro_cess_bp', 'tax.women_concession_bp', 'tax.registration_bp', 'tax.registration_cap_paise', 'tax.gst_bp',
@@ -1775,7 +1776,7 @@ router.get('/api/export/:what', async (req, env) => {
 // Tables are read in parts so one request or cron run never goes near the free plan's 50-queries-per-run cap.
 const EXPORT_TABLES = ['projects', 'apr_items', 'apr_events', 'drw_drawings', 'drw_revisions', 'site_milestones', 'site_dprs', 'site_snags', 'pro_vendors', 'pro_rfqs', 'pro_quotes', 'pro_pos', 'pro_po_items', 'pro_grns', 'pro_bills',
     'sal_leads', 'sal_activities', 'sal_visits', 'sal_inventory', 'sal_partners', 'sal_bookings', 'sal_plan_stages', 'sal_demands', 'sal_receipts', 'documents', 'audit_log',
-    'pro_grn_items', 'pro_payments', 'ppl_staff', 'ppl_hiring', 'ppl_candidates', 'sal_brokerage_payments', 'sal_refunds', 'sal_interest_waivers', 'sal_hold_log', 'sal_hold_tokens', 'sal_checkins', 'sal_tds_credits', 'sal_letter_templates', 'sal_possession_funds', 'dlp_tickets', 'chs_vault_items', 'site_ms_signoffs', 'site_wing_progress', 'sal_price_matrix', 'sal_plc_rules', 'mkt_spend', 'brands', 'counters',
+    'pro_grn_items', 'pro_payments', 'ppl_staff', 'ppl_hiring', 'ppl_candidates', 'sal_brokerage_payments', 'sal_refunds', 'sal_interest_waivers', 'sal_hold_log', 'sal_hold_tokens', 'sal_checkins', 'sal_tds_credits', 'sal_letter_templates', 'sal_possession_funds', 'dlp_tickets', 'chs_vault_items', 'plan_library', 'sal_handover_slots', 'sal_fitout_noc', 'chs_expenses', 'chs_society', 'chs_committee', 'site_ms_signoffs', 'site_wing_progress', 'sal_price_matrix', 'sal_plc_rules', 'mkt_spend', 'brands', 'counters',
     'pro_indents', 'pro_indent_items', 'pro_rfq_items', 'pro_quote_items',
     'site_dpr_labour', 'bud_heads', 'stk_items', 'stk_balance', 'stk_moves', 'pro_party_docs', 'pro_professionals', 'ai_log', 'sal_receipt_requests', 'sal_adjustments', 'sal_booking_parties', 'sal_cost_sheets', 'sal_cost_sheet_lines', 'sal_handover', 'sal_handover_items', 'sal_booking_loans', 'rera_account_entries', 'eng_kudos', 'fea_versions', 'sal_bulk_runs', 'sal_bulk_items', 'drw_acks', 'tally_export_log', 'brand_profiles', 'project_members', 'drive_folders', 'bank_profiles', 'bank_import_batches', 'bank_import_rows', 'red_societies', 'red_members', 'red_consent_events', 'red_member_docs', 'red_rehab_allotments', 'red_transit_terms', 'red_transit_schedule', 'red_transit_payments', 'red_corpus_entries', 'red_meetings', 'red_meeting_attendees', 'red_rent_changes', 'red_site_proofs', 'red_payout_batches', 'prj_autodcr_history', 'apr_steps', 'apr_deps', 'con_variations', 'con_measurements', 'rera_certificates', 'qa_pours', 'qa_cubes', 'qa_ncrs', 'site_dpr_work', 'site_ms_changes', 'prj_holds', 'con_debit_notes', 'bud_items', 'bd_opportunities', 'bd_followups', 'bd_studies', 'bd_steps', 'prj_lifecycle', 'pty_funds', 'pty_entries', 'con_contractors', 'con_work_orders', 'con_wo_items', 'con_ra_bills', 'con_ra_lines', 'con_payments', 'con_ledger'];
 const EXPORT_PARTS = 3;
@@ -2389,6 +2390,7 @@ registerM2Gaps(router, { withAuth, json, serverError, visibleProjectIds, getSett
 registerAreas(router, { withAuth, json, serverError, visibleProjectIds, nowStr });
 registerM4Letters(router, { withAuth, json, serverError, visibleProjectIds, getSetting, nowStr, printBrand });
 registerM5(router, { withAuth, json, serverError, visibleProjectIds, getSetting, nowStr, printBrand });
+registerM5b(router, { withAuth, json, serverError, visibleProjectIds, getSetting, nowStr, printBrand, sendMail, publicBase, clientIp, checkRateLimit });
 registerM4Gaps(router, { withAuth, json, serverError, visibleProjectIds, getSetting, nowStr });
 registerM3Gaps(router, { withAuth, json, serverError, visibleProjectIds, getSetting, nowStr });
 registerM2Step3(router, { withAuth, json, serverError, visibleProjectIds, nowStr });
@@ -3534,7 +3536,7 @@ export default {
         return json({ ok: true, env: env.ENVIRONMENT || 'production' });
       }
       await ensureBootstrap(env);
-      if (path.startsWith('/api/') || path.startsWith('/s/') || path.startsWith('/c/') || path.startsWith('/d/') || path.startsWith('/brand/')) {
+      if (path.startsWith('/api/') || path.startsWith('/s/') || path.startsWith('/c/') || path.startsWith('/h/') || path.startsWith('/d/') || path.startsWith('/brand/')) {
         // Test builds only (QCOUNT_LOG is set in .dev.vars / CI, never in production): report how many database statements a request used.
         if (env.QCOUNT_LOG) {
           let n = 0; const db = env.DB;

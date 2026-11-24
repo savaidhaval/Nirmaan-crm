@@ -103,7 +103,7 @@ export function registerM5(router, h) {
       if (![...MONEY, 'sales'].includes(req.user.role)) return bad('Not allowed.', 403);
       const { b, err } = await bookingOf(env, req, req.params.id); if (err) return err;
       const r = await noDuesPoints(env, getSetting, b);
-      return json({ ok: true, data: { ...r, strict: (await getSetting(env, 'sales.nodues_strict')) === 'on', customer: b.customer_name } });
+      return json({ ok: true, data: { ...r, strict: (await getSetting(env, 'sales.nodues_strict')) !== 'off', customer: b.customer_name } });
     } catch (e) { return serverError(e, 'no-dues'); }
   }));
 
@@ -339,6 +339,12 @@ export function registerM5(router, h) {
         env.DB.prepare("INSERT INTO con_ledger (contractor_id, project_id, wo_id, kind, amount_paise, ref_table, ref_id, created_at) SELECT ?, ?, ?, 'retention_released', ?, 'dlp_backcharge', ?, ? WHERE changes() > 0").bind(wo.contractor_id, wo.project_id, wo.id, t.backcharge_paise, t.id, nowStr()),
       ]);
       if (!res[1].meta.changes) return bad('Already confirmed.', 409);
+      // the numbered debit note for the contractor
+      const pr = await env.DB.prepare('SELECT code FROM projects WHERE id = ?').bind(t.project_id).first(); const key = `dn:${t.project_id}`;
+      await env.DB.batch([
+        env.DB.prepare('INSERT INTO counters (key, value) VALUES (?, 1) ON CONFLICT(key) DO UPDATE SET value = value + 1').bind(key),
+        env.DB.prepare("UPDATE dlp_tickets SET debit_no = ?1 || printf('%04d', (SELECT value FROM counters WHERE key = ?2)), debit_on = ?3 WHERE id = ?4 AND debit_no IS NULL").bind(`DN-${pr.code}-`, key, todayIST(), t.id),
+      ]);
       await audit(env, req.user, 'dlp_backcharge_clear', 'dlp_tickets', t.id, `Back-charge of ${rupees(t.backcharge_paise)} deducted from the contractor's retention`);
       return json({ ok: true });
     } catch (e) { return serverError(e, 'dlp-backcharge-clear'); }

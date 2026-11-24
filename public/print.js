@@ -183,6 +183,32 @@ async function render(d) {
       <p>The defect liability period under the RERA runs for ${e(d.dlp_months)} months from the date of possession${d.dlp_until ? ', that is until <b>' + e(d.dlp_until) + '</b>' : ''}. Defects may be reported to our office in writing.</p>
       ${d.override_note ? `<p style="font-size:10pt;color:#555">Handed over with the Owner's written reason: ${e(d.override_note)}</p>` : ''}
       <table style="margin-top:18mm"><tr><td style="height:18mm;vertical-align:bottom">Received by (Owner / Allottee): ______________________<br>${e(d.customer_name)}</td><td style="vertical-align:bottom">Handed over by: ______________________</td></tr></table>`;
+  } else if (d.kind === 'possnotice') {
+    body = `<div class="doc-title">Possession Notice</div>
+      <div class="two"><div><b>To:</b> ${e(d.customer_name)}<br>${e(d.address)}</div><div style="text-align:right"><b>Date:</b> ${e(d.notice_on)}<br><b>Flat:</b> ${e(d.flat)}, ${e(d.project)}${d.rera_no ? '<br>MahaRERA Reg. No. ' + e(d.rera_no) : ''}</div></div>
+      <p>Dear ${e(d.customer_name)},</p><p>The building has received its Occupancy Certificate and your flat is ready. Please pay the amounts below on or before <b>${e(d.pay_by)}</b>, after which we will schedule the handover of your keys.</p>
+      <table><tr><th>Particulars</th><th class="r">Amount</th></tr>${d.lines.map((l) => `<tr><td>${e(l.label)}</td><td class="r">${inr(l.paise)}</td></tr>`).join('')}<tr><th>Total payable</th><th class="r">${inr(d.total_paise)}</th></tr></table>
+      <div class="words">${rupeeWords(d.total_paise)}</div>${d.bank ? `<p><b>Pay to:</b> ${e(d.bank)}</p>` : ''}
+      <p style="font-size:10pt;color:#555">Keys are released only when every amount due, the buyer's TDS certificate, the signed possession letter and the undertaking are in order.</p>`;
+  } else if (d.kind === 'fitoutnoc') {
+    body = `<div class="doc-title">Fit-out No Objection Certificate</div>
+      <div class="two"><div><b>NOC no.:</b> ${e(d.noc_no)}<br><b>Project:</b> ${e(d.project)}</div><div style="text-align:right"><b>Date:</b> ${e(d.issued_on)}<br><b>Flat:</b> ${e(d.flat)}${d.valid_till ? '<br><b>Valid till:</b> ' + e(d.valid_till) : ''}</div></div>
+      <p>We have no objection to interior work in Flat <b>${e(d.flat)}</b> by <b>${e(d.customer_name)}</b>, subject to: (1) the refundable fit-out deposit of <b>${inr(d.deposit_paise)}</b> held by us; (2) no change to structure, waterproofing, external walls or common services; (3) the condition of the flat on handover being as photographed and signed by the owner${d.baseline_signed_on ? ' on ' + e(String(d.baseline_signed_on).slice(0, 10)) : ''}; (4) the society and building rules.</p>
+      <p>Any damage found against the signed condition record may be deducted from the deposit.</p>${d.status === 'revoked' ? '<p style="color:#b91c1c"><b>This NOC has been revoked.</b></p>' : ''}`;
+  } else if (d.kind === 'dlpdebit') {
+    body = `<div class="doc-title">Debit Note</div>
+      <div class="two"><div><b>To:</b> ${e(d.contractor)}${d.gstin ? '<br>GSTIN ' + e(d.gstin) : ''}<br><b>Work order:</b> ${e(d.wo_no)}</div><div style="text-align:right"><b>Debit note no.:</b> ${e(d.debit_no)}<br><b>Date:</b> ${e(d.debit_on)}<br><b>Project:</b> ${e(d.project)}</div></div>
+      <p>The defect "<b>${e(d.ticket_title)}</b>" was reported on ${e(d.raised_on)} and was due to be set right by ${e(d.sla_due_on)}. As it was not, the repair was done by <b>${e(d.repair_vendor)}</b>. The cost is debited to you and deducted from the retention held on the work order.</p>
+      <table><tr><th>Particulars</th><th class="r">Amount</th></tr><tr><td>Repair cost${d.note ? ' (' + e(d.note) + ')' : ''}</td><td class="r">${inr(d.amount_paise)}</td></tr><tr><th>Debited to you</th><th class="r">${inr(d.amount_paise)}</th></tr></table>
+      <div class="words">${rupeeWords(d.amount_paise)}</div><p>Retention still held on this work order: ${inr(d.retention_left_paise)}.</p>`;
+  } else if (d.kind === 'chsstatement') {
+    body = `<div class="doc-title">Society Statement: Maintenance Collected and Costs</div>
+      <p><b>${e(d.project)}</b>${d.rera_no ? ' · MahaRERA ' + e(d.rera_no) : ''} · as on ${e(d.as_on)}</p>
+      <table><tr><th>Item</th><th class="r">Amount</th></tr><tr><td>Advance maintenance collected from flat owners</td><td class="r">${inr(d.maintenance_collected_paise)}</td></tr>
+      ${d.by_head.map((h) => `<tr><td>Less: ${e(h.label)} (certified by the CA)</td><td class="r">− ${inr(h.paise)}</td></tr>`).join('')}<tr><th>Balance handed over to the society</th><th class="r">${inr(d.balance_to_hand_over_paise)}</th></tr></table>
+      <table><tr><th>Held for the society (not spent)</th><th class="r">Amount</th></tr><tr><td>Corpus fund</td><td class="r">${inr(d.corpus_held_paise)}</td></tr><tr><td>Share money</td><td class="r">${inr(d.share_money_paise)}</td></tr></table>
+      <h3>Costs entered</h3><table><tr><th>Date</th><th>For</th><th>Bill</th><th>Paid to</th><th class="r">Amount</th><th>CA</th></tr>${d.expenses.map((x) => `<tr><td>${e(x.spent_on)}</td><td>${e(x.head)}</td><td>${e(x.bill_no)}</td><td>${e(x.paid_to || '')}</td><td class="r">${inr(x.amount_paise)}</td><td>${x.certified ? 'Certified' : 'Not certified'}</td></tr>`).join('')}</table>
+      ${d.uncertified_paise ? `<p style="color:#b91c1c">${inr(d.uncertified_paise)} of costs are not yet certified by the CA and are not deducted above.</p>` : ''}`;
   } else {
     // sample: shows margins, a ruler and a dummy letter so artwork can be checked on real paper
     body = `<div class="doc-title">Sample letter</div><p>Dear Sir / Madam,</p><p>This page shows how your letters will look with the current style and margins. Check that the text stays clear of your logo, header and footer artwork when printed on A4.</p>

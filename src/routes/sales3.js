@@ -546,7 +546,7 @@ export function registerSales3(router, h) {
       const reason = String(b.override_note || '').trim().slice(0, 300);
       const problems = [];
       // Strict mode (Setting sales.nodues_strict = on): all six no-dues points must be green. No override.
-      if ((await getSetting(env, 'sales.nodues_strict')) === 'on') {
+      if ((await getSetting(env, 'sales.nodues_strict')) !== 'off') {
         const nd = await noDuesPoints(env, getSetting, booking);
         const red = nd.points.filter((p) => !p.ok);
         if (red.length) return json({ ok: false, error: `Keys cannot be released: ${red.map((p) => p.label + ' (' + p.detail + ')').join('; ')}.`, code: 'nodues', points: nd.points }, 409);

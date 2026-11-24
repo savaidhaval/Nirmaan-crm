@@ -89,3 +89,11 @@ Use a real phone for the site steps. Tick each line. Anything that fails: note t
 4. A booking: "Possession: six no-dues points". Set corpus and maintenance due, record the money received, upload the signed letter and the undertaking. When all six are green, hand over; then "Possession certificate".
 5. Defect helpdesk: log a defect for a flat, give it to the work order. After the time limit, "Repair by outside vendor"; Accounts confirms; check the retention fell by that amount.
 6. Society handover vault: load the standard checklist, upload and acknowledge each item; the project can then be set to Completed.
+
+## Module 5, step 2
+1. Snags: "Floor-plan library": add the 2BHK plan once. Raise a snag inside a 2BHK flat; "Contractor / spot" opens that plan by itself.
+2. A booking: "Issue possession notice" and print it. "Joint inspection link" (works only with zero open snags): send by WhatsApp and open it on a phone, sign, add a touch-up. It appears as a low snag due in 7 days.
+3. Possession & handover: "Handover time slots": add a morning. When the six points are green, "Handover time link": open it, pick a time.
+4. After possession: add a baseline photo, send the baseline link, sign it; then "Issue fit-out NOC" (deposit must be received).
+5. Defect helpdesk: "Complaint QR for residents": scan it with a phone and send a complaint; it appears in the list. Confirm a back-charge and open the numbered debit note.
+6. Society handover vault: update the society, add committee members, enter a common-area cost, mark it CA-certified, print the society statement, download the binder.

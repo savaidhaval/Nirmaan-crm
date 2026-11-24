@@ -7,7 +7,7 @@ const EXCLUDED = {
   sessions: 'login sessions: temporary', rate_limits: 'counters that expire', otp_codes: 'one-time codes: temporary', mfa_challenges: 'temporary', webhook_seen: 'duplicate-delivery memory',
   notifications: 'in-app messages: not business records', backup_log: 'log of the backups themselves', dash_snapshot: 'derived cache, rebuilt by the hourly sweep', file_blobs: 'file contents are not in the JSON export (Drive/D1 files are separate)',
   settings: 'holds encrypted secrets: re-enter after a restore', user_recovery_codes: 'secret: never exported', user_totp: 'secret: never exported', email_log: 'sent-mail log with message bodies: not business records',
-  sal_demand_links: 'expiring links (token hashes): not exported', share_links: 'expiring links (token hashes): not exported', d1_migrations: 'tool table', sqlite_sequence: 'sqlite internal', oauth_states: 'temporary sign-in handshakes',
+  sal_demand_links: 'expiring links (token hashes): not exported', sal_hv_links: 'expiring buyer links (token hashes): not exported', share_links: 'expiring links (token hashes): not exported', d1_migrations: 'tool table', sqlite_sequence: 'sqlite internal', oauth_states: 'temporary sign-in handshakes',
 };
 const db = new DatabaseSync(':memory:');
 for (const f of fs.readdirSync('migrations').filter((x) => x.endsWith('.sql')).sort()) db.exec(fs.readFileSync('migrations/' + f, 'utf8'));

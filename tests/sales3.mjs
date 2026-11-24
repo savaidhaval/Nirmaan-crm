@@ -8,6 +8,7 @@ class C { constructor() { this.cookie = ''; }
 const run = Date.now().toString(36); const digits = String(Date.now()).slice(-8);
 const o = new C(); await o.call('POST', '/api/auth/login', { email: process.env.OWNER_EMAIL, password: process.env.OWNER_PASSWORD });
 await o.call('POST', '/api/settings/sales.afs_gate', { value: 'off' });   // these suites bill stages without registering the Agreement for Sale; the 10% rule is tested in m4_step1
+await o.call('POST', '/api/settings/sales.nodues_strict', { value: 'off' });   // these suites test the earlier possession rules (written reasons); the strict six-point lock is tested in m5_step1 and m5_step2
 let seq = 0;
 const mkUser = async (role, projects) => { const email = `zp-${role}-${++seq}-${run}@test.local`; const r = await o.call('POST', '/api/users', { name: 'zp ' + role, email, role, projects }); const pw = 'ZpStrongPass-' + run; const c = new C(); await c.call('POST', '/api/auth/login', { email, password: r.data.temporaryPassword }); await c.call('POST', '/api/auth/change-password', { currentPassword: r.data.temporaryPassword, newPassword: pw }); c.id = r.data.id; c.email = email; c.pw = pw; return c; };
 import { execSync } from 'node:child_process';
@@ -218,4 +219,5 @@ ok('site engineers have no access to the sales handover', (await site.call('GET'
 ok('requests without the header are refused', (await fetch(BASE + `/api/sales/bookings/${bk3}/handover`, { method: 'POST', headers: { cookie: sales.cookie, 'Content-Type': 'application/json' }, body: '{}' })).status === 403);
 cleanSettings();
 await o.call('POST', '/api/settings/sales.afs_gate', { value: 'on' });
+await o.call('POST', '/api/settings/sales.nodues_strict', { value: 'on' });
 console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);

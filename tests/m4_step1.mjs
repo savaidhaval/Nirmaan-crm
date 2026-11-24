@@ -48,6 +48,7 @@ ok('once registered, the held demands open: the agreement stage and the already 
 const b2 = await book(await mkUnit());
 ok('a buyer who registered after booking another flat is held again at 10%, per booking', (await demandsOf(b2.id))[1].status === 'scheduled');
 await o.call('POST', '/api/settings/sales.afs_gate', { value: 'off' });
+await o.call('POST', '/api/settings/sales.nodues_strict', { value: 'off' });   // these suites test the earlier possession rules (written reasons); the strict six-point lock is tested in m5_step1 and m5_step2
 const b3 = await book(await mkUnit(100000000), 100000000);
 ok('the rule can be switched off in Settings', (await demandsOf(b3.id))[1].status === 'ready');
 await o.call('POST', '/api/settings/sales.afs_gate', { value: 'on' });
@@ -107,4 +108,5 @@ ok('the bank relationship manager is saved with the loan', loan.status === 200);
 const bf = (await acc.call('GET', '/api/sales/bank-followups')).data.followups;
 ok('a demand 20 days late on a flat with an undisbursed loan is on the bank follow-up list', bf.some((r) => r.demand_id === dl[3].id && r.rm_email === 'shah@hdfc.test' && r.coordinator_email === 'coord@hdfc.test'), JSON.stringify(bf.map((r) => r.demand_id)));
 ok('one only 4 days late is not (10-day wait)', !bf.some((r) => r.demand_id === dl[2].id));
+await o.call('POST', '/api/settings/sales.nodues_strict', { value: 'on' });
 console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);
