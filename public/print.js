@@ -175,6 +175,14 @@ async function render(d) {
       ${d.receipts.map((r) => `<tr><td>${e(r.receipt_no || '')}${r.kind === 'interest' ? ' (interest)' : ''}</td><td>${e(r.received_on)}</td><td>${e(r.mode || '')} ${e(r.ref_no || '')}</td><td class="r">${inr(r.amount_paise)}</td></tr>`).join('')}</table>
       <table><tr><th colspan="2">Late-payment interest</th></tr><tr><td>Accrued</td><td class="r">${inr(it.accrued)}</td></tr><tr><td>Waived</td><td class="r">− ${inr(it.waived)}</td></tr><tr><td>Paid</td><td class="r">− ${inr(it.paid)}</td></tr><tr><th>Interest due</th><th class="r">${inr(it.due)}</th></tr></table>
       <p style="font-size:10pt;color:#555">Principal still to be received on demands raised: ${inr(Math.max(totalDem - rec, 0))}. Figures are as per our records on the date shown.</p>`;
+  } else if (d.kind === 'possession') {
+    body = `<div class="doc-title">Possession Certificate and Key Handover Receipt</div>
+      <div class="two"><div><b>Certificate no.:</b> ${e(d.pc_no)}<br><b>Project:</b> ${e(d.project)}${d.rera_no ? '<br>MahaRERA Reg. No. ' + e(d.rera_no) : ''}</div><div style="text-align:right"><b>Date of possession:</b> ${e(d.possession_given_on || '')}<br><b>Flat:</b> ${e(d.flat)}${d.oc_reference ? '<br><b>OC ref.:</b> ' + e(d.oc_reference) : ''}</div></div>
+      <p>This is to certify that possession of Flat <b>${e(d.flat)}</b> in the project <b>${e(d.project)}</b> has been handed over to <b>${e(d.customer_name)}</b>, and that the keys${' '}(with any parking sticker and access cards) were received by the owner on the date above.</p>
+      ${d.funds.length ? `<table><tr><th>Held for the society and the flat</th><th class="r">Amount</th></tr>${d.funds.map((f) => `<tr><td>${e(f.label)}</td><td class="r">${inr(f.held_paise)}</td></tr>`).join('')}</table>` : ''}
+      <p>The defect liability period under the RERA runs for ${e(d.dlp_months)} months from the date of possession${d.dlp_until ? ', that is until <b>' + e(d.dlp_until) + '</b>' : ''}. Defects may be reported to our office in writing.</p>
+      ${d.override_note ? `<p style="font-size:10pt;color:#555">Handed over with the Owner's written reason: ${e(d.override_note)}</p>` : ''}
+      <table style="margin-top:18mm"><tr><td style="height:18mm;vertical-align:bottom">Received by (Owner / Allottee): ______________________<br>${e(d.customer_name)}</td><td style="vertical-align:bottom">Handed over by: ______________________</td></tr></table>`;
   } else {
     // sample: shows margins, a ruler and a dummy letter so artwork can be checked on real paper
     body = `<div class="doc-title">Sample letter</div><p>Dear Sir / Madam,</p><p>This page shows how your letters will look with the current style and margins. Check that the text stays clear of your logo, header and footer artwork when printed on A4.</p>

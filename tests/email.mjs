@@ -64,6 +64,10 @@ ok('the body carries both a plain-text and an HTML part', /text\/plain/.test(mim
 class C { constructor() { this.cookie = ''; } async call(m, p, b) { const h = { 'X-NirmaanCRM': '1' }; if (this.cookie) h.cookie = this.cookie; if (b) h['Content-Type'] = 'application/json';
   const res = await fetch(BASE + p, { method: m, headers: h, body: b ? JSON.stringify(b) : undefined }); const sc = res.headers.get('set-cookie'); if (sc) this.cookie = sc.split(';')[0]; let d = null; try { d = await res.json(); } catch (x) { /* */ } return { status: res.status, data: d && d.data, err: d && d.error }; } }
 const o = new C(); await o.call('POST', '/api/auth/login', { email: process.env.OWNER_EMAIL, password: process.env.OWNER_PASSWORD });
+
+// If a check throws, put the shared switches back so the suites that follow are not affected.
+const putBack = async () => { try { await o.call('POST', '/api/settings/site.dual_signoff', { value: 'on' }); await o.call('POST', '/api/settings/sales.afs_gate', { value: 'on' }); } catch (e) { /* ignore */ } };
+process.on('uncaughtException', async (e) => { console.error(e); await putBack(); process.exit(1); });
 const run = Date.now().toString(36); let seq = 0;
 await o.call('POST', '/api/settings/sales.afs_gate', { value: 'off' });   // the 10% before-registration rule is tested in m4_step1
 await o.call('POST', '/api/settings/site.dual_signoff', { value: 'off' });   // this suite certifies a payment-linked stage without sign-offs (that rule is tested in m3_step2)
