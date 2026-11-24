@@ -7,6 +7,7 @@ class C { constructor() { this.cookie = ''; }
     const r = await fetch(BASE + p, { method: m, headers: h, body, redirect: 'manual' }); const sc = r.headers.get('set-cookie'); if (sc) this.cookie = sc.split(';')[0]; let d = null; try { d = await r.json(); } catch (e) { /* */ } return { status: r.status, data: d && d.data, err: d && d.error, code: d && d.code }; } }
 const run = Date.now().toString(36);
 const o = new C(); await o.call('POST', '/api/auth/login', { email: process.env.OWNER_EMAIL, password: process.env.OWNER_PASSWORD });
+await o.call('POST', '/api/settings/sales.afs_gate', { value: 'on' });   // this suite tests the 10% rule: start with it on, whatever an earlier suite left
 let seq = 0;
 const mkUser = async (role) => { const email = `m4a-${role}-${++seq}-${run}@test.local`; const r = await o.call('POST', '/api/users', { name: 'm4a ' + role, email, role, projects: [] }); const pw = 'M4StrongPass-' + run; const c = new C(); await c.call('POST', '/api/auth/login', { email, password: r.data.temporaryPassword }); await c.call('POST', '/api/auth/change-password', { currentPassword: r.data.temporaryPassword, newPassword: pw }); c.id = r.data.id; return c; };
 import { execSync } from 'node:child_process';
