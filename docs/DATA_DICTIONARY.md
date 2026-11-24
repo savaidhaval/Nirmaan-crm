@@ -511,3 +511,13 @@ id TEXT PK, source TEXT, seen_at TEXT
 - Settings: sales.afs_gate (on unless Off), tax.tds_194ia_on (on unless Off), tax.tds_194ia_threshold_paise (default 500000000 = Rs 50 lakh, confirm with your CA), tax.tds_194ia_bp (default 100, shown for reference; the amount held is what is typed on the receipt), sales.receipt_backdate_days (7), sales.remind_before_days (3), sales.remind_interest_days (15), sales.bank_followup_days (10).
 - Read-only routes: GET /api/sales/collections-ladder, GET /api/reports/collections-forecast, GET /api/sales/bank-followups, GET /api/sales/tds-credits. Nothing about them is stored.
 
+## Module 4, step 2 (migration 0051)
+- sal_letter_templates (project_id, kind demand|allotment, stage_id NULL = the project's general demand letter, title, body = letter text with {{placeholders}}, doc_id = an uploaded Word template (documents.id, category agreement), updated_by, updated_at). One row per project, kind and stage (unique index). If doc_id is set the Word file is used and body is ignored. In the backup list. Removing a row brings back the next level: stage -> general -> built-in text.
+- sal_demands.sent_at (existing), sent_via (email|whatsapp|hand|courier|other), sent_by: set by the email sender or by hand; a hand mark can be removed.
+- sal_bookings.allotment_sent_at, allotment_sent_by, allotment_sent_via: the same for the allotment letter.
+- sal_refunds.refund_due_on: cancellation date (or today) plus sales.refund_days.
+- Letters are made in the browser (public/docx.js): the server only returns the field values (GET /api/sales/demands/:id/letter, GET /api/sales/bookings/:id/allotment-letter) and the template. Placeholders: date, customer_name, address, phone, email, project, rera_no, flat_no, wing, floor, carpet_area, agreement_value, agreement_value_words, token_amount, booking_date, payment_schedule, company, signatory, other_details, demand_no, stage_name, demand_amount, gst_amount, total_due, total_due_words, due_date, arrears_line, interest_line, bank_details. An unknown placeholder prints as nothing.
+- GET /api/sales/bookings/:id/cancel-waterfall (Owner, PM, Accounts): paid (principal receipts plus verified buyer TDS), the cap (sales.cancel_cap_bp of the agreed price), brokerage deducted (paid brokerage, inside the cap; ?brokerage=0 leaves it out), admin charge (?admin_paise=), booking amount kept, balance, due date, GST in what was paid, unverified buyer TDS.
+- Settings: sales.letter_signatory, sales.collection_account_text, sales.cancel_cap_bp (1000), sales.refund_days (45), sales.cancel_admin_paise (0).
+- Interest waivers: POST /api/sales/demands/:id/interest-waiver by the Owner, and POST /api/sales/waivers/:id/approve, need a valid approval PIN in the body (pin).
+

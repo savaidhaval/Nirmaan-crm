@@ -519,7 +519,9 @@ export function registerSalesOps(router, h) {
       const used = await env.DB.prepare("SELECT COALESCE(SUM(amount_paise + forfeited_paise), 0) AS t FROM sal_refunds WHERE booking_id = ? AND status != 'rejected'").bind(booking.id).first();
       if (amount + forfeit + Number(used.t) > Number(col.t)) return json({ ok: false, error: 'Refund plus forfeiture is more than the customer paid.' }, 400);
       if (String(b.reason || '').trim().length < 5) return json({ ok: false, error: 'Give a reason.' }, 400);
-      const r = await env.DB.prepare('INSERT INTO sal_refunds (booking_id, amount_paise, forfeited_paise, reason, status, requested_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)').bind(booking.id, amount, forfeit, String(b.reason).slice(0, 300), 'requested', req.user.user_id, nowStr()).run();
+      const refundDays = Math.max(0, Math.round(Number(await getSetting(env, 'sales.refund_days')) || 45));
+      const dueOn = new Date(Date.parse((booking.cancelled_on || todayIST()) + 'T00:00:00Z') + refundDays * 86400000).toISOString().slice(0, 10);
+      const r = await env.DB.prepare('INSERT INTO sal_refunds (booking_id, amount_paise, forfeited_paise, reason, status, requested_by, created_at, refund_due_on) VALUES (?, ?, ?, ?, ?, ?, ?, ?)').bind(booking.id, amount, forfeit, String(b.reason).slice(0, 300), 'requested', req.user.user_id, nowStr(), dueOn).run();
       await audit(env, req.user, 'refund_request', 'sal_refunds', r.meta.last_row_id, `Refund ${rupees(amount)} (forfeit ${rupees(forfeit)}) requested for ${booking.customer_name}. ${b.reason}`);
       return json({ ok: true, data: { id: r.meta.last_row_id } });
     } catch (e) { return serverError(e, 'refund'); }

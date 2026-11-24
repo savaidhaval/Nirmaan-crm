@@ -1,7 +1,7 @@
 # Module 4 (Post-Sales Collections, Home Loans and RERA 70/30 Escrow): gap review
 
 Source: `Module_4.docx` (Dhaval, 2026-11-24). Compared with the code at migration 0049 (Module 3 live).
-Status: **step 1 built (migration 0050)**. The rest waits for the decisions at the bottom.
+Status: **steps 1 and 2 built (migrations 0050, 0051)**. Dhaval's answers to the decisions are at the bottom.
 
 | # | In the document | State before | Step 1 (now) | Still missing |
 |---|---|---|---|---|
@@ -34,3 +34,11 @@ Status: **step 1 built (migration 0050)**. The rest waits for the decisions at t
 5. **Bank NOC and the loan pack.** Same: send the NOC wording your bank accepts, and say whether the progress photos should be attached to the email by hand (one-tap email opens ready) or stored with each slab.
 6. **Two-way Tally.** Today the CRM exports vouchers and keeps a log. True two-way sync needs a small program on the computer that runs Tally. Do you want that, and which Tally (Prime or ERP 9)?
 7. **Owner approval PIN on interest waivers.** The document asks for an OTP; your Owner already has an approval PIN used elsewhere. Use the PIN for every waiver, including the Owner's own? (Recommended.)
+
+## Answers received (2026-11-24) and what was built in step 2
+1. Demand letters: a custom letter for each milestone, in Word, downloadable, with a box to mark it sent by hand. Built (templates per stage or general; Word download; "Sent by hand" box). Payment links and a WhatsApp bot were not asked for and are not built.
+2. Cancellation: broker commission may be deducted; follow the RERA refund rules. Built as a calculator that keeps everything kept (booking amount, brokerage, admin charge) inside the 10% limit and the balance due in 45 days, as the MahaRERA model agreement describes. Both numbers are Settings: confirm them with your advocate. GST on instalments is adjusted by credit note, not deducted. If your agreement lets you keep brokerage in addition to the 10%, change sales.cancel_cap_bp.
+3. KYC: staff enter it, as today. No buyer upload page.
+4. Allotment letter: upload a general letter (Word with {{placeholders}}) or type one; each customer's copy is editable and downloads as Word; "Sent by hand" box. Built.
+5. Tally Prime two-way: not yet built. Plan: a small program (one file, no installation beyond Node.js) runs on the computer that has Tally Prime open, with Tally's XML port switched on. Every few minutes it asks the CRM for vouchers not yet in Tally, posts them to Tally on localhost, and reports back success or the error. It uses a token you create in Settings, and it can be switched off. Needs: Node.js on that computer, Tally's port enabled, and the ledger names in Tally matching the CRM's map (already in Tally settings). Say go and I will build it as step 3.
+6. Interest waivers: Owner approval PIN on every waiver. Built.

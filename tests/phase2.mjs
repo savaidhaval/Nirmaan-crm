@@ -8,6 +8,7 @@ class C { constructor() { this.cookie = ''; }
     const r = await fetch(BASE + p, { method: m, headers: h, body, redirect: 'manual' }); const sc = r.headers.get('set-cookie'); if (sc) this.cookie = sc.split(';')[0]; if (raw) return r; let d = null; try { d = await r.json(); } catch (e) { /* */ } return { status: r.status, data: d && d.data, err: d && d.error }; } }
 const run = Date.now().toString(36); const digits = String(Date.now()).slice(-8);
 const o = new C(); await o.call('POST', '/api/auth/login', { email: process.env.OWNER_EMAIL, password: process.env.OWNER_PASSWORD });
+await o.call('POST', '/api/redev/approval-pin', { pin: '482913', password: process.env.OWNER_PASSWORD });   // every interest waiver is signed with the Owner's approval PIN
 await o.call('POST', '/api/settings/sales.afs_gate', { value: 'off' });   // these suites bill stages without registering the Agreement for Sale; the 10% rule is tested in m4_step1
 await o.call('POST', '/api/settings/site.dual_signoff', { value: 'off' });   // these suites certify payment-linked stages without sign-offs; the sign-off rule is tested in m3_step2
 let seq = 0;
@@ -45,8 +46,9 @@ ok('cannot waive more than accrued', (await pm.call('POST', `/api/sales/demands/
 const wv = (await pm.call('POST', `/api/sales/demands/${demId}/interest-waiver`, { reason: 'goodwill gesture', amount_paise: 100000 })).data;
 ok('PM can only request a waiver', wv.status === 'requested' && (await o.call('GET', `/api/sales/bookings/${bk}/interest`)).data.waived === 0);
 ok('PM cannot approve', (await pm.call('POST', `/api/sales/waivers/${wv.id}/approve`)).status === 403);
-ok('Owner approves the request', (await o.call('POST', `/api/sales/waivers/${wv.id}/approve`)).status === 200 && (await o.call('GET', `/api/sales/bookings/${bk}/interest`)).data.waived === 100000);
-const ow = (await o.call('POST', `/api/sales/demands/${demId}/interest-waiver`, { reason: 'owner decision', amount_paise: 50000 })).data;
+const apr0 = await o.call('POST', `/api/sales/waivers/${wv.id}/approve`); const apr1 = await o.call('POST', `/api/sales/waivers/${wv.id}/approve`, { pin: '482913' });
+ok('Owner approves the request, but only with the PIN', apr0.code === 'pin_required' && apr1.status === 200 && (await o.call('GET', `/api/sales/bookings/${bk}/interest`)).data.waived === 100000);
+const ow = (await o.call('POST', `/api/sales/demands/${demId}/interest-waiver`, { reason: 'owner decision', amount_paise: 50000, pin: '482913' })).data;
 ok('Owner can waive directly (audited)', ow.status === 'approved' && (await o.call('GET', '/api/audit?action=interest_waived')).data.audit.length >= 1);
 const before = (await o.call('GET', `/api/sales/bookings/${bk}/interest`)).data;
 await acc.call('POST', `/api/sales/bookings/${bk}/receipts`, { amount_paise: 100000, kind: 'interest', ref_no: 'INT' + run });
