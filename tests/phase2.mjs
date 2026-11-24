@@ -47,7 +47,7 @@ const wv = (await pm.call('POST', `/api/sales/demands/${demId}/interest-waiver`,
 ok('PM can only request a waiver', wv.status === 'requested' && (await o.call('GET', `/api/sales/bookings/${bk}/interest`)).data.waived === 0);
 ok('PM cannot approve', (await pm.call('POST', `/api/sales/waivers/${wv.id}/approve`)).status === 403);
 const apr0 = await o.call('POST', `/api/sales/waivers/${wv.id}/approve`); const apr1 = await o.call('POST', `/api/sales/waivers/${wv.id}/approve`, { pin: '482913' });
-ok('Owner approves the request, but only with the PIN', apr0.code === 'pin_required' && apr1.status === 200 && (await o.call('GET', `/api/sales/bookings/${bk}/interest`)).data.waived === 100000);
+ok('Owner approves the request, but only with the PIN', apr0.code === 'pin_required' && apr1.status === 200 && (await o.call('GET', `/api/sales/bookings/${bk}/interest`)).data.waived === 100000, JSON.stringify([apr0, apr1]));
 const ow = (await o.call('POST', `/api/sales/demands/${demId}/interest-waiver`, { reason: 'owner decision', amount_paise: 50000, pin: '482913' })).data;
 ok('Owner can waive directly (audited)', ow.status === 'approved' && (await o.call('GET', '/api/audit?action=interest_waived')).data.audit.length >= 1);
 const before = (await o.call('GET', `/api/sales/bookings/${bk}/interest`)).data;
