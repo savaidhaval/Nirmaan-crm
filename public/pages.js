@@ -512,7 +512,7 @@ async function loadUsers() {
           <button class="btn small" data-act="edit" data-id="${u.id}">Edit</button>
           <button class="btn small" data-act="reset" data-id="${u.id}" data-name="${esc(u.name)}">Reset password</button>
           <button class="btn small" data-act="logout" data-id="${u.id}">Log out</button>
-          ${u.active ? `<button class="btn small" data-act="deactivate" data-id="${u.id}" data-name="${esc(u.name)}" style="color:#dc2626">Deactivate</button>` : `<button class="btn small" data-act="reactivate" data-id="${u.id}">Reactivate</button>`}</div>`}</div>`;
+          ${u.active ? `<button class="btn small" data-act="deactivate" data-id="${u.id}" data-name="${esc(u.name)}" style="color:#dc2626">Deactivate</button>` : `<button class="btn small" data-act="reactivate" data-id="${u.id}">Reactivate</button>`}${currentUser.role === 'owner' ? `<button class="btn small" data-act="remove" data-id="${u.id}" data-name="${esc(u.name)}" style="color:#dc2626">Delete</button>` : ''}</div>`}</div>`;
     }).join('');
     const users = d.data.users;
     $('users-list').querySelectorAll('[data-act]').forEach((b) => {
@@ -521,6 +521,7 @@ async function loadUsers() {
         if (b.dataset.act === 'reset') { if (!confirm(`Reset password for ${b.dataset.name}?`)) return; const r = await act(api(`/api/users/${id}/reset-password`, { method: 'POST' })); if (r) showTempPassword(b.dataset.name, r.data.temporaryPassword); }
         else if (b.dataset.act === 'logout') await act(api(`/api/users/${id}/logout`, { method: 'POST' }), 'Logged out');
         else if (b.dataset.act === 'deactivate') { if (confirm(`Deactivate ${b.dataset.name}? They will be logged out.`)) { await act(api(`/api/users/${id}/deactivate`, { method: 'POST' }), 'Deactivated'); loadUsers(); } }
+        else if (b.dataset.act === 'remove') { if (confirm(`Delete ${b.dataset.name} from Users & access? They are logged out and cannot sign in again. Their past entries stay in the history. (To pause someone for a while, use Deactivate.)`)) { await act(api(`/api/users/${id}/remove`, { method: 'POST' }), 'Deleted'); loadUsers(); } }
         else if (b.dataset.act === 'reactivate') { await act(api(`/api/users/${id}/reactivate`, { method: 'POST' }), 'Reactivated'); loadUsers(); }
         else if (b.dataset.act === 'edit') editUser(users.find((x) => String(x.id) === id));
       };
