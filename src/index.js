@@ -1477,10 +1477,9 @@ router.post('/api/procurement/pos/:id/submit', async (req, env) => {
     await env.DB.prepare("UPDATE pro_pos SET status = 'pending_approval' WHERE id = ?").bind(po.id).run();
     const limit = Number(await getSetting(env, 'po.pm_approval_limit_paise')) || 500000;
     const roles = po.total_paise > limit ? "('owner')" : "('owner', 'pm')";
-    const approvers = await env.DB.prepare(`SELECT id FROM users WHERE active = 1 AND deleted_at IS NULL AND role IN ${roles} AND id != ?`).bind(req.user.user_id).all();
-    for (const u of approvers.results) {
-      await env.DB.prepare('INSERT INTO notifications (user_id, title, body, link, created_at) VALUES (?, ?, ?, ?, ?)').bind(u.id, `PO ${po.po_no} needs approval`, `Total ₹${(po.total_paise / 100).toLocaleString('en-IN')}`, 'procurement', nowStr()).run();
-    }
+    // One statement however many approvers there are (the free plan allows about 50 statements per request).
+    await env.DB.prepare(`INSERT INTO notifications (user_id, title, body, link, created_at) SELECT id, ?, ?, 'procurement', ? FROM users WHERE active = 1 AND deleted_at IS NULL AND role IN ${roles} AND id != ? LIMIT 50`)
+      .bind(`PO ${po.po_no} needs approval`, `Total ₹${(po.total_paise / 100).toLocaleString('en-IN')}`, nowStr(), req.user.user_id).run();
     return json({ ok: true });
   });
 });
