@@ -18,6 +18,7 @@ const iso = (d) => new Date(Date.now() + 19800000 + d * 86400000).toISOString().
 const pid = (await o.call('POST', '/api/projects', { rera_no: 'P518000TEST', name: 'zz-m4a ' + run, code: 'M4' + run.toUpperCase().slice(-6), budget_paise: 50000000 })).data.id;
 const pm = await mkUser('pm'); const acc = await mkUser('accounts'); const sales = await mkUser('sales');
 await o.call('POST', '/api/settings/site.dual_signoff', { value: 'off' });
+await o.call('POST', '/api/settings/sales.receipt_approval_limit_paise', { value: 0 });   // other suites may leave a second-person limit behind
 sql(`INSERT INTO apr_items (project_id, name, gate_key, status, cc_upto_floor) VALUES (${pid}, 'Commencement Certificate', 'cc', 'approved', 30)`);
 await o.call('POST', '/api/sales/plan-stages', { project_id: pid, stages: [{ stage_name: 'On booking', pct_bp: 1000 }, { stage_name: 'On agreement', pct_bp: 2000 }, { stage_name: 'Slab 5', pct_bp: 5000, milestone_key: 'k' + run }, { stage_name: 'Possession', pct_bp: 2000, milestone_key: 'p' + run }] });
 let n = 0;

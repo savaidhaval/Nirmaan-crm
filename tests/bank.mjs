@@ -7,6 +7,7 @@ class C { constructor() { this.cookie = ''; }
     const r = await fetch(BASE + p, { method: m, headers: h, body, redirect: 'manual' }); const sc = r.headers.get('set-cookie'); if (sc) this.cookie = sc.split(';')[0]; if (raw) return r; let d = null; try { d = await r.json(); } catch (e) { /* */ } return { status: r.status, data: d && d.data, err: d && d.error }; } }
 const run = Date.now().toString(36); const digits = String(Date.now()).slice(-8);
 const o = new C(); await o.call('POST', '/api/auth/login', { email: process.env.OWNER_EMAIL, password: process.env.OWNER_PASSWORD });
+await o.call('POST', '/api/settings/sales.receipt_backdate_days', { value: 3650 });   // this suite records receipts dated to match fixed bank-statement lines
 await o.call('POST', '/api/settings/sales.afs_gate', { value: 'off' });   // these suites bill stages without registering the Agreement for Sale; the 10% rule is tested in m4_step1
 let seq = 0;
 const mkUser = async (role, projects) => { const email = `zp-${role}-${++seq}-${run}@test.local`; const r = await o.call('POST', '/api/users', { name: 'zp ' + role, email, role, projects }); const pw = 'ZpStrongPass-' + run; const c = new C(); await c.call('POST', '/api/auth/login', { email, password: r.data.temporaryPassword }); await c.call('POST', '/api/auth/change-password', { currentPassword: r.data.temporaryPassword, newPassword: pw }); c.id = r.data.id; c.email = email; c.pw = pw; return c; };
@@ -66,7 +67,7 @@ ok('someone else cannot add to my import', (await o.call('POST', '/api/bank/impo
 // ============ confirm: the receipt comes from the normal receipt route ============
 const rcpt = (b, amount, ref) => acc.call('POST', `/api/sales/bookings/${b.id}/receipts`, { amount_paise: amount, mode: 'bank', ref_no: ref, demand_id: b.demand, received_on: '2026-11-02' });
 ok('confirming without a receipt is refused', (await acc.call('POST', `/api/bank/rows/${byRef('N100').id}/confirm`, { booking_id: bks[0].id, ref_no: 'N100' + run })).status === 409);
-const r1 = await rcpt(bks[0], bks[0].due, 'N100' + run); ok('Accounts records the normal receipt', r1.status === 200 && r1.data.receipt_no);
+const r1 = await rcpt(bks[0], bks[0].due, 'N100' + run); ok('Accounts records the normal receipt', r1.status === 200 && r1.data.receipt_no, JSON.stringify(r1));
 const c1 = await acc.call('POST', `/api/bank/rows/${byRef('N100').id}/confirm`, { booking_id: bks[0].id, ref_no: 'N100' + run });
 ok('the line is linked to the receipt', c1.status === 200 && c1.data.receipt_id > 0);
 ok('confirming again is refused', (await acc.call('POST', `/api/bank/rows/${byRef('N100').id}/confirm`, { booking_id: bks[0].id, ref_no: 'N100' + run })).status === 409);
@@ -100,4 +101,5 @@ if (process.env.D1_PERSIST_TO) {
   } catch (e) { console.log('SKIP  retention test:', String(e.message).slice(0, 80)); }
 } else console.log('SKIP  retention test (D1_PERSIST_TO not set)');
 await o.call('POST', '/api/settings/sales.afs_gate', { value: 'on' });
+await o.call('POST', '/api/settings/sales.receipt_backdate_days', { value: 7 });
 console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);
