@@ -1,7 +1,7 @@
 # Module 5 (Possession Handover, Snagging and Society Transition): gap review
 
 Source: `Module_5.docx` (Dhaval, 2026-11-24). Compared with the code at migration 0053.
-Status: **step 1 built (migration 0054)**. Decisions needed from Dhaval are at the bottom. Nothing under "Decisions" was built.
+Status: **steps 1 and 2 built (migrations 0054, 0055)**. Dhaval's answers to the decisions are at the bottom.
 
 | # | In the document | State before | Step 1 (now) | Still missing |
 |---|---|---|---|---|
@@ -40,3 +40,19 @@ New and changed routes read at most 6 statements (no-dues check: 6; project clos
 
 ## Settings added (confirm with your CA / advocate)
 `sales.nodues_strict` (on / off, default off), `sales.nodues_funds_required` (on unless set off), `dlp.sla_days` (default 7), plus existing `con.dlp_months` (60) for the defect liability period.
+
+
+## Dhaval's answers (2026-11-24) and what step 2 (0055) built
+1. Amounts are typed by a team member (no per-sq-ft calculation). **Built**: a possession notice with a pay-by date (default 30 days, setting `sales.possession_notice_days`) listing the final instalment and the corpus / maintenance / share money set for the flat; prints and goes by WhatsApp or email like any letter.
+2. Rent freeze stays at 30 days after the OC (`red.oc_grace_days`). **No change.**
+3. Floor-plan library, as recommended. **Built**: one plan per flat type per project; a snag raised inside a flat takes the plan by itself.
+4. Buyer steps by WhatsApp link and email. **Built**: one-time links (only a hash is kept, 14 days, setting `hv.link_days`) for (a) joint inspection (made only when internal snags are zero; the buyer types touch-ups, which become low snags due in 7 days, `hv.touchup_days`), (b) choosing a handover time from slots the team publishes (made only when all six no-dues points are green), (c) signing the baseline of the flat. The buyer sees only first name, flat and project.
+5. Strict no-dues lock **on by default**. Done: keys cannot be released with any of the six points red, no override. The Owner can set `sales.nodues_strict` to off.
+6. Fit-out. **Built**: baseline photographs, buyer's signed baseline, and a Fit-out NOC the PM/Owner issues only after possession, with the fit-out deposit received and the baseline signed; the Owner can revoke it with a reason; prints.
+7. Complaints by a free QR form or by email. **Built**: a public form (same Turnstile protection as the enquiry form, rate-limited, hidden trap field) that files a ticket with the 7-day limit and tells the PM, Owner and site team; the QR poster shows the company email for photos. Photos by the public are not uploaded through the form: residents email them.
+8. Debit note. **Built**: confirming a back-charge numbers a debit note (DN-<project code>-0001) and prints it for the contractor.
+9. Society statement: costs are typed into the CRM. **Built**: common-area costs (head, amount, bill number, paid to), certified by the CA (Owner or Accounts records the name); statement = advance maintenance collected minus certified costs, with corpus and share money shown as held for the society; costs not yet certified are listed but not deducted; prints and downloads as CSV.
+10. Handover binder. **Built** in the browser (no server load): every vault file, an index page with links, the ledger and the statement as one ZIP.
+11. Society formation tracker. **Built**: stage (proposed, provisional, registered), registration number and date, share certificates, conveyance deed date and reference, committee (one chairman, secretary, treasurer each).
+
+Settings added: `sales.possession_notice_days` (30), `hv.link_days` (14), `hv.touchup_days` (7).
