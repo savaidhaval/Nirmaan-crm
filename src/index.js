@@ -432,6 +432,26 @@ router.post('/api/users/:id/deactivate', async (req, env) => {
   });
 });
 
+// Remove a person from Users & access (Owner only). The row is kept for the history (audit log, who-did-what) but hidden; the login stops at once
+// and the email address is freed so the same address can be added again later.
+router.post('/api/users/:id/remove', async (req, env) => {
+  return withAuth(req, env, 'users_settings', 'E', async (req, env) => {
+    try {
+      if (req.user.role !== 'owner') return json({ ok: false, error: 'Only the Owner can delete a person.' }, 403);
+      const { target, err } = await loadTarget(env, req);
+      if (err) return err;
+      if (target.role === 'owner' && (await activeOwnerCount(env, target.id)) < 1) return json({ ok: false, error: 'There must always be one active Owner.' }, 400);
+      const now = nowStr();
+      await env.DB.batch([
+        env.DB.prepare("UPDATE users SET deleted_at = ?, active = 0, deactivated_at = COALESCE(deactivated_at, ?), email = 'removed-' || id || '-' || email WHERE id = ? AND deleted_at IS NULL").bind(now, now, target.id),
+        env.DB.prepare('DELETE FROM sessions WHERE user_id = ?').bind(target.id),
+        env.DB.prepare("INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, 'delete', 'users', ?, ?, ?)").bind(req.user.user_id, target.id, `Deleted ${String(target.name).slice(0, 80)} (${String(target.role)}, ${String(target.email).slice(0, 80)}) from Users & access`, now),
+      ]);
+      return json({ ok: true });
+    } catch (e) { return serverError(e, 'user-remove'); }
+  });
+});
+
 router.post('/api/users/:id/reactivate', async (req, env) => {
   return withAuth(req, env, 'users_settings', 'E', async (req, env) => {
     const { target, err } = await loadTarget(env, req);

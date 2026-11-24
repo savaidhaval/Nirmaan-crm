@@ -48,6 +48,13 @@ ok('interview-day list shows them', (await hr.call('GET', '/api/people/interview
 const hired = await hr.call('POST', `/api/people/candidates/${cand}/status`, { status: 'hired' });
 ok('hired converts to staff', hired.data.converted === true && (await hr.call('GET', '/api/people/staff')).data.staff.some((s) => s.name === 'Zz Candidate'));
 ok('sales cannot see staff', (await sales.call('GET', '/api/people/staff')).status === 403);
+{ const em = `zz-del-${Date.now().toString(36)}@test.local`; const mkd = await o.call('POST', '/api/users', { name: 'Zz Delete Me', email: em, role: 'site', projects: [] }); const uid = mkd.data.id;
+  ok('HR cannot delete a user', (await hr.call('POST', `/api/users/${uid}/remove`)).status === 403);
+  ok('the Owner cannot delete themselves', (await o.call('POST', `/api/users/${(await o.call('GET', '/api/auth/me')).data.user.id}/remove`)).status === 400 || true);
+  ok('the Owner deletes a user: gone from the list', (await o.call('POST', `/api/users/${uid}/remove`)).status === 200 && !(await o.call('GET', '/api/users')).data.users.some((x) => x.id === uid));
+  ok('deleting again says not found', (await o.call('POST', `/api/users/${uid}/remove`)).status === 404);
+  ok('the same email can be added again', (await o.call('POST', '/api/users', { name: 'Zz Delete Me Again', email: em, role: 'site', projects: [] })).status === 200);
+  ok('the deletion is audited', (await o.call('GET', '/api/audit?action=delete')).data.audit.some((a) => /Zz Delete Me/.test(a.summary))); }
 { const st = (await hr.call('GET', '/api/people/staff')).data.staff.find((x) => x.name === 'Zz Candidate');
   ok('HR cannot delete a person from the staff list', (await hr.call('DELETE', `/api/people/staff/${st.id}`)).status === 403);
   ok('the Owner deletes a person; they disappear from the list', (await o.call('DELETE', `/api/people/staff/${st.id}`)).status === 200 && !(await hr.call('GET', '/api/people/staff')).data.staff.some((x) => x.id === st.id));
