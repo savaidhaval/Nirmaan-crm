@@ -1,7 +1,7 @@
 # Module 3 (Site Engineering, BOQ and Contractor Billing): gap review
 
 Source: `Module_3.docx` (Dhaval, 2026-11-24). Compared with the code at migration 0046 (Module 2 live).
-Status: **steps 1 and 2 built (migrations 0047, 0048)**. Dhaval's answers to the four decisions are at the bottom.
+Status: **steps 1 to 3 built (migrations 0047 to 0049)**. Dhaval's answers to the four decisions are at the bottom.
 
 Module 3 is the most complete module already: the app has a BOQ per cost head, contractor work orders with variations, joint measurements, RA bills with retention, advance recovery, debit notes, TDS and GST, a Store with stock, material requests (indents), POs and receipts, concrete pours with cube tests, offline mode and a DPR with labour.
 
@@ -37,7 +37,9 @@ Module 3 is the most complete module already: the app has a BOQ per cost head, c
 3. Cost to complete: both sources (certified stages and the PM's figure). Built: the lower one is used; a wing is complete only when both say 100%.
 4. BOQ wing and floor: agreed, with an alternative for a standalone building. Built: wing is optional and can be left blank, or named (Basement, Podium, Terrace); floor is optional.
 
-## Still to do
-- One-tap "repeat last request" for indents; location stamp on daily-report photos.
-- Owner override on the daily report screen (works through the server only today).
-- Adding a missing gate photo later has no button yet (the server route exists).
+## Closed in step 3 (migration 0049)
+- One-tap "Ask again" for material requests; the daily report is stamped with where it was filed from (compared with the project location, warning only); the Owner can override the CC-floor refusal on the daily report from the screen; receipts without a gate photo have their own screen with an Add photo button; the wastage alert uses the usual allowance for each material instead of one figure.
+- The starter wastage figures follow common Mumbai site practice (ready-mix 1%, steel 2.5%, cement 3%, bricks and blocks 5%, aggregate 5%, sand and tiles 6%, paint, waterproofing and putty 5%). They are starting points for your QS to confirm, not rules from a code.
+
+## Still open
+Nothing from the original Module 3 list.

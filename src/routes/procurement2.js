@@ -124,9 +124,8 @@ export function registerProcurement2(router, h) {
   const csvResponse = (name, rows) => new Response(csvBom(rows), { headers: { 'Content-Type': 'text/csv; charset=utf-8', 'Content-Disposition': `attachment; filename="${name}"`, 'Cache-Control': 'no-store' } });
 
   // ---------- Indents ----------
-  router.post('/api/procurement/indents', async (req, env) => withAuth(req, env, 'procurement', 'C', async (req, env) => {
+  const createIndent = async (req, env, b) => {
     try {
-      const b = await req.json();
       const items = (Array.isArray(b.items) ? b.items : []).filter((i) => i && String(i.description || '').trim() && num(i.qty) > 0).slice(0, 40);
       const rawBoq = (Array.isArray(b.items) ? b.items : []).filter((i) => i && String(i.description || '').trim() && num(i.qty) > 0).slice(0, 40).map((i) => Number(i.boq_item_id) || null);
       const pid = Number(b.project_id);
@@ -164,7 +163,21 @@ export function registerProcurement2(router, h) {
       await notifyRoles(env, ['pm'], `Indent to approve: ${no}`, `${req.user.name} needs ${items.length} item(s).${flags.size ? ' OVER BOQ: ' + Object.values(names).slice(0, 3).join('; ') : ''}`, 'procurement');
       return json({ ok: true, data: { id, indent_no: no, over_boq: flags.size } });
     } catch (e) { return serverError(e, 'indent-create'); }
+  };
+  router.post('/api/procurement/indents', async (req, env) => withAuth(req, env, 'procurement', 'C', async (req, env) => createIndent(req, env, await req.json())));
+
+  // 1-tap repeat: the same items again as a new request (new number, goes to the PM like any other). Floor checks and BOQ flags run again.
+  router.post('/api/procurement/indents/:id/repeat', async (req, env) => withAuth(req, env, 'procurement', 'C', async (req, env) => {
+    try {
+      const src = await env.DB.prepare('SELECT * FROM pro_indents WHERE id = ? AND deleted_at IS NULL').bind(Number(req.params.id)).first();
+      if (!src || !(await visibleProjectIds(env, req.user)).includes(src.project_id)) return json({ ok: false, error: 'Request not found.' }, 404);
+      const items = (await env.DB.prepare('SELECT description, qty, unit, boq_item_id FROM pro_indent_items WHERE indent_id = ? ORDER BY id').bind(src.id).all()).results;
+      if (!items.length) return json({ ok: false, error: 'That request has no items.' }, 400);
+      const b = await req.json().catch(() => ({}));
+      return createIndent(req, env, { project_id: src.project_id, wing: src.wing, floor: src.floor, items, note: `Same as ${src.indent_no}`, needed_by: b.needed_by || null, override_note: b.override_note, client_uuid: b.client_uuid });
+    } catch (e) { return serverError(e, 'indent-repeat'); }
   }));
+
 
   router.get('/api/procurement/indents', async (req, env) => viewOrCreate(req, env, async (req, env) => {
     try {
