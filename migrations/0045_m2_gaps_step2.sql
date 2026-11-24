@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS sal_checkins (
   phone_norm TEXT NOT NULL,
   name TEXT NOT NULL,
   partner_id INTEGER REFERENCES sal_partners(id),   -- the broker the buyer is asked about (NULL = walked in alone)
-  token_hash TEXT NOT NULL,                         -- SHA-256 of the one-time link token; the token itself is never stored
+  token_hash TEXT,                                  -- SHA-256 of the one-time link token; the token itself is never stored
   status TEXT NOT NULL DEFAULT 'pending',           -- pending | confirmed | declined
   answer TEXT,                                      -- yes | no
   lead_id INTEGER,
