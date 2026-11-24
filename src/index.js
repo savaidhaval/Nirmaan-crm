@@ -564,7 +564,7 @@ router.get('/api/settings', async (req, env) => {
   });
 });
 
-const EDITABLE_SETTINGS = ['po.pm_approval_limit_paise', 'access.allow_second_owner', 'access.limit_roles_to_assigned_projects', 'sales.share_all_leads',
+const EDITABLE_SETTINGS = ['partners.rera_check_days', 'sales.agreement_defect_years', 'po.pm_approval_limit_paise', 'access.allow_second_owner', 'access.limit_roles_to_assigned_projects', 'sales.share_all_leads',
   'demand.due_days_after_milestone', 'share.default_expiry_days', 'share.default_max_views', 'files.brochure_max_mb', 'branding.apply_colours_to_app',
   'brochure.price_list_default_audience', 'storage.warn_percent', 'sales.max_holds_per_user', 'sales.max_discount_bp', 'sales.pm_max_discount_bp',
   'interest.rate_bp', 'interest.grace_days', 'interest.enabled', 'security.require_mfa_roles', 'tax.stamp_duty_bp', 'tax.metro_cess_bp', 'tax.women_concession_bp', 'tax.registration_bp', 'tax.registration_cap_paise', 'tax.gst_bp',
@@ -2209,7 +2209,7 @@ router.post('/api/sales/partners/:id/payments', async (req, env) => {
     const pid = Number(req.params.id);
     const bk = b.booking_id ? await env.DB.prepare('SELECT id FROM sal_bookings WHERE id = ? AND channel_partner_id = ?').bind(Number(b.booking_id), pid).first() : await env.DB.prepare('SELECT id FROM sal_bookings WHERE channel_partner_id = ? ORDER BY id DESC LIMIT 1').bind(pid).first();
     if (!bk) return json({ ok: false, error: 'This partner has no bookings yet.' }, 400);
-    { const blk = await partnerPayBlock(env, pid); if (blk) return json({ ok: false, error: blk, code: 'partner_kyc' }, 409); }
+    { const blk = await partnerPayBlock(env, pid, getSetting); if (blk) return json({ ok: false, error: blk, code: 'partner_kyc' }, 409); }
     await env.DB.prepare('INSERT INTO sal_brokerage_payments (booking_id, partner_id, amount_paise, tds_paise, paid_on, mode, ref_no, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
       .bind(bk.id, pid, amount, Math.round(Number(b.tds_paise) || 0), b.paid_on || nowStr().substring(0, 10), b.mode || 'bank', b.ref_no || '', nowStr()).run();
     return json({ ok: true });

@@ -60,7 +60,14 @@ const clean = (s) => String(s == null ? '' : s).replace(/[\r\n]+/g, ' ').trim();
 const b64 = (str) => { const bytes = ENC.encode(str); let bin = ''; for (const b of bytes) bin += String.fromCharCode(b); return btoa(bin); };
 const b64Bytes = (bytes) => { let bin = ''; for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000)); return btoa(bin); };
 const wrap76 = (s) => s.replace(/(.{76})/g, '$1\r\n').replace(/\r\n$/, '');
-const mimeWord = (s) => (/^[\x20-\x7e]*$/.test(s) ? s : `=?UTF-8?B?${b64(s)}?=`);
+// RFC 2047: one encoded word may be at most 75 characters, so a long non-ASCII subject (a rupee sign in a long project name) is cut into several words, never in the middle of a character.
+const mimeWord = (s) => {
+  if (/^[\x20-\x7e]*$/.test(s)) return s;
+  const words = []; let cur = '';
+  for (const ch of s) { if (ENC.encode(cur + ch).length > 33) { words.push(cur); cur = ''; } cur += ch; }
+  if (cur) words.push(cur);
+  return words.map((w) => `=?UTF-8?B?${b64(w)}?=`).join('\r\n ');
+};
 const addrOnly = (a) => clean(a).replace(/[<>\s,;]/g, '');
 
 function stripTags(html) {

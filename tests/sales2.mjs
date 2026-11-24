@@ -39,6 +39,7 @@ let pt = (await o.call('GET', '/api/sales/partners')).data.partners.find((p) => 
 ok('brokerage earned = 2% of money received', pt.earned_paise === 100000 && pt.paid_paise === 0, JSON.stringify(pt));
 await o.call('POST', `/api/sales/partners/${part}/kyc`, { pan: 'QWERT9876K', rera_no: 'A51900099999', rera_valid_till: '2099-01-01' });   // brokerage is paid only to a partner with approved KYC and a valid MahaRERA registration
 await o.call('POST', `/api/sales/partners/${part}/kyc/approve`, {});
+await o.call('POST', `/api/sales/partners/${part}/verify-rera`, { note: 'Checked on MahaRERA site, registered' });
 await o.call('POST', `/api/sales/partners/${part}/payments`, { amount_paise: 40000 });
 pt = (await o.call('GET', '/api/sales/partners')).data.partners.find((p) => p.id === part);
 ok('payment reduces payable', pt.earned_paise - pt.paid_paise === 60000);

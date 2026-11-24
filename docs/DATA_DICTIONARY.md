@@ -527,3 +527,8 @@ id TEXT PK, source TEXT, seen_at TEXT
 - Per-sq-ft figures are computed on the screen (paise / area / 100 = rupees per sq ft, rounded to the rupee); a rate typed instead of a total is turned into paise (rate in paise x area) before it is sent, so the server sees the same amounts as before.
 - GET /api/redev/societies/:id/corpus now carries area_sqft (certified area, else carpet) for each entry.
 
+
+## 0053 (agreement review mark, MahaRERA check)
+- sal_letter_templates: reviewed_by (advocate's name typed by the Owner), reviewed_on (date). Both cleared whenever the template is saved again. kind now also accepts `agreement`.
+- sal_partners: rera_verified_on (date the registration was looked up on the MahaRERA website), rera_verified_by (users.id), rera_verify_note (what was seen). Cleared when the registration number changes. Brokerage payment is blocked without a check younger than `partners.rera_check_days` (default 365; 0 = never goes stale).
+- settings keys added: partners.rera_check_days, sales.agreement_defect_years (default 5, confirm with your advocate).

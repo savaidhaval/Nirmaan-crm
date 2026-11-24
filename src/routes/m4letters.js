@@ -79,6 +79,68 @@ For {{company}}
 
 {{signatory}}`;
 
+
+export const DEFAULT_AGREEMENT = `{{draft_notice}}
+AGREEMENT FOR SALE
+
+This Agreement for Sale is made at Mumbai on {{agreement_date}}
+
+BETWEEN
+
+{{company}}, the Promoter of the project "{{project}}", registered under the Real Estate (Regulation and Development) Act, 2016 with MahaRERA Registration No. {{rera_no}}, hereinafter called the "Promoter" (which expression includes its successors and assigns) of the ONE PART
+
+AND
+
+{{customer_name}}, residing at {{address}}, hereinafter called the "Allottee" (which expression includes heirs, executors, administrators, successors and permitted assigns) of the OTHER PART.
+
+WHEREAS
+
+A. The Promoter is developing the project "{{project}}" on the land described in the Schedule, as per the plans and permissions sanctioned by the Planning Authority, and has registered it with the Maharashtra Real Estate Regulatory Authority.
+
+B. The Allottee has applied for Flat No. {{flat_no}} on Floor {{floor}} (RERA carpet area {{carpet_area}} sq. ft.) in the project, and has paid {{token_amount}} on {{booking_date}} as booking amount, the receipt of which the Promoter acknowledges.
+
+C. The parties desire to record the terms on which the Promoter agrees to sell and the Allottee agrees to purchase the said flat.
+
+NOW THIS AGREEMENT WITNESSETH AS FOLLOWS:
+
+1. SALE AND CONSIDERATION
+1.1 The Promoter agrees to sell and the Allottee agrees to purchase the said flat for a total consideration of {{agreement_value}} ({{agreement_value_words}}), exclusive of GST, stamp duty, registration fees and other charges payable as per law.
+1.2 The consideration is payable in the following instalments:
+{{payment_schedule}}
+1.3 All payments are to be made to the project's RERA designated collection account:
+{{bank_details}}
+1.4 Not less than seventy per cent (70%) of the amounts received from allottees is deposited in the separate designated account and used only as the RERA permits.
+
+2. DELAYED PAYMENT
+If the Allottee fails to pay any instalment on its due date, the Allottee shall pay interest on the delayed amount at the rate of {{interest_rate}} per annum, calculated from the due date to the date of payment.
+
+3. POSSESSION
+3.1 The Promoter shall give possession of the flat to the Allottee on or before {{possession_date}}, subject to force majeure and the Allottee having paid all dues.
+3.2 If the Promoter fails to give possession by that date, the Promoter shall pay interest to the Allottee as the RERA and the Rules provide.
+
+4. DEFECT LIABILITY
+If, within {{defect_years}} years from the date of possession, any structural defect or defect in workmanship, quality or provision of services is brought to the Promoter's notice in writing, the Promoter shall rectify it at its own cost within thirty days, as the RERA provides.
+
+5. CANCELLATION AND REFUND
+Cancellation and refund will be governed by the RERA and the Rules made under it. The Promoter may retain only such part of the booking amount as the law allows and shall refund the balance within the period the law allows.
+
+6. REGISTRATION AND STAMP DUTY
+This Agreement shall be presented for registration within the time the law allows. Stamp duty, registration fees and GST are borne by the Allottee as per law.
+
+7. GENERAL
+7.1 Notices shall be sent to the addresses above, by registered post or by email to {{email}}.
+7.2 This Agreement is governed by the laws of India and the courts at Mumbai have jurisdiction, subject to the provisions of the RERA.
+7.3 {{other_details}}
+
+SCHEDULE: Description of the land, the project and the flat to be added by the advocate.
+
+IN WITNESS WHEREOF the parties have signed this Agreement on the date first written above.
+
+For {{company}}                                          Allottee(s)
+{{signatory}}                                            {{customer_name}}
+
+Witness 1: ______________________        Witness 2: ______________________`;
+
 export function registerM4Letters(router, h) {
   const { withAuth, json, serverError, visibleProjectIds, getSetting, nowStr, printBrand } = h;
   const bad = (m, s = 400, code) => json({ ok: false, error: m, ...(code ? { code } : {}) }, s);
@@ -112,7 +174,7 @@ export function registerM4Letters(router, h) {
     if (stageId) { const t = await env.DB.prepare('SELECT * FROM sal_letter_templates WHERE project_id = ? AND kind = ? AND stage_id = ?').bind(projectId, kind, stageId).first(); if (t) return { ...t, source: 'stage' }; }
     const g = await env.DB.prepare('SELECT * FROM sal_letter_templates WHERE project_id = ? AND kind = ? AND stage_id IS NULL').bind(projectId, kind).first();
     if (g) return { ...g, source: 'project' };
-    return { body: kind === 'demand' ? DEFAULT_DEMAND : DEFAULT_ALLOTMENT, doc_id: null, source: 'built-in' };
+    return { body: kind === 'demand' ? DEFAULT_DEMAND : kind === 'agreement' ? DEFAULT_AGREEMENT : DEFAULT_ALLOTMENT, doc_id: null, source: 'built-in' };
   };
 
   // ---------- templates ----------
@@ -121,11 +183,11 @@ export function registerM4Letters(router, h) {
       const pid = Number(new URL(req.url).searchParams.get('project_id'));
       if (!pid || !(await visibleProjectIds(env, req.user)).includes(pid)) return bad('Pick a project.');
       const [tpl, stages] = await Promise.all([
-        env.DB.prepare('SELECT t.id, t.kind, t.stage_id, t.title, t.body, t.doc_id, t.updated_at, s.stage_name FROM sal_letter_templates t LEFT JOIN sal_plan_stages s ON s.id = t.stage_id WHERE t.project_id = ? ORDER BY t.kind, t.stage_id').bind(pid).all(),
+        env.DB.prepare('SELECT t.id, t.kind, t.stage_id, t.title, t.body, t.doc_id, t.updated_at, t.reviewed_by, t.reviewed_on, s.stage_name FROM sal_letter_templates t LEFT JOIN sal_plan_stages s ON s.id = t.stage_id WHERE t.project_id = ? ORDER BY t.kind, t.stage_id').bind(pid).all(),
         env.DB.prepare('SELECT id, stage_name, milestone_key FROM sal_plan_stages WHERE project_id = ? AND retired = 0 ORDER BY sort_order, id').bind(pid).all(),
       ]);
-      return json({ ok: true, data: { templates: tpl.results, stages: stages.results, defaults: { demand: DEFAULT_DEMAND, allotment: DEFAULT_ALLOTMENT },
-        fields: ['date', 'customer_name', 'address', 'phone', 'email', 'project', 'rera_no', 'flat_no', 'wing', 'floor', 'carpet_area', 'agreement_value', 'agreement_value_words', 'token_amount', 'booking_date', 'payment_schedule', 'company', 'signatory', 'other_details', 'demand_no', 'stage_name', 'demand_amount', 'gst_amount', 'total_due', 'total_due_words', 'due_date', 'arrears_line', 'interest_line', 'bank_details'] } });
+      return json({ ok: true, data: { templates: tpl.results, stages: stages.results, defaults: { demand: DEFAULT_DEMAND, allotment: DEFAULT_ALLOTMENT, agreement: DEFAULT_AGREEMENT },
+        fields: ['date', 'customer_name', 'address', 'phone', 'email', 'project', 'rera_no', 'flat_no', 'wing', 'floor', 'carpet_area', 'agreement_value', 'agreement_value_words', 'token_amount', 'booking_date', 'payment_schedule', 'company', 'signatory', 'other_details', 'demand_no', 'stage_name', 'demand_amount', 'gst_amount', 'total_due', 'total_due_words', 'due_date', 'arrears_line', 'interest_line', 'bank_details', 'agreement_date', 'possession_date', 'defect_years', 'interest_rate', 'draft_notice'] } });
     } catch (e) { return serverError(e, 'letter-templates'); }
   }));
 
@@ -134,14 +196,14 @@ export function registerM4Letters(router, h) {
       if (!MANAGE.includes(req.user.role)) return bad('Only the Owner, PM or Accounts can change letter templates.', 403);
       const b = await req.json().catch(() => ({}));
       const pid = Number(b.project_id); if (!pid || !(await visibleProjectIds(env, req.user)).includes(pid)) return bad('Pick a project.');
-      if (!['demand', 'allotment'].includes(b.kind)) return bad('Pick demand letter or allotment letter.');
+      if (!['demand', 'allotment', 'agreement'].includes(b.kind)) return bad('Pick demand letter, allotment letter or agreement.');
       const stageId = b.kind === 'demand' && b.stage_id ? Number(b.stage_id) : null;
       if (stageId && !(await env.DB.prepare('SELECT id FROM sal_plan_stages WHERE id = ? AND project_id = ?').bind(stageId, pid).first())) return bad('That payment stage is not in this project.');
       const body = String(b.body || '').slice(0, 20000); const docId = b.doc_id ? Number(b.doc_id) : null;
       if (!body.trim() && !docId) return bad('Write the letter text, or upload a Word template.');
       if (docId && !(await env.DB.prepare('SELECT id FROM documents WHERE id = ? AND deleted_at IS NULL AND project_id = ?').bind(docId, pid).first())) return bad('The Word template was not found.');
       await env.DB.prepare(`INSERT INTO sal_letter_templates (project_id, kind, stage_id, title, body, doc_id, updated_by, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(project_id, kind, COALESCE(stage_id, 0)) DO UPDATE SET title = excluded.title, body = excluded.body, doc_id = excluded.doc_id, updated_by = excluded.updated_by, updated_at = excluded.updated_at`)
+        ON CONFLICT(project_id, kind, COALESCE(stage_id, 0)) DO UPDATE SET title = excluded.title, body = excluded.body, doc_id = excluded.doc_id, updated_by = excluded.updated_by, updated_at = excluded.updated_at, reviewed_by = NULL, reviewed_on = NULL`)
         .bind(pid, b.kind, stageId, String(b.title || '').slice(0, 80) || null, body.trim() ? body : null, docId, req.user.user_id, nowStr()).run();
       await audit(env, req.user, 'letter_template', 'sal_letter_templates', pid, `${b.kind} letter template saved${stageId ? ' for a stage' : ''}${docId ? ' (Word file)' : ''}`);
       return json({ ok: true });
@@ -230,6 +292,81 @@ export function registerM4Letters(router, h) {
       await audit(env, req.user, 'allotment_sent', 'sal_bookings', b.id, `Allotment letter of ${b.customer_name} marked as sent by ${via}`);
       return json({ ok: true });
     } catch (e) { return serverError(e, 'allotment-sent'); }
+  }));
+
+
+  // ---------- Agreement for Sale (starting text only; the advocate's approval is recorded before it is treated as final) ----------
+  router.post('/api/sales/letter-templates/:id/review', async (req, env) => withAuth(req, env, 'sales', 'E', async (req, env) => {
+    try {
+      if (req.user.role !== 'owner') return bad('Only the Owner can record the advocate\'s approval.', 403);
+      const t = await env.DB.prepare('SELECT id, project_id, kind FROM sal_letter_templates WHERE id = ?').bind(Number(req.params.id)).first();
+      if (!t || !(await visibleProjectIds(env, req.user)).includes(t.project_id)) return bad('Not found.', 404);
+      if (t.kind !== 'agreement') return bad('Only the Agreement for Sale needs an advocate\'s approval mark.');
+      const b = await req.json().catch(() => ({}));
+      const name = String(b.advocate || '').trim();
+      if (name.length < 3) return bad('Type the advocate\'s name who approved this wording.');
+      await env.DB.prepare('UPDATE sal_letter_templates SET reviewed_by = ?, reviewed_on = ? WHERE id = ?').bind(name.slice(0, 80), todayIST(), t.id).run();
+      await audit(env, req.user, 'agreement_reviewed', 'sal_letter_templates', t.id, `Agreement for Sale wording marked as approved by advocate ${name.slice(0, 80)}`);
+      return json({ ok: true });
+    } catch (e) { return serverError(e, 'agreement-review'); }
+  }));
+
+  router.get('/api/sales/bookings/:id/agreement', async (req, env) => withAuth(req, env, 'sales', 'V', async (req, env) => {
+    try {
+      if (![...MANAGE, 'sales'].includes(req.user.role)) return bad('Not allowed.', 403);
+      const { b, err } = await bookingOf(env, req); if (err) return err;
+      if (b.status === 'cancelled') return bad('This booking is cancelled, so there is no agreement to make.', 409);
+      const f = await common(env, b);
+      const proj = await env.DB.prepare('SELECT target_date FROM projects WHERE id = ?').bind(b.project_id).first();
+      const tpl = await templateFor(env, b.project_id, 'agreement', null);
+      const reviewed = tpl.source !== 'built-in' && !!tpl.reviewed_on;
+      const bp = Number(await setting(env, 'interest.rate_bp', '1100')) || 1100;
+      Object.assign(f, { agreement_date: longDate(todayIST()), possession_date: proj && proj.target_date ? longDate(proj.target_date) : '[date of possession: fill in]',
+        defect_years: await setting(env, 'sales.agreement_defect_years', '5'), interest_rate: (bp / 100).toFixed(bp % 100 ? 2 : 0) + '%',
+        draft_notice: reviewed ? '' : "DRAFT FOR THE ADVOCATE'S REVIEW. NOT FOR SIGNING." });
+      await audit(env, req.user, 'agreement_prepared', 'sal_bookings', b.id, `Agreement for Sale of ${b.customer_name} prepared (${reviewed ? 'advocate-approved wording' : 'wording NOT yet approved by an advocate'})`);
+      return json({ ok: true, data: { fields: f, template: { body: tpl.body, doc_id: tpl.doc_id, source: tpl.source, id: tpl.id || null }, reviewed, reviewed_by: tpl.reviewed_by || null, reviewed_on: tpl.reviewed_on || null, customer: b.customer_name } });
+    } catch (e) { return serverError(e, 'agreement'); }
+  }));
+
+  // ---------- WhatsApp share: builds the message and the wa.me link; the user taps Send in WhatsApp. No WhatsApp API, nothing is sent from the server. ----------
+  router.post('/api/sales/bookings/:id/whatsapp', async (req, env) => withAuth(req, env, 'sales', 'E', async (req, env) => {
+    try {
+      if (![...MANAGE, 'sales'].includes(req.user.role)) return bad('Not allowed.', 403);
+      const { b, err } = await bookingOf(env, req); if (err) return err;
+      const body = await req.json().catch(() => ({}));
+      const kind = String(body.kind || '');
+      if (!['demand', 'receipt', 'balance', 'agreement', 'thanks'].includes(kind)) return bad('Pick what to send.');
+      const ph = String(b.phone || '').replace(/\D/g, '').slice(-10);
+      if (ph.length !== 10) return bad('This customer has no 10-digit mobile number on file.');
+      const f = await common(env, b); const co = f.company || 'our team'; const hi = `Dear ${b.customer_name},`;
+      let text;
+      if (kind === 'demand') {
+        const d = await env.DB.prepare('SELECT * FROM sal_demands WHERE id = ? AND booking_id = ?').bind(Number(body.demand_id), b.id).first();
+        if (!d) return bad('Demand not found.', 404);
+        if (['scheduled', 'cancelled'].includes(d.status)) return bad('This demand is not ready to send.', 409);
+        const due = d.amount_paise + (d.gst_paise || 0) - d.settled_paise;
+        if (due <= 0) return bad('This demand is already paid.', 409);
+        text = `${hi}\nYour instalment "${d.label}" for Flat ${f.flat_no}, ${f.project} is ready. Amount due: ${rupees(due)}${d.due_date ? ', on or before ' + longDate(d.due_date) : ''}.\nPlease pay to the RERA collection account: ${f.bank_details}\nIf you have already paid, please share the payment details.\n- ${co}`;
+      } else if (kind === 'receipt') {
+        const r = await env.DB.prepare('SELECT * FROM sal_receipts WHERE id = ? AND booking_id = ? AND reversed_at IS NULL').bind(Number(body.receipt_id), b.id).first();
+        if (!r) return bad('Receipt not found.', 404);
+        text = `${hi}\nWe have received ${rupees(r.amount_paise)} on ${longDate(r.received_on)} for Flat ${f.flat_no}, ${f.project}${r.kind === 'interest' ? ' (interest on delayed payment)' : ''}. Receipt no. ${r.receipt_no || ''}. Thank you.\n- ${co}`;
+      } else if (kind === 'balance') {
+        const [due, interest] = await Promise.all([
+          env.DB.prepare("SELECT COALESCE(SUM(amount_paise + COALESCE(gst_paise, 0) - settled_paise), 0) AS a FROM sal_demands WHERE booking_id = ? AND status IN ('ready', 'partial')").bind(b.id).first(),
+          computeInterest(env, getSetting, [b.id]),
+        ]);
+        const row = interest.map.get(b.id); const acc = row ? row.demands.reduce((t, x) => t + Math.max(0, x.accrued_paise - x.waived_paise), 0) : 0;
+        text = `${hi}\nYour account for Flat ${f.flat_no}, ${f.project}: instalments due now ${rupees(due.a)}${acc > 0 ? `; interest on delayed payment so far ${rupees(acc)}` : ''}. Please contact us for the full statement.\n- ${co}`;
+      } else if (kind === 'agreement') {
+        text = `${hi}\nThe Agreement for Sale for Flat ${f.flat_no}, ${f.project} is ready for your review. Please call us to fix a date for signing and registration.\n- ${co}`;
+      } else {
+        text = `${hi}\nThank you for choosing Flat ${f.flat_no} at ${f.project}. We will stay in touch with the next steps.\n- ${co}`;
+      }
+      await audit(env, req.user, 'whatsapp_share', 'sal_bookings', b.id, `WhatsApp ${kind} message prepared for ${b.customer_name}`);
+      return json({ ok: true, data: { phone: '91' + ph, text, url: `https://wa.me/91${ph}?text=${encodeURIComponent(text)}` } });
+    } catch (e) { return serverError(e, 'whatsapp-share'); }
   }));
 
   // ---------- cancellation refund waterfall ----------

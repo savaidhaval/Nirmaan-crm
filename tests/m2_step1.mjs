@@ -70,6 +70,11 @@ await o.call('POST', `/api/sales/partners/${part}/kyc`, { pan: 'QWERT9876K', gst
 ok('an expired MahaRERA date blocks approval', (await o.call('POST', `/api/sales/partners/${part}/kyc/approve`, {})).status === 400);
 await o.call('POST', `/api/sales/partners/${part}/kyc`, { rera_valid_till: iso(200) });
 ok('Accounts can approve KYC once details are complete', (await acc.call('POST', `/api/sales/partners/${part}/kyc/approve`, {})).status === 200);
+ok('approved KYC alone is not enough: the MahaRERA check must be recorded', (await pay()).code === 'partner_kyc' && /checked on the MahaRERA website/.test((await pay()).err || ''));
+ok('PM cannot record a MahaRERA check', (await pm.call('POST', `/api/sales/partners/${part}/verify-rera`, { note: 'looked it up' })).status === 403);
+ok('a check needs a note of what was seen', (await acc.call('POST', `/api/sales/partners/${part}/verify-rera`, { note: 'ok' })).status === 400);
+ok('a check cannot be dated in the future', (await acc.call('POST', `/api/sales/partners/${part}/verify-rera`, { note: 'Registered, valid till 2099', checked_on: iso(5) })).status === 400);
+ok('Accounts records the MahaRERA check', (await acc.call('POST', `/api/sales/partners/${part}/verify-rera`, { note: 'Registered agent, name and validity match the certificate' })).status === 200);
 const lp = (await o.call('GET', '/api/sales/partners')).data.partners.find((p) => p.id === part);
 ok('the list shows KYC state and PAN last 4 only, never the encrypted PAN', lp.kyc_status === 'approved' && lp.pan_last4 === '876K' && lp.pan_enc === undefined && !JSON.stringify(lp).includes('enc:'), JSON.stringify(lp));
 ok('brokerage can be paid once KYC is approved and RERA is valid', (await pay()).status === 200);
@@ -78,6 +83,14 @@ const exp = await pay();
 ok('brokerage is blocked again the day the MahaRERA registration expires', exp.code === 'partner_kyc' && /expired/.test(exp.err || ''), JSON.stringify(exp));
 await o.call('POST', `/api/sales/partners/${part}/kyc`, { rera_valid_till: iso(300) });
 ok('changing KYC details needs a fresh approval', (await pay()).code === 'partner_kyc');
+await acc.call('POST', `/api/sales/partners/${part}/kyc/approve`, {});
+sql(`UPDATE sal_partners SET rera_verified_on = '${iso(-400)}' WHERE id = ${part}`);
+const stale = await pay();
+ok('an old MahaRERA check (over a year) blocks payment until it is repeated', stale.code === 'partner_kyc' && /older than 365 days/.test(stale.err || ''), JSON.stringify(stale));
+await acc.call('POST', `/api/sales/partners/${part}/verify-rera`, { note: 'Re-checked on the website, still valid' });
+ok('and a fresh check releases it', (await pay()).status === 200);
+await o.call('POST', `/api/sales/partners/${part}/kyc`, { rera_no: 'A51900077777' });
+ok('a new MahaRERA number clears the earlier check', (await o.call('GET', '/api/sales/partners')).data.partners.find((p) => p.id === part).rera_verified_on === null);
 
 // ---------- Re-hold block ----------
 const uH = await mkUnit(); const leadH = (await sales.call('POST', '/api/sales/leads', { name: 'zz hold ' + run, phone: phone(), project_id: pid, consent: true })).data.id;

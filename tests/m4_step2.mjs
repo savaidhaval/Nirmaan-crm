@@ -56,7 +56,7 @@ const rc = await acc.call('POST', `/api/sales/bookings/${bk}/receipts`, { amount
 // brokerage paid on this booking
 const part = (await o.call('POST', '/api/sales/partners', { firm: 'zz brk ' + run, brokerage_default_bp: 100 })).data.id;
 sql(`UPDATE sal_bookings SET channel_partner_id = ${part} WHERE id = ${bk}`);
-sql(`UPDATE sal_partners SET kyc_status = 'approved', rera_no = 'A1', rera_valid_till = '2099-01-01', pan_last4 = '1234' WHERE id = ${part}`);
+sql(`UPDATE sal_partners SET kyc_status = 'approved', rera_no = 'A1', rera_valid_till = '2099-01-01', rera_verified_on = date('now'), pan_last4 = '1234' WHERE id = ${part}`);
 await o.call('POST', `/api/sales/partners/${part}/payments`, { amount_paise: 1500000, booking_id: bk });
 ok('a booking that is not cancelled still shows the waterfall (for planning)', (await acc.call('GET', `/api/sales/bookings/${bk}/cancel-waterfall`)).status === 200);
 await o.call('POST', `/api/sales/bookings/${bk}/cancel`, { reason: 'buyer withdrew from the purchase' });
