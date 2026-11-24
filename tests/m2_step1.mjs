@@ -7,6 +7,7 @@ class C { constructor() { this.cookie = ''; }
     const r = await fetch(BASE + p, { method: m, headers: h, body, redirect: 'manual' }); const sc = r.headers.get('set-cookie'); if (sc) this.cookie = sc.split(';')[0]; if (raw) return r; let d = null; try { d = await r.json(); } catch (e) { /* */ } return { status: r.status, data: d && d.data, err: d && d.error, code: d && d.code }; } }
 const run = Date.now().toString(36);
 const o = new C(); await o.call('POST', '/api/auth/login', { email: process.env.OWNER_EMAIL, password: process.env.OWNER_PASSWORD });
+await o.call('POST', '/api/settings/sales.afs_gate', { value: 'off' });   // these suites bill stages without registering the Agreement for Sale; the 10% rule is tested in m4_step1
 let seq = 0;
 const mkUser = async (role, projects) => { const email = `m2-${role}-${++seq}-${run}@test.local`; const r = await o.call('POST', '/api/users', { name: 'm2 ' + role, email, role, projects }); const pw = 'M2StrongPass-' + run; const c = new C(); await c.call('POST', '/api/auth/login', { email, password: r.data.temporaryPassword }); await c.call('POST', '/api/auth/change-password', { currentPassword: r.data.temporaryPassword, newPassword: pw }); c.id = r.data.id; return c; };
 import { execSync } from 'node:child_process';
@@ -125,4 +126,5 @@ if (hourIST >= 9 && hourIST < 19) {
   ok('a lead that was called is left alone', (await o.call('GET', `/api/sales/leads/${touched}`)).data.lead.sla_reassigns === 0);
 } else console.log('SKIP  SLA reassign (outside 09:00-19:00 India time)');
 
+await o.call('POST', '/api/settings/sales.afs_gate', { value: 'on' });
 console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);

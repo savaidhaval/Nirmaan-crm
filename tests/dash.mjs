@@ -7,6 +7,7 @@ class C { constructor() { this.cookie = ''; }
     const r = await fetch(BASE + p, { method: m, headers: h, body, redirect: 'manual' }); const sc = r.headers.get('set-cookie'); if (sc) this.cookie = sc.split(';')[0]; if (raw) return r; let d = null; try { d = await r.json(); } catch (e) { /* */ } return { status: r.status, data: d && d.data, err: d && d.error }; } }
 const run = Date.now().toString(36); const digits = String(Date.now()).slice(-8);
 const o = new C(); await o.call('POST', '/api/auth/login', { email: process.env.OWNER_EMAIL, password: process.env.OWNER_PASSWORD });
+await o.call('POST', '/api/settings/sales.afs_gate', { value: 'off' });   // these suites bill stages without registering the Agreement for Sale; the 10% rule is tested in m4_step1
 let seq = 0;
 const mkUser = async (role, projects) => { const email = `zp-${role}-${++seq}-${run}@test.local`; const r = await o.call('POST', '/api/users', { name: 'zp ' + role, email, role, projects }); const pw = 'ZpStrongPass-' + run; const c = new C(); await c.call('POST', '/api/auth/login', { email, password: r.data.temporaryPassword }); await c.call('POST', '/api/auth/change-password', { currentPassword: r.data.temporaryPassword, newPassword: pw }); c.id = r.data.id; c.email = email; c.pw = pw; return c; };
 import { execSync } from 'node:child_process';
@@ -79,4 +80,5 @@ const dis = await csv(o, 'discount_register'); ok('discount register: the discou
 const stk = await csv(acc, 'stock_on_hand'); ok('stock on hand downloads (header at least)', stk.status === 200 && stk.text.includes('Reorder level'));
 ok('the list of reports is available to the screen', (await acc.call('GET', '/api/reports/pack')).data.reports.length === 5 && (await sales.call('GET', '/api/reports/pack')).status === 403);
 ok('the contractor reports say so when the Contractors module is off', await (async () => { await o.call('POST', '/api/settings/con.enabled', { value: 'off' }); const r = await csv(o, 'wo_summary'); const e = await extras(o); await o.call('POST', '/api/settings/con.enabled', { value: 'on' }); return r.status === 409 && !find(e, 'Contractor bills waiting') && e.status === 200; })());
+await o.call('POST', '/api/settings/sales.afs_gate', { value: 'on' });
 console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);

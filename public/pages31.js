@@ -8,7 +8,7 @@ const NAV_MODULES = [
   ['1. Land & Approvals', 'g-projects', ['bd', 'projects', 'tasks', 'approvals', 'redevelopment', 'siteboard', 'feasibility']],
   ['2. Pre-Sales & Inventory', 'g-sales', ['sales', 'reception', 'tokens', 'updates', 'stacking', 'pricing', 'brochures', 'enquiryform']],
   ['3. Site & Contractors', 'g-site', ['drawings', 'site', 'quality', 'stores', 'procurement', 'gatephotos', 'contractors', 'budget', 'costmeter', 'boq', 'petty']],
-  ['4. Collections & RERA', 'g-money', ['demandletters', 'rera', 'bank', 'tally', 'finance', 'reports']],
+  ['4. Collections & RERA', 'g-money', ['demandletters', 'collections', 'rera', 'bank', 'tally', 'finance', 'reports']],
   ['5. Possession & Society', 'g-handover', ['possession', 'snags']],
 ];
 // the open/closed state and icons look the group up by name

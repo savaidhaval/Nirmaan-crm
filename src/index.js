@@ -16,6 +16,7 @@ import { registerM2Gaps, partnerPayBlock, leadSlaReassign } from './routes/m2gap
 import { registerM2Step2 } from './routes/m2step2.js';
 import { registerM2Step3 } from './routes/m2step3.js';
 import { ccOverFloor, wastageSweep, signoffBlock, registerM3Gaps, metres } from './routes/m3gaps.js';
+import { registerM4Gaps, afsGateOn } from './routes/m4gaps.js';
 import { registerBulkDemands, demandLetterHtml } from './routes/bulk_demands.js';
 import { registerReports } from './routes/reports.js';
 import { registerFinance } from './routes/finance.js';
@@ -566,7 +567,7 @@ const EDITABLE_SETTINGS = ['po.pm_approval_limit_paise', 'access.allow_second_ow
   'brochure.price_list_default_audience', 'storage.warn_percent', 'sales.max_holds_per_user', 'sales.max_discount_bp', 'sales.pm_max_discount_bp',
   'interest.rate_bp', 'interest.grace_days', 'interest.enabled', 'security.require_mfa_roles', 'tax.stamp_duty_bp', 'tax.metro_cess_bp', 'tax.women_concession_bp', 'tax.registration_bp', 'tax.registration_cap_paise', 'tax.gst_bp',
   'con.enabled', 'con.pm_approval_limit_paise', 'con.gst_bp', 'con.tds_bp', 'budget.gst_basis', 'petty.low_balance_paise', 'ai.enabled', 'ai.daily_limit', 'ai.model', 'rera.designated_pct_bp', 'fea.review_days', 'red.member_doc_checklist', 'red.rent_due_day', 'red.oc_grace_days', 'red.demolition_proofs', 'red.rtgs_min_paise', 'apr.alert_days', 'bank.keep_days', 'drawing.ack_hours', 'sales.bulk_daily_limit', 'sales.bulk_chunk', 'sales.demand_link_days', 'sales.visit_objections', 'sales.visit_radius_m',
-  'pro.grn_gate', 'stk.wastage_alert_bp', 'stk.wastage_defaults', 'site.dpr_radius_m', 'site.dual_signoff', 'con.gst_hold', 'sales.sla_minutes', 'sales.rehold_block_hours', 'sales.lock_above_cc', 'sales.hold_needs_token', 'sales.broker_needs_confirmation', 'sales.source_lock_days', 'sales.token_cleared_hold_days', 'sales.brochure_url', 'sales.map_url',
+  'sales.afs_gate', 'tax.tds_194ia_on', 'tax.tds_194ia_threshold_paise', 'tax.tds_194ia_bp', 'sales.receipt_backdate_days', 'sales.remind_before_days', 'sales.remind_interest_days', 'sales.bank_followup_days', 'pro.grn_gate', 'stk.wastage_alert_bp', 'stk.wastage_defaults', 'site.dpr_radius_m', 'site.dual_signoff', 'con.gst_hold', 'sales.sla_minutes', 'sales.rehold_block_hours', 'sales.lock_above_cc', 'sales.hold_needs_token', 'sales.broker_needs_confirmation', 'sales.source_lock_days', 'sales.token_cleared_hold_days', 'sales.brochure_url', 'sales.map_url',
   'sales.receipt_approval_limit_paise', 'sales.discount_pm_limit_paise', 'sales.handover_template', 'apr.designations', 'con.variation_owner_limit_paise', 'con.advance_recovery_bp', 'con.dlp_months', 'pro.tolerance_bp', 'tax.tds_no_pan_bp', 'rera.cert_valid_days', 'qa.pour_checklist', 'qa.cube_7day_pct_bp', 'dpr.activities', 'dpr.safety_checks', 'bd.vacate_to_plinth_months', 'bd.completion_months', 'bd.steps_79a'];
 
 router.post('/api/settings/:key', async (req, env) => {
@@ -895,19 +896,34 @@ async function milestoneCertify(req, env) {
   }
   const now = nowStr();
   const dueDays = Number(await getSetting(env, 'demand.due_days_after_milestone')) || 7;
+  const afsOn = await afsGateOn(getSetting, env);
   const res = await env.DB.batch([
     env.DB.prepare("UPDATE site_milestones SET status = 'done', actual_date = ?, cert_ref = ?, cert_doc_id = ?, certified_by = ?, override_note = ?, undone_at = NULL WHERE id = ? AND status != 'done'")
       .bind(d, cert, certDoc, user.user_id, block ? override : null, ms.id),
     // matching demands: scheduled -> ready, due N days after the stage date (wing must match; a blank wing reaches every wing only when marked so)
     env.DB.prepare(`UPDATE sal_demands SET status = 'ready', due_date = date(?1, '+' || ?2 || ' days'), hold_reason = NULL
       WHERE changes() > 0 AND status = 'scheduled' AND ?4 IS NOT NULL AND stage_id IN (SELECT id FROM sal_plan_stages WHERE project_id = ?3 AND milestone_key = ?4)
-      AND booking_id IN (SELECT b.id FROM sal_bookings b JOIN sal_inventory i ON i.id = b.unit_id WHERE b.project_id = ?3 AND b.status <> 'cancelled' AND (?5 = 1 OR i.wing = ?6 OR (?6 IS NULL AND ?7 = 0)))`)
-      .bind(d, dueDays, ms.project_id, ms.milestone_key || null, ms.all_wings ? 1 : 0, ms.wing || null, 0),
+      AND booking_id IN (SELECT b.id FROM sal_bookings b JOIN sal_inventory i ON i.id = b.unit_id WHERE b.project_id = ?3 AND b.status <> 'cancelled' AND (?5 = 1 OR i.wing = ?6 OR (?6 IS NULL AND ?7 = 0)))
+      AND (?8 = 0 OR COALESCE((SELECT afs_reg_no FROM sal_bookings x WHERE x.id = sal_demands.booking_id), '') <> ''
+        OR COALESCE((SELECT SUM(y.amount_paise) FROM sal_demands y WHERE y.booking_id = sal_demands.booking_id AND y.status NOT IN ('scheduled', 'cancelled')), 0) + sal_demands.amount_paise <= (SELECT agreed_price_paise FROM sal_bookings z WHERE z.id = sal_demands.booking_id) / 10)`)
+      .bind(d, dueDays, ms.project_id, ms.milestone_key || null, ms.all_wings ? 1 : 0, ms.wing || null, 0, afsOn ? 1 : 0),
     env.DB.prepare("INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, 'done', 'site_milestones', ?, ?, ?)")
       .bind(user.user_id, ms.id, `Milestone certified: ${ms.name}${ms.wing ? ' (' + ms.wing + ')' : ''} on ${d}, certificate ${cert}${block ? ' — Owner went past: ' + block + ' Reason: ' + override : ''}`, now),
   ]);
   if (!res[0].meta.changes) return json({ ok: false, error: 'This milestone is already certified.' }, 409);
-  return json({ ok: true, data: { id: ms.id, actual_date: d, demands_ready: res[1].meta.changes || 0 } });
+  // Buyers whose Agreement for Sale is not registered are not billed beyond 10%: mark their demands and tell Accounts, the PM and the Owner who needs an AFS registration reminder.
+  let afsHeld = 0;
+  if (afsOn && ms.milestone_key) {
+    const scope = `stage_id IN (SELECT id FROM sal_plan_stages WHERE project_id = ?1 AND milestone_key = ?2) AND status = 'scheduled'
+      AND booking_id IN (SELECT b.id FROM sal_bookings b JOIN sal_inventory i ON i.id = b.unit_id WHERE b.project_id = ?1 AND b.status <> 'cancelled' AND (?3 = 1 OR i.wing = ?4 OR ?4 IS NULL))`;
+    const r2 = await env.DB.batch([
+      env.DB.prepare(`UPDATE sal_demands SET hold_reason = 'AFS registration pending: more than 10% cannot be asked for before the Agreement for Sale is registered' WHERE hold_reason IS NULL AND ${scope}`).bind(ms.project_id, ms.milestone_key, ms.all_wings ? 1 : 0, ms.wing || null),
+      env.DB.prepare(`INSERT INTO notifications (user_id, title, body, link, created_at) SELECT u.id, 'AFS registration needed before billing: ' || ?5, (SELECT COUNT(DISTINCT booking_id) FROM sal_demands WHERE hold_reason LIKE 'AFS registration pending%' AND ${scope}) || ' buyer(s) have not registered the Agreement for Sale, so this stage was not billed to them. Remind them to register.', 'sales', ?6
+        FROM users u WHERE u.active = 1 AND u.deleted_at IS NULL AND u.role IN ('accounts', 'owner', 'pm') AND EXISTS (SELECT 1 FROM sal_demands WHERE hold_reason LIKE 'AFS registration pending%' AND ${scope})`).bind(ms.project_id, ms.milestone_key, ms.all_wings ? 1 : 0, ms.wing || null, ms.name, nowStr()),
+    ]);
+    afsHeld = r2[0].meta.changes || 0;
+  }
+  return json({ ok: true, data: { id: ms.id, actual_date: d, demands_ready: res[1].meta.changes || 0, demands_held_afs: afsHeld } });
 }
 
 // Old button: a site engineer's "done" now means "ready to certify"; a PM / Owner certifies.
@@ -1745,7 +1761,7 @@ router.get('/api/export/:what', async (req, env) => {
 // Tables are read in parts so one request or cron run never goes near the free plan's 50-queries-per-run cap.
 const EXPORT_TABLES = ['projects', 'apr_items', 'apr_events', 'drw_drawings', 'drw_revisions', 'site_milestones', 'site_dprs', 'site_snags', 'pro_vendors', 'pro_rfqs', 'pro_quotes', 'pro_pos', 'pro_po_items', 'pro_grns', 'pro_bills',
     'sal_leads', 'sal_activities', 'sal_visits', 'sal_inventory', 'sal_partners', 'sal_bookings', 'sal_plan_stages', 'sal_demands', 'sal_receipts', 'documents', 'audit_log',
-    'pro_grn_items', 'pro_payments', 'ppl_staff', 'ppl_hiring', 'ppl_candidates', 'sal_brokerage_payments', 'sal_refunds', 'sal_interest_waivers', 'sal_hold_log', 'sal_hold_tokens', 'sal_checkins', 'site_ms_signoffs', 'site_wing_progress', 'sal_price_matrix', 'sal_plc_rules', 'mkt_spend', 'brands', 'counters',
+    'pro_grn_items', 'pro_payments', 'ppl_staff', 'ppl_hiring', 'ppl_candidates', 'sal_brokerage_payments', 'sal_refunds', 'sal_interest_waivers', 'sal_hold_log', 'sal_hold_tokens', 'sal_checkins', 'sal_tds_credits', 'site_ms_signoffs', 'site_wing_progress', 'sal_price_matrix', 'sal_plc_rules', 'mkt_spend', 'brands', 'counters',
     'pro_indents', 'pro_indent_items', 'pro_rfq_items', 'pro_quote_items',
     'site_dpr_labour', 'bud_heads', 'stk_items', 'stk_balance', 'stk_moves', 'pro_party_docs', 'pro_professionals', 'ai_log', 'sal_receipt_requests', 'sal_adjustments', 'sal_booking_parties', 'sal_cost_sheets', 'sal_cost_sheet_lines', 'sal_handover', 'sal_handover_items', 'sal_booking_loans', 'rera_account_entries', 'eng_kudos', 'fea_versions', 'sal_bulk_runs', 'sal_bulk_items', 'drw_acks', 'tally_export_log', 'brand_profiles', 'project_members', 'drive_folders', 'bank_profiles', 'bank_import_batches', 'bank_import_rows', 'red_societies', 'red_members', 'red_consent_events', 'red_member_docs', 'red_rehab_allotments', 'red_transit_terms', 'red_transit_schedule', 'red_transit_payments', 'red_corpus_entries', 'red_meetings', 'red_meeting_attendees', 'red_rent_changes', 'red_site_proofs', 'red_payout_batches', 'prj_autodcr_history', 'apr_steps', 'apr_deps', 'con_variations', 'con_measurements', 'rera_certificates', 'qa_pours', 'qa_cubes', 'qa_ncrs', 'site_dpr_work', 'site_ms_changes', 'prj_holds', 'con_debit_notes', 'bud_items', 'bd_opportunities', 'bd_followups', 'bd_studies', 'bd_steps', 'prj_lifecycle', 'pty_funds', 'pty_entries', 'con_contractors', 'con_work_orders', 'con_wo_items', 'con_ra_bills', 'con_ra_lines', 'con_payments', 'con_ledger'];
 const EXPORT_PARTS = 3;
@@ -2355,6 +2371,7 @@ registerTally(router, { withAuth, json, serverError, visibleProjectIds, nowStr, 
 registerBank(router, { withAuth, json, serverError, visibleProjectIds, nowStr, getSetting, csvBom });
 registerBulkDemands(router, { withAuth, json, serverError, visibleProjectIds, getSetting, nowStr, printBrand, csvBom });
 registerM2Gaps(router, { withAuth, json, serverError, visibleProjectIds, getSetting, nowStr, encryptSetting });
+registerM4Gaps(router, { withAuth, json, serverError, visibleProjectIds, getSetting, nowStr });
 registerM3Gaps(router, { withAuth, json, serverError, visibleProjectIds, getSetting, nowStr });
 registerM2Step3(router, { withAuth, json, serverError, visibleProjectIds, nowStr });
 registerM2Step2(router, { withAuth, json, serverError, visibleProjectIds, getSetting, nowStr, checkRateLimit, clientIp, printBrand });

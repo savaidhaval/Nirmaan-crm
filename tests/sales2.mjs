@@ -7,6 +7,7 @@ class C { constructor() { this.cookie = ''; }
     const r = await fetch(BASE + p, { method: m, headers: h, body, redirect: 'manual' }); const sc = r.headers.get('set-cookie'); if (sc) this.cookie = sc.split(';')[0]; if (raw) return r; let d = null; try { d = await r.json(); } catch (e) { /* */ } return { status: r.status, data: d && d.data, err: d && d.error }; } }
 const run = Date.now().toString(36); const digits = String(Date.now()).slice(-8);
 const o = new C(); await o.call('POST', '/api/auth/login', { email: process.env.OWNER_EMAIL, password: process.env.OWNER_PASSWORD });
+await o.call('POST', '/api/settings/sales.afs_gate', { value: 'off' });   // these suites bill stages without registering the Agreement for Sale; the 10% rule is tested in m4_step1
 const pid = (await o.call('POST', '/api/projects', { rera_no: 'P518000TEST', name: 'zz-s2 ' + run, code: 'S2' + run.toUpperCase().slice(-5) })).data.id;
 let seq = 0; const mk = async (role, projects) => { const email = `zs-${role}-${++seq}-${run}@test.local`; const r = await o.call('POST', '/api/users', { name: 'zs ' + role, email, role, projects }); const c = new C(); await c.call('POST', '/api/auth/login', { email, password: r.data.temporaryPassword }); await c.call('POST', '/api/auth/change-password', { currentPassword: r.data.temporaryPassword, newPassword: 'ZsStrongPass-' + run }); c.id = r.data.id; return c; };
 const sales = await mk('sales', [pid]); const sales2 = await mk('sales', [pid]); const site = await mk('site', [pid]);
@@ -53,4 +54,5 @@ ok('site search never returns leads or vendors', !(await site.call('GET', `/api/
 await o.call('POST', '/api/approvals', { project_id: pid, name: 'zz expiring', valid_till: new Date(Date.now() + 10 * 86400000).toISOString().slice(0, 10), status: 'approved' });
 const dash = (await o.call('GET', `/api/dashboard?project_id=${pid}`)).data;
 ok('dashboard counts expiring approvals', dash.approvalsExpiring >= 1, JSON.stringify(dash));
+await o.call('POST', '/api/settings/sales.afs_gate', { value: 'on' });
 console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);

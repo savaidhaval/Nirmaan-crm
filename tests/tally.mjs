@@ -7,6 +7,7 @@ class C { constructor() { this.cookie = ''; }
     const r = await fetch(BASE + p, { method: m, headers: h, body, redirect: 'manual' }); const sc = r.headers.get('set-cookie'); if (sc) this.cookie = sc.split(';')[0]; if (raw) return r; let d = null; try { d = await r.json(); } catch (e) { /* */ } return { status: r.status, data: d && d.data, err: d && d.error }; } }
 const run = Date.now().toString(36); const digits = String(Date.now()).slice(-8);
 const o = new C(); await o.call('POST', '/api/auth/login', { email: process.env.OWNER_EMAIL, password: process.env.OWNER_PASSWORD });
+await o.call('POST', '/api/settings/sales.afs_gate', { value: 'off' });   // these suites bill stages without registering the Agreement for Sale; the 10% rule is tested in m4_step1
 let seq = 0;
 const mkUser = async (role, projects) => { const email = `zp-${role}-${++seq}-${run}@test.local`; const r = await o.call('POST', '/api/users', { name: 'zp ' + role, email, role, projects }); const pw = 'ZpStrongPass-' + run; const c = new C(); await c.call('POST', '/api/auth/login', { email, password: r.data.temporaryPassword }); await c.call('POST', '/api/auth/change-password', { currentPassword: r.data.temporaryPassword, newPassword: pw }); c.id = r.data.id; c.email = email; c.pw = pw; return c; };
 const L = 100000, iso = (d) => new Date(Date.now() + 19800000 + d * 86400000).toISOString().slice(0, 10);
@@ -92,4 +93,5 @@ ok('requests without the header are refused', (await fetch(BASE + '/api/tally/ma
 // export log
 ok('the CA can log an export; it shows in the list and the audit log', (await viewer.call('POST', '/api/tally/log', { kind: 'receipts', from, to, count: 2, skipped: 0, total_paise: 17395678 })).status === 200 && (await acc.call('GET', '/api/tally/log')).data.log.some((l) => l.kind === 'receipts' && l.voucher_count === 2 && l.total_paise === 17395678) && JSON.stringify((await o.call('GET', '/api/audit?limit=60')).data).includes('Tally export'));
 ok('a log for an unknown kind is refused', (await acc.call('POST', '/api/tally/log', { kind: 'x', from, to })).status === 400);
+await o.call('POST', '/api/settings/sales.afs_gate', { value: 'on' });
 console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);

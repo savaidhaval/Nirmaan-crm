@@ -7,6 +7,7 @@ class C { constructor() { this.cookie = ''; }
     const r = await fetch(BASE + p, { method: m, headers: h, body, redirect: 'manual' }); const sc = r.headers.get('set-cookie'); if (sc) this.cookie = sc.split(';')[0]; let d = null; try { d = await r.json(); } catch (e) { /* */ } return { status: r.status, data: d && d.data, err: d && d.error, code: d && d.code }; } }
 const run = Date.now().toString(36);
 const o = new C(); await o.call('POST', '/api/auth/login', { email: process.env.OWNER_EMAIL, password: process.env.OWNER_PASSWORD });
+await o.call('POST', '/api/settings/sales.afs_gate', { value: 'off' });   // these suites bill stages without registering the Agreement for Sale; the 10% rule is tested in m4_step1
 let seq = 0;
 const mkUser = async (role) => { const email = `m2c-${role}-${++seq}-${run}@test.local`; const r = await o.call('POST', '/api/users', { name: 'm2c ' + role, email, role, projects: [] }); const pw = 'M2StrongPass-' + run; const c = new C(); await c.call('POST', '/api/auth/login', { email, password: r.data.temporaryPassword }); await c.call('POST', '/api/auth/change-password', { currentPassword: r.data.temporaryPassword, newPassword: pw }); c.id = r.data.id; return c; };
 const pid = (await o.call('POST', '/api/projects', { rera_no: 'P518000TEST', name: 'zz-m2c ' + run, code: 'MC' + run.toUpperCase().slice(-6), budget_paise: 50000000 })).data.id;
@@ -60,4 +61,5 @@ const uh = await mkUnit({ floor: 1 });
 const hold = await sales.call('POST', `/api/sales/inventory/${uh}/hold`, { lead_id: lead, token_mode: 'upi', token_ref: 'UTR' + run, token_amount_paise: 100000, proof_doc_id: up.data.id });
 ok('the hold takes the photo and Accounts sees it', hold.status === 200 && (await acc.call('GET', '/api/sales/token-holds')).data.tokens.some((t) => t.proof_doc_id === up.data.id));
 ok('Accounts can open the photo', (await fetch(BASE + '/api/files/download/' + up.data.id, { headers: { cookie: acc.cookie } })).status === 200);
+await o.call('POST', '/api/settings/sales.afs_gate', { value: 'on' });
 console.log(`\n${pass} passed, ${fail} failed`); process.exit(fail ? 1 : 0);

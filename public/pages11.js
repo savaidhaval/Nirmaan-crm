@@ -132,7 +132,7 @@ bookingDetail = async function (id) {
   };
   box.querySelectorAll('[data-pdel]').forEach((b) => { b.onclick = async () => { if (confirm('Remove this co-applicant?')) await call(`/api/sales/parties/${b.dataset.pdel}`, 'DELETE', null, 'Removed'); }; });
   if ($('loan-new')) $('loan-new').onclick = async () => {
-    const v = await openForm({ title: 'Home loan', fields: [{ name: 'bank', label: 'Bank', required: true }, { name: 'sanction_paise', label: 'Sanctioned (₹)', type: 'money' }, { name: 'sanction_date', label: 'Sanction date', type: 'date' }, { name: 'disbursed_paise', label: 'Disbursed so far (₹)', type: 'money' }] });
+    const v = await openForm({ title: 'Home loan', fields: [{ name: 'bank', label: 'Bank', required: true }, { name: 'sanction_paise', label: 'Sanctioned (₹)', type: 'money' }, { name: 'sanction_date', label: 'Sanction date', type: 'date' }, { name: 'disbursed_paise', label: 'Disbursed so far (₹)', type: 'money' }, { name: 'rm_name', label: 'Bank relationship manager' }, { name: 'rm_email', label: 'Relationship manager email', type: 'email' }, { name: 'rm_phone', label: 'Relationship manager mobile', type: 'tel' }, { name: 'coordinator_email', label: 'Bank project coordinator email (for escalation)', type: 'email' }] });
     if (v) await call(`/api/sales/bookings/${id}/loans`, 'POST', { ...v, sanction_paise: v.sanction_paise || 0, disbursed_paise: v.disbursed_paise || 0 }, 'Loan recorded');
   };
   box.querySelectorAll('[data-loan]').forEach((b) => { b.onclick = async () => {

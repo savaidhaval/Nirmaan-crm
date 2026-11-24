@@ -123,10 +123,10 @@ async function postWithOwnerOverride(path, body, okMsg) {
     try { const r = await api(path, { method: 'POST', body }); if (okMsg) toast(okMsg); return r; }
     catch (e) {
       const code = e.data && e.data.code;
-      if (['cc', 'boq_cap'].includes(code) && currentUser.role === 'owner') {
+      if (['cc', 'boq_cap', 'backdate_reason'].includes(code) && currentUser.role === 'owner') {
         const x = await openForm({ title: 'Go ahead anyway?', intro: e.message, fields: [{ name: 'why', label: 'Your reason (at least 10 letters)', required: true }] });
         if (!x) return null;
-        body[code === 'cc' ? 'override_note' : 'boq_override_note'] = x.why; continue;
+        body[{ cc: 'override_note', boq_cap: 'boq_override_note', backdate_reason: 'backdate_reason' }[code]] = x.why; continue;
       }
       toast(e.message, 7000); return null;
     }
