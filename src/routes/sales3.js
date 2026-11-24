@@ -544,6 +544,9 @@ export function registerSales3(router, h) {
       const b = await req.json().catch(() => ({}));
       const reason = String(b.override_note || '').trim().slice(0, 300);
       const problems = [];
+      // No-dues: the buyer's 1% TDS (s.194-IA) must be verified (challan / Form 16B) before possession. This one has no override.
+      const tdsOpen = await env.DB.prepare("SELECT COUNT(*) AS n, COALESCE(SUM(amount_paise), 0) AS a FROM sal_tds_credits WHERE booking_id = ? AND status = 'pending'").bind(booking.id).first();
+      if (tdsOpen.n) return json({ ok: false, error: `The buyer's TDS of ${rupees(tdsOpen.a)} (s.194-IA, 1%) is not yet verified. Get the Form 26QB challan / Form 16B and verify it under Collections before possession.`, code: 'tds_pending' }, 409);
       if (due > 0) problems.push(`${rupees(due)} is still due`);
       if (snags) problems.push(`${snags} snag${snags === 1 ? ' is' : 's are'} not verified fixed`);
       if (open) problems.push(`${open} checklist item${open === 1 ? ' is' : 's are'} not ticked`);
@@ -571,8 +574,10 @@ export function registerSales3(router, h) {
       if (!bank) return json({ ok: false, error: 'Enter the bank.' }, 400);
       const sanction = Math.round(num(b.sanction_paise)), disb = Math.round(num(b.disbursed_paise));
       if (sanction < 0 || disb < 0 || disb > sanction) return json({ ok: false, error: 'The amount disbursed cannot be more than the amount sanctioned.' }, 400);
-      const r = await env.DB.prepare('INSERT INTO sal_booking_loans (booking_id, bank, sanction_paise, sanction_date, disbursed_paise, notes, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
-        .bind(booking.id, bank, sanction, b.sanction_date && /^\d{4}-\d{2}-\d{2}$/.test(b.sanction_date) ? b.sanction_date : null, disb, String(b.notes || '').slice(0, 300), req.user.user_id, nowStr()).run();
+      const em = (v) => { const x = String(v || '').trim().slice(0, 120); return x && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(x) ? x : null; };
+      if ((b.rm_email && !em(b.rm_email)) || (b.coordinator_email && !em(b.coordinator_email))) return json({ ok: false, error: 'An email address for the bank looks wrong.' }, 400);
+      const r = await env.DB.prepare('INSERT INTO sal_booking_loans (booking_id, bank, sanction_paise, sanction_date, disbursed_paise, notes, created_by, created_at, rm_name, rm_email, rm_phone, coordinator_email) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+        .bind(booking.id, bank, sanction, b.sanction_date && /^\d{4}-\d{2}-\d{2}$/.test(b.sanction_date) ? b.sanction_date : null, disb, String(b.notes || '').slice(0, 300), req.user.user_id, nowStr(), String(b.rm_name || '').slice(0, 80) || null, em(b.rm_email), String(b.rm_phone || '').slice(0, 20) || null, em(b.coordinator_email)).run();
       await audit(env, req.user, 'create', 'sal_booking_loans', r.meta.last_row_id, `Loan from ${bank}: sanctioned ${rupees(sanction)} for ${booking.customer_name}`).run();
       return json({ ok: true, data: { id: r.meta.last_row_id } });
     } catch (e) { return serverError(e, 'loan-add'); }
@@ -586,7 +591,10 @@ export function registerSales3(router, h) {
       if (!['owner', 'pm', 'accounts', 'sales'].includes(req.user.role)) return json({ ok: false, error: 'Not allowed.' }, 403);
       const b = await req.json(); const disb = b.disbursed_paise !== undefined ? Math.round(num(b.disbursed_paise)) : l.disbursed_paise, sanction = b.sanction_paise !== undefined ? Math.round(num(b.sanction_paise)) : l.sanction_paise;
       if (disb < 0 || sanction < 0 || disb > sanction) return json({ ok: false, error: 'The amount disbursed cannot be more than the amount sanctioned.' }, 400);
-      await env.DB.prepare('UPDATE sal_booking_loans SET sanction_paise = ?, disbursed_paise = ?, notes = COALESCE(?, notes) WHERE id = ?').bind(sanction, disb, b.notes !== undefined ? String(b.notes).slice(0, 300) : null, l.id).run();
+      const em = (v) => { const x = String(v || '').trim().slice(0, 120); return x && /^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(x) ? x : null; };
+      if ((b.rm_email && !em(b.rm_email)) || (b.coordinator_email && !em(b.coordinator_email))) return json({ ok: false, error: 'An email address for the bank looks wrong.' }, 400);
+      await env.DB.prepare('UPDATE sal_booking_loans SET sanction_paise = ?, disbursed_paise = ?, notes = COALESCE(?, notes), rm_name = COALESCE(?, rm_name), rm_email = COALESCE(?, rm_email), rm_phone = COALESCE(?, rm_phone), coordinator_email = COALESCE(?, coordinator_email) WHERE id = ?')
+        .bind(sanction, disb, b.notes !== undefined ? String(b.notes).slice(0, 300) : null, b.rm_name !== undefined ? String(b.rm_name).slice(0, 80) : null, b.rm_email !== undefined ? em(b.rm_email) : null, b.rm_phone !== undefined ? String(b.rm_phone).slice(0, 20) : null, b.coordinator_email !== undefined ? em(b.coordinator_email) : null, l.id).run();
       return json({ ok: true });
     } catch (e) { return serverError(e, 'loan-update'); }
   }));

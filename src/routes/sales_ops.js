@@ -4,6 +4,7 @@
 import { saleBlock, holdFor } from '../core/gates.js';
 import { ccSaleBlock } from './m2gaps.js';
 import { holdTokenCheck, holdTokenInsert } from './m2step2.js';
+import { afsGateOn, tds194iaApplies } from './m4gaps.js';
 
 export const LEAD_TRANSITIONS = {
   new: ['contacted', 'interested', 'visit_scheduled', 'lost'],
@@ -19,6 +20,7 @@ export const LEAD_TRANSITIONS = {
 export const phone10 = (p) => String(p || '').replace(/\D/g, '').slice(-10);
 const rupees = (p) => '₹' + (Number(p) / 100).toLocaleString('en-IN');
 const MANAGER = ['owner', 'pm'];
+const todayIST = () => new Date(Date.now() + 19800000).toISOString().slice(0, 10);
 
 export const shared = {};   // createLead is shared with the CSV importer
 
@@ -319,13 +321,18 @@ export function registerSalesOps(router, h) {
           list, discountBp ? String(b.discount_reason || (sheet ? `Per approved cost sheet v${sheet.version}` : '')).slice(0, 300) : null, approvedBy, snapshot).run();
       const bookingId = ins.meta.last_row_id;
       const stmts = [];
-      let allocated = 0;
+      let allocated = 0, billable = 0;
+      const gate = await afsGateOn(getSetting, env), tenth = Math.floor(agreed / 10);
       stages.forEach((st, i) => {
         const amount = i === stages.length - 1 ? agreed - allocated : Math.floor(agreed * st.pct_bp / 10000);
         allocated += amount;
-        stmts.push(env.DB.prepare('INSERT INTO sal_demands (booking_id, stage_id, label, amount_paise, gst_paise, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
-          .bind(bookingId, st.id, st.stage_name, amount, Math.round(amount * gstBp / 10000), st.milestone_key ? 'scheduled' : 'ready', now));
+        // MahaRERA s.13: no more than 10% may be asked for before the Agreement for Sale is registered. Stages past that stay held until it is.
+        let status = st.milestone_key ? 'scheduled' : 'ready', hold = null;
+        if (status === 'ready') { if (gate && billable + amount > tenth) { status = 'scheduled'; hold = 'AFS registration pending: more than 10% cannot be asked for before the Agreement for Sale is registered'; } else billable += amount; }
+        stmts.push(env.DB.prepare('INSERT INTO sal_demands (booking_id, stage_id, label, amount_paise, gst_paise, status, created_at, hold_reason) VALUES (?, ?, ?, ?, ?, ?, ?, ?)')
+          .bind(bookingId, st.id, st.stage_name, amount, Math.round(amount * gstBp / 10000), status, now, hold));
       });
+      if (await tds194iaApplies(getSetting, env, agreed)) stmts.push(env.DB.prepare('UPDATE sal_bookings SET tds194ia = 1 WHERE id = ?').bind(bookingId));
       if (sheet) stmts.push(env.DB.prepare('UPDATE sal_cost_sheets SET booking_id = ? WHERE id = ? AND booking_id IS NULL').bind(bookingId, sheet.id));
       const leadId = b.lead_id ? Number(b.lead_id) : unit.hold_lead_id;
       if (leadId) stmts.push(env.DB.prepare("UPDATE sal_leads SET status = 'booked', next_followup_at = NULL WHERE id = ?").bind(leadId));
@@ -358,16 +365,20 @@ export function registerSalesOps(router, h) {
     const proj = await env.DB.prepare('SELECT code FROM projects WHERE id = ?').bind(booking.project_id).first();
     const fy = fyOf(); const key = `rcpt:${booking.project_id}:${fy}`; const prefix = `RC-${proj ? proj.code : booking.project_id}-${fy}-`;
     const now = nowStr();
+    // s.194-IA: on a flat at or above the threshold the buyer deducts 1% and pays it to the Government themselves. That part is not "received" until Accounts verify the challan / Form 16B.
+    const heldTds = booking.tds194ia === 1 && f.kind === 'principal' && f.tds > 0 ? f.tds : 0;
+    const tdsNow = f.tds - heldTds;
     const stmts = [
       env.DB.prepare('INSERT INTO counters (key, value) VALUES (?, 1) ON CONFLICT(key) DO UPDATE SET value = value + 1').bind(key),
-      env.DB.prepare(`INSERT INTO sal_receipts (booking_id, demand_id, amount_paise, tds_paise, mode, ref_no, received_on, received_by, note, receipt_no, account, kind, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ? || printf('%05d', (SELECT value FROM counters WHERE key = ?)), ?, ?, ?)`)
-        .bind(booking.id, f.demandId, f.amount, f.tds, f.mode, f.ref, f.received_on || now.substring(0, 10), user.user_id, String(f.note || '').slice(0, 300), prefix, key, f.account, f.kind, now),
+      env.DB.prepare(`INSERT INTO sal_receipts (booking_id, demand_id, amount_paise, tds_paise, mode, ref_no, received_on, received_by, note, receipt_no, account, kind, created_at, backdate_note)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ? || printf('%05d', (SELECT value FROM counters WHERE key = ?)), ?, ?, ?, ?)`)
+        .bind(booking.id, f.demandId, f.amount, tdsNow, f.mode, f.ref, f.received_on || now.substring(0, 10), user.user_id, String(f.note || '').slice(0, 300), prefix, key, f.account, f.kind, now, f.backdate_note || null),
     ];
-    if (f.demandId) stmts.push(env.DB.prepare(`UPDATE sal_demands SET settled_paise = settled_paise + ?, status = CASE WHEN settled_paise + ? >= amount_paise + COALESCE(gst_paise, 0) THEN 'paid' ELSE 'partial' END WHERE id = ?`).bind(f.amount + f.tds, f.amount + f.tds, f.demandId));
+    if (heldTds) stmts.push(env.DB.prepare("INSERT INTO sal_tds_credits (booking_id, receipt_id, demand_id, amount_paise, status, created_at) VALUES (?, last_insert_rowid(), ?, ?, 'pending', ?)").bind(booking.id, f.demandId, heldTds, now));
+    if (f.demandId) stmts.push(env.DB.prepare(`UPDATE sal_demands SET settled_paise = settled_paise + ?, status = CASE WHEN settled_paise + ? >= amount_paise + COALESCE(gst_paise, 0) THEN 'paid' ELSE 'partial' END WHERE id = ?`).bind(f.amount + tdsNow, f.amount + tdsNow, f.demandId));
     stmts.push(...extra);
     const res = await env.DB.batch(stmts);
-    const id = res[1].meta.last_row_id;
+    const id = res[1].meta.last_row_id;   // (the receipt is statement 1 whether or not a TDS credit follows it)
     const rn = (await env.DB.prepare('SELECT receipt_no FROM sal_receipts WHERE id = ?').bind(id).first()).receipt_no;
     await audit(env, user, 'create', 'sal_receipts', booking.id, `${f.kind === 'interest' ? 'Interest receipt' : 'Receipt'} ${rn} ${rupees(f.amount)} (${f.mode}${f.ref ? ' ' + f.ref : ''}, ${f.account}) from ${booking.customer_name}`);
     return { receiptNo: rn, id };
@@ -393,6 +404,20 @@ export function registerSalesOps(router, h) {
       if (ref && await env.DB.prepare('SELECT id FROM sal_receipts WHERE booking_id = ? AND ref_no = ? AND mode = ? AND reversed_at IS NULL').bind(booking.id, ref, mode).first()) return json({ ok: false, error: 'A receipt with this reference already exists for this booking.' }, 409);
       const account = b.account === 'project_other' ? 'project_other' : 'rera_designated';
       if (account === 'project_other' && !['owner', 'accounts'].includes(req.user.role)) return json({ ok: false, error: 'Only the Owner or Accounts can route a receipt outside the RERA designated account.' }, 403);
+      // A receipt is dated when the money reached the bank. Not in the future; not more than a few days back unless the Owner writes why.
+      let backNote = null;
+      if (b.received_on) {
+        const on = String(b.received_on).slice(0, 10), today = todayIST();
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(on)) return json({ ok: false, error: 'The date must look like 2026-11-30.' }, 400);
+        if (on > today) return json({ ok: false, error: 'A receipt cannot be dated in the future.' }, 400);
+        const back = await num(env, 'sales.receipt_backdate_days', 7);
+        if (on < new Date(Date.parse(today + 'T00:00:00Z') - back * 86400000).toISOString().slice(0, 10)) {
+          const why = String(b.backdate_reason || '').trim().slice(0, 200);
+          if (req.user.role !== 'owner') return json({ ok: false, error: `This receipt is dated more than ${back} days back. Only the Owner can accept that, with a written reason; for money that came in through the bank, import the bank statement instead.`, code: 'backdate' }, 403);
+          if (why.length < 10) return json({ ok: false, error: `This receipt is dated more than ${back} days back. Give the reason (at least 10 letters).`, code: 'backdate_reason' }, 409);
+          backNote = why;
+        }
+      }
       const kind = b.kind === 'interest' ? 'interest' : 'principal';   // interest paid on delayed instalments does not settle any demand
       let demandId = null;
       if (b.demand_id && kind === 'principal') {
@@ -400,7 +425,7 @@ export function registerSalesOps(router, h) {
         if (!d) return json({ ok: false, error: 'That demand does not belong to this booking.' }, 400);
         demandId = d.id;
       }
-      const fields = { amount, tds, mode, ref, account, kind, demandId, received_on: b.received_on, note: b.note };
+      const fields = { amount, tds, mode, ref, account, kind, demandId, received_on: b.received_on, note: b.note, backdate_note: backNote };
       // Optional second-person approval for large receipts: it waits in its own list and changes nothing until approved.
       const limit = Number(await getSetting(env, 'sales.receipt_approval_limit_paise')) || 0;
       if (limit > 0 && amount + tds >= limit) {
@@ -425,6 +450,7 @@ export function registerSalesOps(router, h) {
       if (String(b.reason || '').trim().length < 5) return json({ ok: false, error: 'Give a reason for the reversal (e.g. cheque bounced).' }, 400);
       const stmts = [env.DB.prepare('UPDATE sal_receipts SET reversed_at = ?, reversed_by = ?, reversal_note = ? WHERE id = ? AND reversed_at IS NULL').bind(nowStr(), req.user.user_id, String(b.reason).slice(0, 300), r.id)];
       if (r.demand_id) stmts.push(env.DB.prepare(`UPDATE sal_demands SET settled_paise = MAX(settled_paise - ?, 0), status = CASE WHEN settled_paise - ? <= 0 THEN 'ready' WHEN settled_paise - ? >= amount_paise + COALESCE(gst_paise, 0) THEN 'paid' ELSE 'partial' END WHERE id = ?`).bind(r.amount_paise + r.tds_paise, r.amount_paise + r.tds_paise, r.amount_paise + r.tds_paise, r.demand_id));
+      stmts.push(env.DB.prepare("UPDATE sal_tds_credits SET status = 'cancelled' WHERE receipt_id = ? AND status IN ('pending', 'verified')").bind(r.id));
       stmts.push(env.DB.prepare('INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, ?, ?, ?, ?, ?)').bind(req.user.user_id, 'reverse', 'sal_receipts', r.id, `Receipt ${r.receipt_no || r.id} ${rupees(r.amount_paise)} from ${r.customer_name} reversed. Reason: ${b.reason}`, nowStr()));
       await env.DB.batch(stmts);
       return json({ ok: true });
@@ -440,8 +466,20 @@ export function registerSalesOps(router, h) {
       const b = await req.json();
       const ok = (d) => d === null || d === undefined || d === '' || /^\d{4}-\d{2}-\d{2}$/.test(String(d));
       if (!ok(b.agreement_date) || !ok(b.registration_date)) return json({ ok: false, error: 'Dates must look like 2026-11-30.' }, 400);
-      await env.DB.prepare('UPDATE sal_bookings SET agreement_date = COALESCE(?, agreement_date), registration_date = COALESCE(?, registration_date), status = CASE WHEN ? IS NOT NULL THEN \'registered\' ELSE status END WHERE id = ?')
-        .bind(b.agreement_date || null, b.registration_date || null, b.registration_date || null, booking.id).run();
+      // Registering the Agreement for Sale needs its registration number and the scanned Index-II: that is what opens the demands beyond 10%.
+      const afsNo = String(b.afs_reg_no || '').trim().slice(0, 60) || booking.afs_reg_no || null;
+      let afsDoc = booking.afs_doc_id || null;
+      if (b.afs_doc_id) { const dd = await env.DB.prepare('SELECT id FROM documents WHERE id = ? AND deleted_at IS NULL AND project_id = ?').bind(Number(b.afs_doc_id), booking.project_id).first(); if (!dd) return json({ ok: false, error: 'The Index-II copy was not found.' }, 400); afsDoc = dd.id; }
+      if (b.registration_date && (await afsGateOn(getSetting, env)) && (!afsNo || !afsDoc)) return json({ ok: false, error: 'To record the registration, enter the Agreement for Sale registration number and attach the scanned Index-II.', code: 'afs' }, 400);
+      const regNow = !!(b.registration_date && afsNo && afsDoc);
+      await env.DB.batch([
+        env.DB.prepare('UPDATE sal_bookings SET agreement_date = COALESCE(?, agreement_date), registration_date = COALESCE(?, registration_date), afs_reg_no = ?, afs_doc_id = ?, status = CASE WHEN ? IS NOT NULL THEN \'registered\' ELSE status END WHERE id = ?')
+          .bind(b.agreement_date || null, b.registration_date || null, afsNo, afsDoc, b.registration_date || null, booking.id),
+        // the demands that were held back for the 10% rule are released: those with no stage to wait for now, and those whose stage was already certified
+        ...(regNow ? [env.DB.prepare(`UPDATE sal_demands SET status = 'ready', hold_reason = NULL, due_date = COALESCE(due_date, date('now', '+7 days')) WHERE booking_id = ? AND status = 'scheduled' AND hold_reason LIKE 'AFS registration pending%'
+          AND (stage_id IS NULL OR COALESCE((SELECT milestone_key FROM sal_plan_stages s WHERE s.id = sal_demands.stage_id), '') = ''
+            OR EXISTS (SELECT 1 FROM sal_plan_stages s JOIN site_milestones m ON m.project_id = s.project_id AND m.milestone_key = s.milestone_key AND m.status = 'done' AND m.deleted_at IS NULL WHERE s.id = sal_demands.stage_id))`).bind(booking.id)] : []),
+      ]);
       await audit(env, req.user, 'registration', 'sal_bookings', booking.id, `Booking of ${booking.customer_name}: agreement ${b.agreement_date || '-'}, registration ${b.registration_date || '-'}`);
       return json({ ok: true });
     } catch (e) { return serverError(e, 'registration'); }

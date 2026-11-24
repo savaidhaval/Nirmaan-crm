@@ -1086,8 +1086,8 @@ async function bookingDetail(id) {
   };
   ov.querySelectorAll('[data-rcpt]').forEach((b) => {
     b.onclick = async () => {
-      const v = await openForm({ title: 'Record receipt', fields: [{ name: 'amount_paise', label: 'Amount received (₹)', type: 'money', required: true }, { name: 'tds_paise', label: 'TDS deducted (₹)', type: 'money' }, { name: 'mode', label: 'Mode', type: 'select', options: [['bank', 'Bank transfer'], ['cheque', 'Cheque'], ['upi', 'UPI'], ['cash', 'Cash']] }, { name: 'ref_no', label: 'Reference / cheque no.' }, { name: 'received_on', label: 'Date', type: 'date', value: today() }] });
-      if (v) { const r = await act(api(`/api/sales/bookings/${id}/receipts`, { method: 'POST', body: { ...v, demand_id: Number(b.dataset.rcpt) } })); if (r) { toast(r.data && r.data.pending ? r.data.message : 'Receipt saved', r.data && r.data.pending ? 8000 : 3000); ov.remove(); bookingDetail(id); } }
+      const v = await openForm({ title: 'Record receipt', fields: [{ name: 'amount_paise', label: 'Amount received (₹)', type: 'money', required: true }, { name: 'tds_paise', label: 'TDS deducted by the buyer (₹) (1% on flats of ₹50 lakh and above; it counts as received only after the challan is verified)', type: 'money' }, { name: 'mode', label: 'Mode', type: 'select', options: [['bank', 'Bank transfer'], ['cheque', 'Cheque'], ['upi', 'UPI'], ['cash', 'Cash']] }, { name: 'ref_no', label: 'Reference / cheque no.' }, { name: 'received_on', label: 'Date', type: 'date', value: today() }] });
+      if (v) { const r = await postWithOwnerOverride(`/api/sales/bookings/${id}/receipts`, { ...v, demand_id: Number(b.dataset.rcpt) }); if (r) { toast(r.data && r.data.pending ? r.data.message : 'Receipt saved', r.data && r.data.pending ? 8000 : 3000); ov.remove(); bookingDetail(id); } }
     };
   });
 }

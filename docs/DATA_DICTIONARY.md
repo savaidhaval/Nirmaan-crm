@@ -502,3 +502,12 @@ id TEXT PK, source TEXT, seen_at TEXT
 - GET /api/procurement/grns-without-photo lists receipts with no gate photo (document_id empty) in the user's projects.
 - Wastage allowance in the weekly alert, per work-order line: the line's own wastage_bp, else the first word of stk.wastage_defaults found in the store item's name (starter list: rmc=100; concrete=100; steel=250; rebar=250; reinforcement=250; cement=300; brick=500; block=500; aggregate=500; sand=600; tile=600; paint=500; waterproof=500; putty=500), else stk.wastage_alert_bp (default 250).
 
+## Module 4 gaps, step 1 (migration 0050)
+- sal_bookings: afs_reg_no (registration number of the registered Agreement for Sale), afs_doc_id (documents.id of the scanned Index-II, category agreement), tds194ia (1 = the buyer deducts TDS: price at or above tax.tds_194ia_threshold_paise when booked).
+- sal_demands.hold_reason now also carries "AFS registration pending: ..." for a demand held by the 10% rule. The release rule: status scheduled and hold_reason starting "AFS registration pending" becomes ready when the booking's afs_reg_no and afs_doc_id are saved (if its stage has no milestone key, or the stage's milestone is already certified for the flat's wing).
+- sal_tds_credits (booking_id, receipt_id, demand_id, amount_paise, status pending|verified|cancelled, challan_no = Form 26QB acknowledgement, form16b_doc_id, paid_on, verified_by/at): the buyer's TDS part of a receipt. While pending it is in neither sal_receipts.tds_paise nor sal_demands.settled_paise; verifying adds it to both. In the backup list.
+- sal_booking_loans: rm_name, rm_email, rm_phone, coordinator_email.
+- sal_receipts.backdate_note: the Owner's reason when a receipt was dated more than sales.receipt_backdate_days back.
+- Settings: sales.afs_gate (on unless Off), tax.tds_194ia_on (on unless Off), tax.tds_194ia_threshold_paise (default 500000000 = Rs 50 lakh, confirm with your CA), tax.tds_194ia_bp (default 100, shown for reference; the amount held is what is typed on the receipt), sales.receipt_backdate_days (7), sales.remind_before_days (3), sales.remind_interest_days (15), sales.bank_followup_days (10).
+- Read-only routes: GET /api/sales/collections-ladder, GET /api/reports/collections-forecast, GET /api/sales/bank-followups, GET /api/sales/tds-credits. Nothing about them is stored.
+

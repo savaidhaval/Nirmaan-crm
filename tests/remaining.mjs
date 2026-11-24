@@ -7,6 +7,7 @@ class C { constructor() { this.cookie = ''; }
     const r = await fetch(BASE + p, { method: m, headers: h, body, redirect: 'manual' }); const sc = r.headers.get('set-cookie'); if (sc) this.cookie = sc.split(';')[0]; if (raw) return r; let d = null; try { d = await r.json(); } catch (e) { /* */ } return { status: r.status, data: d && d.data, err: d && d.error, code: d && d.code }; } }
 const run = Date.now().toString(36);
 const o = new C(); await o.call('POST', '/api/auth/login', { email: process.env.OWNER_EMAIL, password: process.env.OWNER_PASSWORD });
+await o.call('POST', '/api/settings/sales.afs_gate', { value: 'off' });   // these suites bill stages without registering the Agreement for Sale; the 10% rule is tested in m4_step1
 let seq = 0;
 const mkUser = async (role, projects) => { const email = `zr-${role}-${++seq}-${run}@test.local`; const r = await o.call('POST', '/api/users', { name: 'zr ' + role + seq, email, role, projects }); const pw = 'ZrStrongPass-' + run; const c = new C(); await c.call('POST', '/api/auth/login', { email, password: r.data.temporaryPassword }); await c.call('POST', '/api/auth/change-password', { currentPassword: r.data.temporaryPassword, newPassword: pw }); c.id = r.data.id; return c; };
 const iso = (d) => new Date(Date.now() + 19800000 + d * 86400000).toISOString().slice(0, 10);
@@ -136,5 +137,6 @@ ok('it plays inside the app', meta2.viewable === true && meta2.kind === 'audio')
 const fake = new FormData(); fake.append('file', new Blob(['<script>x</script>'], { type: 'audio/webm' }), 'x.webm'); fake.append('title', 'x'); fake.append('project_id', String(pid)); fake.append('module', 'site');
 ok('a file that only pretends to be audio is refused', (await site.call('POST', '/api/files/upload', fake)).status === 400);
 
+await o.call('POST', '/api/settings/sales.afs_gate', { value: 'on' });
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
