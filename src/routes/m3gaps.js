@@ -2,6 +2,24 @@
 // BOQ allowance on indent lines, the gate-receipt rules, and the weekly wastage alert. Limits come from Settings; confirm with your PM / QS.
 import { approvalState } from '../core/gates.js';
 
+export function metres(lat1, lng1, lat2, lng2) {
+  const R = 6371000, rad = (d) => (d * Math.PI) / 180;
+  const a = Math.sin(rad(lat2 - lat1) / 2) ** 2 + Math.cos(rad(lat1)) * Math.cos(rad(lat2)) * Math.sin(rad(lng2 - lng1) / 2) ** 2;
+  return Math.round(2 * R * Math.asin(Math.sqrt(a)));
+}
+
+// Usual allowed wastage for common materials on Mumbai building sites, in basis points. Starting figures only: the QS can replace the list in
+// Settings (stk.wastage_defaults, "word=bp; word=bp", the first word found in the store item's name wins). A work-order line's own figure always wins.
+export const WASTAGE_STARTER = 'rmc=100; concrete=100; steel=250; rebar=250; reinforcement=250; cement=300; brick=500; block=500; aggregate=500; sand=600; tile=600; paint=500; waterproof=500; putty=500';
+export function wastageFor(name, listText, fallbackBp) {
+  const n = String(name || '').toLowerCase();
+  for (const part of String(listText || WASTAGE_STARTER).split(/[;\n]+/)) {
+    const [k, v] = part.split('=').map((x) => x && x.trim()); const bp = Number(v);
+    if (k && Number.isFinite(bp) && bp >= 0 && n.includes(k.toLowerCase())) return bp;
+  }
+  return fallbackBp;
+}
+
 // Soft CC-floor check: only when a CC floor is on record for the wing. (No CC recorded = no lock, as for sales.)
 export async function ccOverFloor(env, projectId, wing, floors, stateCache) {
   const list = [...new Set(floors.filter((f) => f != null))];
@@ -62,22 +80,30 @@ export async function wastageSweep(env, getSetting, nowStr) {
   const ist = new Date(Date.now() + 19800000);
   if (!env.WASTAGE_TEST && (ist.getUTCDay() !== 1 || ist.getUTCHours() !== 10)) return 0;   // WASTAGE_TEST exists only in test builds (.dev.vars / CI)
   const raw = Number(await getSetting(env, 'stk.wastage_alert_bp')); const tol = Number.isFinite(raw) && raw >= 0 && (await getSetting(env, 'stk.wastage_alert_bp')) !== null ? raw : 250;
+  const listText = String((await getSetting(env, 'stk.wastage_defaults')) || '');
   const [theo, issued] = await env.DB.batch([
-    env.DB.prepare(`SELECT w.project_id AS p, i.stock_item_id AS s, SUM(COALESCE(m.q, 0) * i.consumption_per_unit) AS t FROM con_wo_items i JOIN con_work_orders w ON w.id = i.wo_id
+    env.DB.prepare(`SELECT w.project_id AS p, i.stock_item_id AS s, s.name AS nm, i.wastage_bp AS wb, COALESCE(m.q, 0) * i.consumption_per_unit AS t FROM con_wo_items i JOIN con_work_orders w ON w.id = i.wo_id JOIN stk_items s ON s.id = i.stock_item_id
       LEFT JOIN (SELECT wo_item_id, SUM(qty) AS q FROM con_measurements WHERE status = 'approved' GROUP BY wo_item_id) m ON m.wo_item_id = i.id
-      WHERE w.status IN ('approved', 'closed') AND i.stock_item_id IS NOT NULL AND i.consumption_per_unit > 0 GROUP BY w.project_id, i.stock_item_id`),
+      WHERE w.status IN ('approved', 'closed') AND i.stock_item_id IS NOT NULL AND i.consumption_per_unit > 0 LIMIT 2000`),
     env.DB.prepare(`SELECT project_id AS p, item_id AS s, SUM(CASE kind WHEN 'issue' THEN qty WHEN 'receipt' THEN -qty ELSE 0 END) AS q FROM stk_moves WHERE wo_id IS NOT NULL AND status = 'posted' GROUP BY project_id, item_id`),
   ]);
   const iss = Object.fromEntries(issued.results.map((r) => [r.p + ':' + r.s, r.q]));
   const week = `${ist.getUTCFullYear()}-${String(Math.ceil((((ist - Date.UTC(ist.getUTCFullYear(), 0, 1)) / 86400000) + 1) / 7)).padStart(2, '0')}`;
-  const alerts = theo.results.filter((r) => r.t > 0 && (iss[r.p + ':' + r.s] || 0) > r.t * (10000 + tol) / 10000 + 1e-9)
+  // allowed = what the measured work needs plus the allowed wastage of each line (the line's own figure, else the material's usual figure, else the general one)
+  const agg = new Map();
+  for (const r of theo.results) {
+    const key = r.p + ':' + r.s; const a = agg.get(key) || { p: r.p, s: r.s, t: 0, allowed: 0 };
+    const bp = r.wb != null ? r.wb : wastageFor(r.nm, listText, tol);
+    a.t += r.t; a.allowed += r.t * (10000 + bp) / 10000; agg.set(key, a);
+  }
+  const alerts = [...agg.values()].filter((r) => r.t > 0 && (iss[r.p + ':' + r.s] || 0) > r.allowed + 1e-9)
     .map((r) => ({ p: r.p, s: r.s, t: Math.round(r.t * 1000) / 1000, q: Math.round((iss[r.p + ':' + r.s] || 0) * 1000) / 1000, k: `wastage:${r.p}:${r.s}:${week}` })).slice(0, 50);
   if (!alerts.length) return 0;
   await env.DB.prepare(`INSERT INTO notifications (user_id, title, body, link, created_at)
-    SELECT u.id, 'Material wastage above ' || (?3 / 100.0) || '%: ' || COALESCE((SELECT name FROM stk_items WHERE id = json_extract(a.value, '$.s')), 'item'),
+    SELECT u.id, 'Material wastage above the allowed: ' || COALESCE((SELECT name FROM stk_items WHERE id = json_extract(a.value, '$.s')), 'item'),
       'Issued ' || json_extract(a.value, '$.q') || ' against ' || json_extract(a.value, '$.t') || ' needed for the measured work. Check the store and the work orders.', json_extract(a.value, '$.k'), ?2
     FROM json_each(?1) a JOIN users u ON u.active = 1 AND u.deleted_at IS NULL AND u.role IN ('owner', 'pm')
-    WHERE NOT EXISTS (SELECT 1 FROM notifications n WHERE n.user_id = u.id AND n.link = json_extract(a.value, '$.k'))`).bind(JSON.stringify(alerts), nowStr(), tol).run();
+    WHERE NOT EXISTS (SELECT 1 FROM notifications n WHERE n.user_id = u.id AND n.link = json_extract(a.value, '$.k'))`).bind(JSON.stringify(alerts), nowStr()).run();
   return alerts.length;
 }
 
@@ -102,6 +128,16 @@ export function registerM3Gaps(router, h) {
   const audit = (env, user, action, entity, id, summary) =>
     env.DB.prepare('INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, ?, ?, ?, ?, ?)').bind(user.user_id, action, entity, id || 0, String(summary).slice(0, 600), nowStr()).run();
   const KINDS = ['site_engineer', 'rcc_consultant'];
+
+  // Receipts still waiting for their gate photo (their supplier bills are on hold until it is added).
+  router.get('/api/procurement/grns-without-photo', async (req, env) => withAuth(req, env, 'procurement', 'C', async (req, env) => {
+    try {
+      const ids = await visibleProjectIds(env, req.user); if (!ids.length) return json({ ok: true, data: { receipts: [] } });
+      const rows = (await env.DB.prepare(`SELECT g.id, g.received_on, g.challan_no, g.truck_no, p.po_no, v.name AS vendor, p.project_id FROM pro_grns g JOIN pro_pos p ON p.id = g.po_id LEFT JOIN pro_vendors v ON v.id = p.vendor_id
+        WHERE g.deleted_at IS NULL AND g.document_id IS NULL AND p.project_id IN (${ids.map(() => '?').join(',')}) ORDER BY g.id DESC LIMIT 100`).bind(...ids).all()).results;
+      return json({ ok: true, data: { receipts: rows } });
+    } catch (e) { return serverError(e, 'grns-nophoto'); }
+  }));
 
   const msOf = async (env, req) => {
     const ms = await env.DB.prepare('SELECT id, project_id, name, wing, milestone_key, status FROM site_milestones WHERE id = ? AND deleted_at IS NULL').bind(Number(req.params.id)).first();

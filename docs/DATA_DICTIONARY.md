@@ -496,3 +496,9 @@ id TEXT PK, source TEXT, seen_at TEXT
 - Cost to complete: completion per wing = the lower of (certified stages / all stages of that wing plus stages marked for all wings) and the PM figure; one source alone is used as it is; project completion = the average over wings with a figure; projected total = spent / completion. Computed on request, nothing stored.
 - Settings: site.dual_signoff (on unless Off), con.gst_hold (on unless Off).
 
+## Module 3 gaps, step 3 (migration 0049)
+- site_dprs: lat, lng, accuracy_m (where the report was filed from, optional), distance_m (metres from projects.lat / lng at the time, when both are known). A report far from the site is saved with a warning, never refused. Setting site.dpr_radius_m (default 500).
+- POST /api/procurement/indents/:id/repeat creates a new indent from an old one (same items, wing, floor and BOQ links; note "Same as <number>"), through the same rules as a new request.
+- GET /api/procurement/grns-without-photo lists receipts with no gate photo (document_id empty) in the user's projects.
+- Wastage allowance in the weekly alert, per work-order line: the line's own wastage_bp, else the first word of stk.wastage_defaults found in the store item's name (starter list: rmc=100; concrete=100; steel=250; rebar=250; reinforcement=250; cement=300; brick=500; block=500; aggregate=500; sand=600; tile=600; paint=500; waterproof=500; putty=500), else stk.wastage_alert_bp (default 250).
+

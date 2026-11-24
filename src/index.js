@@ -15,7 +15,7 @@ import { registerSales3, ensureDemandNumber, handoverDueSweep } from './routes/s
 import { registerM2Gaps, partnerPayBlock, leadSlaReassign } from './routes/m2gaps.js';
 import { registerM2Step2 } from './routes/m2step2.js';
 import { registerM2Step3 } from './routes/m2step3.js';
-import { ccOverFloor, wastageSweep, signoffBlock, registerM3Gaps } from './routes/m3gaps.js';
+import { ccOverFloor, wastageSweep, signoffBlock, registerM3Gaps, metres } from './routes/m3gaps.js';
 import { registerBulkDemands, demandLetterHtml } from './routes/bulk_demands.js';
 import { registerReports } from './routes/reports.js';
 import { registerFinance } from './routes/finance.js';
@@ -566,7 +566,7 @@ const EDITABLE_SETTINGS = ['po.pm_approval_limit_paise', 'access.allow_second_ow
   'brochure.price_list_default_audience', 'storage.warn_percent', 'sales.max_holds_per_user', 'sales.max_discount_bp', 'sales.pm_max_discount_bp',
   'interest.rate_bp', 'interest.grace_days', 'interest.enabled', 'security.require_mfa_roles', 'tax.stamp_duty_bp', 'tax.metro_cess_bp', 'tax.women_concession_bp', 'tax.registration_bp', 'tax.registration_cap_paise', 'tax.gst_bp',
   'con.enabled', 'con.pm_approval_limit_paise', 'con.gst_bp', 'con.tds_bp', 'budget.gst_basis', 'petty.low_balance_paise', 'ai.enabled', 'ai.daily_limit', 'ai.model', 'rera.designated_pct_bp', 'fea.review_days', 'red.member_doc_checklist', 'red.rent_due_day', 'red.oc_grace_days', 'red.demolition_proofs', 'red.rtgs_min_paise', 'apr.alert_days', 'bank.keep_days', 'drawing.ack_hours', 'sales.bulk_daily_limit', 'sales.bulk_chunk', 'sales.demand_link_days', 'sales.visit_objections', 'sales.visit_radius_m',
-  'pro.grn_gate', 'stk.wastage_alert_bp', 'site.dual_signoff', 'con.gst_hold', 'sales.sla_minutes', 'sales.rehold_block_hours', 'sales.lock_above_cc', 'sales.hold_needs_token', 'sales.broker_needs_confirmation', 'sales.source_lock_days', 'sales.token_cleared_hold_days', 'sales.brochure_url', 'sales.map_url',
+  'pro.grn_gate', 'stk.wastage_alert_bp', 'stk.wastage_defaults', 'site.dpr_radius_m', 'site.dual_signoff', 'con.gst_hold', 'sales.sla_minutes', 'sales.rehold_block_hours', 'sales.lock_above_cc', 'sales.hold_needs_token', 'sales.broker_needs_confirmation', 'sales.source_lock_days', 'sales.token_cleared_hold_days', 'sales.brochure_url', 'sales.map_url',
   'sales.receipt_approval_limit_paise', 'sales.discount_pm_limit_paise', 'sales.handover_template', 'apr.designations', 'con.variation_owner_limit_paise', 'con.advance_recovery_bp', 'con.dlp_months', 'pro.tolerance_bp', 'tax.tds_no_pan_bp', 'rera.cert_valid_days', 'qa.pour_checklist', 'qa.cube_7day_pct_bp', 'dpr.activities', 'dpr.safety_checks', 'bd.vacate_to_plinth_months', 'bd.completion_months', 'bd.steps_79a'];
 
 router.post('/api/settings/:key', async (req, env) => {
@@ -976,6 +976,18 @@ router.post('/api/site/dprs', async (req, env) => {
           const msg = st && await ccOverFloor(env, Number(project_id), wg, work.filter((w) => (w.wing || wing || null) === wg).map((w) => w.floor), st);
           if (msg) { const why = String(body.override_note || '').trim().slice(0, 300); if (user.role !== 'owner' || why.length < 10) return json({ ok: false, error: msg + ' No work above this floor can be logged until the next Further CC is approved.' + (user.role === 'owner' ? ' As the Owner you can log it only with a written reason.' : ''), code: 'cc' }, 409); dprCcNote = why; }
         } }
+      // Where the report was filed from (optional). Saved, and compared with the project's location; far away is a warning, never a block.
+      const gLat = body.lat === '' || body.lat == null ? null : Number(body.lat), gLng = body.lng === '' || body.lng == null ? null : Number(body.lng), gAcc = body.accuracy_m === '' || body.accuracy_m == null ? null : Number(body.accuracy_m);
+      if ((gLat != null || gLng != null) && !(gLat >= -90 && gLat <= 90 && gLng >= -180 && gLng <= 180)) return json({ ok: false, error: 'The location looks wrong.' }, 400);
+      let gDist = null, gWarn = null;
+      if (gLat != null && gLng != null && project_id) {
+        const pr = await env.DB.prepare('SELECT lat, lng FROM projects WHERE id = ?').bind(Number(project_id)).first();
+        if (pr && pr.lat != null && pr.lng != null) {
+          gDist = metres(gLat, gLng, pr.lat, pr.lng);
+          const radius = Number(await getSetting(env, 'site.dpr_radius_m')); const lim = Number.isFinite(radius) && radius > 0 ? radius : 500;
+          if (gDist > lim) gWarn = `This report was filed ${gDist} m from the project location. If you were not at the site, tell the PM.`;
+        }
+      }
       const hoursLost = body.hours_lost === '' || body.hours_lost == null ? null : Number(body.hours_lost);
       if (hoursLost != null && !(hoursLost >= 0 && hoursLost <= 24)) return json({ ok: false, error: 'Hours lost must be between 0 and 24.' }, 400);
       // Safety: the day's checks (from the setting dpr.safety_checks) and any incident. An incident needs a description and tells the PM and Owner at once.
@@ -1026,14 +1038,14 @@ router.post('/api/site/dprs', async (req, env) => {
           .bind(project_id, report_date, wing || '', work_summary, labourTotal, weather || '', materials_used || '', issues || '', safety_incident || '', user.user_id, uuid, now),
         ...lines.map((l) => env.DB.prepare('INSERT INTO site_dpr_labour (dpr_id, contractor_id, trade, headcount, created_at) VALUES ((SELECT id FROM site_dprs WHERE client_uuid = ?), ?, ?, ?, ?)').bind(uuid, l.id, l.trade, l.head, now)),
         ...work.map((w) => env.DB.prepare('INSERT INTO site_dpr_work (dpr_id, wing, floor, activity, qty, unit) VALUES ((SELECT id FROM site_dprs WHERE client_uuid = ?), ?, ?, ?, ?, ?)').bind(uuid, w.wing, w.floor, w.activity, w.qty, w.unit)),
-        env.DB.prepare('UPDATE site_dprs SET hours_lost = ?, lost_reason = ?, safety_checks = ?, incident_kind = ?, cc_override_note = ? WHERE client_uuid = ?').bind(hoursLost, lostReason, safety, incident, dprCcNote, uuid),
+        env.DB.prepare('UPDATE site_dprs SET hours_lost = ?, lost_reason = ?, safety_checks = ?, incident_kind = ?, cc_override_note = ?, lat = ?, lng = ?, accuracy_m = ?, distance_m = ? WHERE client_uuid = ?').bind(hoursLost, lostReason, safety, incident, dprCcNote, gLat, gLng, gAcc, gDist, uuid),
         ...(incident && incident !== 'none' ? [env.DB.prepare(`INSERT INTO notifications (user_id, title, body, link, created_at) SELECT id, ?, ?, 'site', ? FROM users WHERE role IN ('owner', 'pm') AND active = 1 AND deleted_at IS NULL
           ORDER BY role = 'owner' DESC, id IN (SELECT user_id FROM project_members WHERE project_id = ?) DESC, id DESC LIMIT 20`)
           .bind(`SAFETY: ${{ near_miss: 'Near miss', injury: 'Injury', dangerous: 'Dangerous occurrence' }[incident]} on site (${report_date})`, String(safety_incident).slice(0, 300), now, Number(project_id))] : []),
         env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, 'create', 'site_dprs', (SELECT id FROM site_dprs WHERE client_uuid = ?), ?, ?)`).bind(user.user_id, uuid, `DPR filed for ${report_date}`, now),
       ]);
       const result = { meta: { last_row_id: res[0].meta.last_row_id } };
-      return json({ ok: true, data: { id: result.meta.last_row_id } });
+      return json({ ok: true, data: { id: result.meta.last_row_id, warning: gWarn, distance_m: gDist } });
     } catch (e) {
       return serverError(e, 'dpr-create');
     }

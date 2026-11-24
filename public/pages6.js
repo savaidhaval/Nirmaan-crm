@@ -39,11 +39,11 @@ async function newIndent() {
 }
 
 function indentsHtml(list) {
-  const open = (list || []).filter((i) => ['submitted', 'approved'].includes(i.status));
+  const open = (list || []).filter((i) => ['submitted', 'approved'].includes(i.status) || (i.status === 'converted' && i.requested_by === currentUser.id)).slice(0, 12);   // my converted requests stay listed so I can ask again in one tap
   const canA = userCanClient('procurement', 'A'), canConvert = currentUser.role !== 'site' && userCanClient('procurement', 'C');
   if (!open.length) return '';
   return '<h3>Material requests (indents)</h3>' + open.map((i) => `<div class="card"><div class="row"><div><b>${esc(i.indent_no)}</b><p class="muted">${i.item_count} item${i.item_count === 1 ? '' : 's'}${i.requested_by_name ? ' · ' + esc(i.requested_by_name) : ''}${i.needed_by ? ' · needed ' + esc(i.needed_by) : ''}</p></div>${statusChip(i.status)}</div>
-    <div class="row-btns"><button class="btn small" data-ind-view="${i.id}">View</button>${i.status === 'submitted' && canA ? `<button class="btn small btn-primary" data-ind="approve" data-id="${i.id}">Approve</button><button class="btn small" data-ind="reject" data-id="${i.id}">Reject</button>` : ''}${i.status === 'approved' && canConvert ? `<button class="btn small btn-primary" data-ind="convert" data-id="${i.id}">Make RFQ</button>` : ''}</div></div>`).join('');
+    <div class="row-btns"><button class="btn small" data-ind-view="${i.id}">View</button><button class="btn small" data-ind-again="${i.id}">Ask again</button>${i.status === 'submitted' && canA ? `<button class="btn small btn-primary" data-ind="approve" data-id="${i.id}">Approve</button><button class="btn small" data-ind="reject" data-id="${i.id}">Reject</button>` : ''}${i.status === 'approved' && canConvert ? `<button class="btn small btn-primary" data-ind="convert" data-id="${i.id}">Make RFQ</button>` : ''}</div></div>`).join('');
 }
 
 function wireIndents(el) {
@@ -52,6 +52,10 @@ function wireIndents(el) {
     const ov = document.createElement('div'); ov.className = 'modal-overlay';
     ov.innerHTML = `<div class="modal"><h2>${esc(d.indent.indent_no)}</h2>${d.indent.note ? `<p>${esc(d.indent.note)}</p>` : ''}${d.items.map((i) => `<p>${esc(i.description)} — <b>${esc(i.qty)} ${esc(i.unit || '')}</b></p>`).join('')}<div class="modal-actions"><button class="btn btn-primary" id="iv-close">Close</button></div></div>`;
     document.body.appendChild(ov); $('iv-close').onclick = () => ov.remove();
+  }; });
+  el.querySelectorAll('[data-ind-again]').forEach((b) => { b.onclick = async () => {
+    const v = await openForm({ title: 'Ask for the same material again', intro: 'The same items and quantities go to the PM as a new request.', fields: [{ name: 'needed_by', label: 'Needed by', type: 'date' }], submit: 'Send request' });
+    if (v && await postWithOwnerOverride(`/api/procurement/indents/${b.dataset.indAgain}/repeat`, { needed_by: v.needed_by || null, client_uuid: crypto.randomUUID() }, 'Request sent')) loadProcurement();
   }; });
   el.querySelectorAll('[data-ind]').forEach((b) => { b.onclick = async () => {
     const act1 = b.dataset.ind; let body = {};
