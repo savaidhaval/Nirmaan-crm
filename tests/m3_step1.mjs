@@ -75,7 +75,8 @@ const ind = (qty) => site.call('POST', '/api/procurement/indents', { project_id:
 ok('an indent inside the BOQ is not flagged', (await ind(500)).data.over_boq === 0);
 const i2 = await ind(600);
 ok('an indent that takes the total past the BOQ is flagged over BOQ', i2.status === 200 && i2.data.over_boq === 1, JSON.stringify(i2));
-ok('and the PM is told', JSON.stringify((await pm.call('GET', '/api/notifications')).data).includes('OVER BOQ'));
+const nOver = Number((sql("SELECT COUNT(*) AS n FROM notifications WHERE body LIKE '%OVER BOQ%' AND created_at >= datetime('now', '-10 minutes')").match(/"n":\s*(\d+)/) || [])[1]);
+ok('and the PMs are told', nOver > 0, String(nOver));
 
 // ---------- weekly wastage alert ----------
 const st = (await pur.call('POST', '/api/stores/items', { name: 'Steel ' + run, unit: 'kg' })).data.id;

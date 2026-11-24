@@ -8,6 +8,7 @@ class C { constructor() { this.cookie = ''; }
     const r = await fetch(BASE + p, { method: m, headers: h, body, redirect: 'manual' }); const sc = r.headers.get('set-cookie'); if (sc) this.cookie = sc.split(';')[0]; if (raw) return r; let d = null; try { d = await r.json(); } catch (e) { /* */ } return { status: r.status, data: d && d.data, err: d && d.error, code: d && d.code }; } }
 const run = Date.now().toString(36);
 const o = new C(); await o.call('POST', '/api/auth/login', { email: process.env.OWNER_EMAIL, password: process.env.OWNER_PASSWORD });
+await o.call('POST', '/api/settings/site.dual_signoff', { value: 'off' });   // these suites certify payment-linked stages without sign-offs; the sign-off rule is tested in m3_step2
 
 // A receipt needs its gate photo before the supplier bill can be paid ("no photo, no payment"): one shared test photo per project.
 let _gp = {}; const gatePhoto = async (project) => { if (_gp[project]) return _gp[project]; const fd = new FormData(); fd.append('file', new Blob([new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])], { type: 'image/png' }), 'g.png'); fd.append('title', 'gate'); fd.append('category', 'other'); fd.append('module', 'procurement'); fd.append('project_id', String(project)); fd.append('audience', 'internal');
@@ -178,5 +179,6 @@ const months = (await o.call('GET', `/api/redev/members/${mem}/transit`)).data.m
 ok('a rent term that started 50 months ago is scheduled past month 48', months.length > 50, String(months.length));
 
 await o.call('POST', '/api/settings/sales.lock_above_cc', { value: 'on' });
+await o.call('POST', '/api/settings/site.dual_signoff', { value: 'on' });
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

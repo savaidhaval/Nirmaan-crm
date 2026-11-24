@@ -488,3 +488,11 @@ id TEXT PK, source TEXT, seen_at TEXT
 - Rules: a work-order line tied to a BOQ item may use only the BOQ quantity not already used by other work orders that are not rejected, cancelled or closed (draft, pending and approved all count), at a rate no higher than the BOQ rate. The CC check applies only when a CC floor is on record for the wing (apr_items.cc_upto_floor).
 - Settings: pro.grn_gate (on unless Off), stk.wastage_alert_bp (default 250). Alert text link wastage:<project>:<item>:<year-week>, once per week per user.
 
+## Module 3 gaps, step 2 (migration 0048)
+- site_ms_signoffs (milestone_id, kind site_engineer|rcc_consultant, document_id, note, uploaded_by/at, confirmed_by/at, superseded): the two sign-offs on a stage. Only the consultant report needs confirmed_at (Owner only). An upload of the same kind sets the older row superseded = 1. Documents are category certificate, module site. In the backup list. A stage needs them when site_milestones.milestone_key is set and site.dual_signoff is not Off.
+- con_ra_bills: gst_hold (1 = the GST part cannot be paid yet; set at creation when the bill has GST and con.gst_hold is not Off), gst_confirmed_by, gst_confirmed_at, gst_confirm_note. The payment guard allows at most net - gst while gst_hold = 1.
+- site_wing_progress (project_id, wing, pct_bp, note, updated_by, updated_at; one row per project and wing; wing '' = a standalone building): the PM's physical completion in basis points. In the backup list.
+- bud_items.wing (blank = standalone building, or a name such as Basement, Podium, Terrace), bud_items.floor (blank = not floor-wise).
+- Cost to complete: completion per wing = the lower of (certified stages / all stages of that wing plus stages marked for all wings) and the PM figure; one source alone is used as it is; project completion = the average over wings with a figure; projected total = spent / completion. Computed on request, nothing stored.
+- Settings: site.dual_signoff (on unless Off), con.gst_hold (on unless Off).
+

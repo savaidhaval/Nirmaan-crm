@@ -1,7 +1,7 @@
 # Module 3 (Site Engineering, BOQ and Contractor Billing): gap review
 
 Source: `Module_3.docx` (Dhaval, 2026-11-24). Compared with the code at migration 0046 (Module 2 live).
-Status: **step 1 built (migration 0047)**. Steps 2 and later wait for the decisions at the bottom.
+Status: **steps 1 and 2 built (migrations 0047, 0048)**. Dhaval's answers to the four decisions are at the bottom.
 
 Module 3 is the most complete module already: the app has a BOQ per cost head, contractor work orders with variations, joint measurements, RA bills with retention, advance recovery, debit notes, TDS and GST, a Store with stock, material requests (indents), POs and receipts, concrete pours with cube tests, offline mode and a DPR with labour.
 
@@ -30,3 +30,14 @@ Module 3 is the most complete module already: the app has a BOQ per cost head, c
 2. **GST hold until the contractor files GSTR-1 and 3B.** The app cannot see the GST portal (that needs a paid provider). Proposal: Accounts tick "GST returns confirmed" on each RA bill after checking the contractor's filing; until then the GST part of the bill is held. Agree?
 3. **Cost-to-complete by wing.** Needs a wing-wise physical completion percentage (from certified milestones or entered by the PM). Which do you want?
 4. **Wing and floor on each BOQ line.** The document wants BOQ wing-wise and floor-wise. This adds two optional columns and a filter. Agree?
+
+## Answers received (2026-11-24) and what was built in step 2
+1. RCC sign-off: anyone on the site team, the PM or the Owner uploads the consultant's report; the Owner confirms it. Built: both sign-offs are needed before a stage that releases buyer demands can be certified.
+2. GST hold: agreed. Built: Accounts or the Owner confirm the contractor's filing (with a note of what they saw on the portal); until then the GST part of the RA bill cannot be paid.
+3. Cost to complete: both sources (certified stages and the PM's figure). Built: the lower one is used; a wing is complete only when both say 100%.
+4. BOQ wing and floor: agreed, with an alternative for a standalone building. Built: wing is optional and can be left blank, or named (Basement, Podium, Terrace); floor is optional.
+
+## Still to do
+- One-tap "repeat last request" for indents; location stamp on daily-report photos.
+- Owner override on the daily report screen (works through the server only today).
+- Adding a missing gate photo later has no button yet (the server route exists).

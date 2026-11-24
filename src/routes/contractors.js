@@ -662,9 +662,9 @@ export function registerContractors(router, h) {
       // one batch: number, bill, lines and audit together (all or nothing)
       const res = await env.DB.batch([
         env.DB.prepare('INSERT INTO counters (key, value) VALUES (?, 1) ON CONFLICT(key) DO UPDATE SET value = value + 1').bind(key),
-        env.DB.prepare(`INSERT INTO con_ra_bills (wo_id, ra_no, period_from, period_to, due_date, gross_paise, retention_paise, advance_recovery_paise, other_deductions_paise, gst_bp, gst_paise, tds_bp, tds_paise, net_paise, status, note, created_by, created_at, wing, floor, cc_override_note)
-          VALUES (?, (SELECT value FROM counters WHERE key = ?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?)`)
-          .bind(wo.id, key, b.period_from || null, b.period_to || null, b.due_date || null, gross, retention, rec, other, gstBp, gst, tdsBp, tds, net, note, req.user.user_id, now, raWing, raFloor, raOverride),
+        env.DB.prepare(`INSERT INTO con_ra_bills (wo_id, ra_no, period_from, period_to, due_date, gross_paise, retention_paise, advance_recovery_paise, other_deductions_paise, gst_bp, gst_paise, tds_bp, tds_paise, net_paise, status, note, created_by, created_at, wing, floor, cc_override_note, gst_hold)
+          VALUES (?, (SELECT value FROM counters WHERE key = ?), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?)`)
+          .bind(wo.id, key, b.period_from || null, b.period_to || null, b.due_date || null, gross, retention, rec, other, gstBp, gst, tdsBp, tds, net, note, req.user.user_id, now, raWing, raFloor, raOverride, gst > 0 && (await getSetting(env, 'con.gst_hold')) !== 'off' ? 1 : 0),
         ...lines.map((l) => env.DB.prepare(`INSERT INTO con_ra_lines (ra_id, wo_item_id, qty_this_bill, rate_paise, amount_paise) VALUES (${RA}, ?, ?, ?, ?)`).bind(wo.id, key, l.item.id, l.q, l.item.rate_paise, l.amt)),
         env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) SELECT ?, 'create', 'con_ra_bills', id, ?, ? FROM con_ra_bills WHERE id = ${RA}`)
           .bind(req.user.user_id, `RA bill on ${wo.wo_no}: gross ${rupees(gross)}, net ${rupees(net)}`, now, wo.id, key),
@@ -746,7 +746,7 @@ export function registerContractors(router, h) {
       const now = nowStr();
       const res = await env.DB.batch([
         env.DB.prepare(`INSERT INTO con_payments (wo_id, ra_id, kind, amount_paise, paid_on, mode, ref_no, note, client_uuid, created_by, created_at)
-          SELECT ?1, ?2, 'ra', ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10 WHERE (SELECT net_paise FROM con_ra_bills WHERE id = ?2) - COALESCE((SELECT SUM(amount_paise) FROM con_payments WHERE ra_id = ?2 AND kind = 'ra' AND reversed_at IS NULL), 0) >= ?3`)
+          SELECT ?1, ?2, 'ra', ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10 WHERE (SELECT net_paise - CASE WHEN gst_hold = 1 THEN gst_paise ELSE 0 END FROM con_ra_bills WHERE id = ?2) - COALESCE((SELECT SUM(amount_paise) FROM con_payments WHERE ra_id = ?2 AND kind = 'ra' AND reversed_at IS NULL), 0) >= ?3`)
           .bind(ra.wo_id, ra.id, amount, String(b.paid_on || todayIST()).slice(0, 10), String(b.mode || '').slice(0, 20), String(b.ref_no || '').slice(0, 60), String(b.note || '').slice(0, 200), uuid, req.user.user_id, now),
         env.DB.prepare(`INSERT INTO con_ledger (contractor_id, project_id, wo_id, kind, amount_paise, ref_table, ref_id, created_at)
           SELECT ?1, ?2, ?3, 'payment', ?4, 'con_payments', id, ?5 FROM con_payments WHERE client_uuid = ?6`).bind(ra.contractor_id, ra.project_id, ra.wo_id, amount, now, uuid),
@@ -755,11 +755,28 @@ export function registerContractors(router, h) {
       ]);
       if (!res[0].meta.changes) {
         const paid = await env.DB.prepare("SELECT COALESCE(SUM(amount_paise), 0) AS s FROM con_payments WHERE ra_id = ? AND kind = 'ra' AND reversed_at IS NULL").bind(ra.id).first();
+        if (ra.gst_hold) return json({ ok: false, error: `Only ${rupees(Math.max(0, ra.net_paise - ra.gst_paise - paid.s))} can be paid now. The GST part (${rupees(ra.gst_paise)}) is held until Accounts confirm the contractor's GST returns (GSTR-1 and 3B) are filed.`, code: 'gst_hold' }, 400);
         return json({ ok: false, error: `Only ${rupees(ra.net_paise - paid.s)} is still due on this bill.` }, 400);
       }
       const after = await env.DB.prepare('SELECT status FROM con_ra_bills WHERE id = ?').bind(ra.id).first();
       return json({ ok: true, data: { id: res[0].meta.last_row_id, status: after.status } });
     } catch (e) { return serverError(e, 'ra-pay'); }
+  }));
+
+  // Accounts (or the Owner) confirm that the contractor has filed GSTR-1 and GSTR-3B, after checking the GST portal themselves. This releases the GST part of the bill.
+  router.post('/api/contractors/ra-bills/:id/gst-confirm', guard('E', async (req, env) => {
+    try {
+      if (!['accounts', 'owner'].includes(req.user.role)) return json({ ok: false, error: 'Only Accounts or the Owner can confirm the contractor\'s GST filing.' }, 403);
+      const { ra, err } = await loadRa(env, req); if (err) return err;
+      if (!ra.gst_hold) return json({ ok: false, error: 'The GST on this bill is not held.' }, 409);
+      const b = await req.json().catch(() => ({}));
+      const note = String(b.note || '').trim().slice(0, 200);
+      if (note.length < 5) return json({ ok: false, error: 'Write what you checked (for example: GSTR-1 and 3B for the month filed, ARN or date).' }, 400);
+      const r = await env.DB.prepare('UPDATE con_ra_bills SET gst_hold = 0, gst_confirmed_by = ?, gst_confirmed_at = ?, gst_confirm_note = ? WHERE id = ? AND gst_hold = 1').bind(req.user.user_id, nowStr(), note, ra.id).run();
+      if (!r.meta.changes) return json({ ok: false, error: 'The GST on this bill is not held.' }, 409);
+      await audit(env, req.user, 'gst_confirm', 'con_ra_bills', ra.id, `GST filing confirmed for ${ra.wo_no} / RA ${ra.ra_no}: ${note}`).run();
+      return json({ ok: true });
+    } catch (e) { return serverError(e, 'ra-gst-confirm'); }
   }));
 
   router.post('/api/contractors/payments/:id/reverse', guard('E', async (req, env) => {
