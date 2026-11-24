@@ -8,6 +8,10 @@ class C { constructor() { this.cookie = ''; }
     const r = await fetch(BASE + p, { method: m, headers: h, body, redirect: 'manual' }); const sc = r.headers.get('set-cookie'); if (sc) this.cookie = sc.split(';')[0]; if (raw) return r; let d = null; try { d = await r.json(); } catch (e) { /* */ } return { status: r.status, data: d && d.data, err: d && d.error, code: d && d.code }; } }
 const run = Date.now().toString(36);
 const o = new C(); await o.call('POST', '/api/auth/login', { email: process.env.OWNER_EMAIL, password: process.env.OWNER_PASSWORD });
+
+// A receipt needs its gate photo before the supplier bill can be paid ("no photo, no payment"): one shared test photo per project.
+let _gp = {}; const gatePhoto = async (project) => { if (_gp[project]) return _gp[project]; const fd = new FormData(); fd.append('file', new Blob([new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])], { type: 'image/png' }), 'g.png'); fd.append('title', 'gate'); fd.append('category', 'other'); fd.append('module', 'procurement'); fd.append('project_id', String(project)); fd.append('audience', 'internal');
+  _gp[project] = (await (await fetch(BASE + '/api/files/upload', { method: 'POST', headers: { 'X-NirmaanCRM': '1', cookie: o.cookie }, body: fd })).json()).data.id; return _gp[project]; };
 let seq = 0;
 const mkUser = async (role, projects) => { const email = `zc-${role}-${++seq}-${run}@test.local`; const r = await o.call('POST', '/api/users', { name: 'zc ' + role + seq, email, role, projects }); const pw = 'ZcStrongPass-' + run; const c = new C(); await c.call('POST', '/api/auth/login', { email, password: r.data.temporaryPassword }); await c.call('POST', '/api/auth/change-password', { currentPassword: r.data.temporaryPassword, newPassword: pw }); c.id = r.data.id; return c; };
 const iso = (d) => new Date(Date.now() + 19800000 + d * 86400000).toISOString().slice(0, 10);
@@ -142,11 +146,11 @@ const po = (await pur.call('POST', '/api/procurement/pos', { project_id: pid, ve
 await pur.call('POST', `/api/procurement/pos/${po.id}/submit`); await o.call('POST', `/api/procurement/pos/${po.id}/approve`);
 const lines = (await pur.call('GET', `/api/procurement/pos/${po.id}/lines`)).data.items;
 ok('the note-only receipt is refused for a PO with items', (await site.call('POST', `/api/procurement/pos/${po.id}/grn`, { qty_note: 'came', full: true })).code === 'use_lines');
-const ex = await site.call('POST', `/api/procurement/pos/${po.id}/grn-lines`, { challan_no: 'CH' + Math.random().toString(36).slice(2, 10), lines: [{ po_item_id: lines[0].id, qty_received: 10.5 }] });
+const ex = await site.call('POST', `/api/procurement/pos/${po.id}/grn-lines`, { challan_no: 'CH' + Math.random().toString(36).slice(2, 10), photo_doc_id: await gatePhoto(pid), lines: [{ po_item_id: lines[0].id, qty_received: 10.5 }] });
 ok('receiving 10.5 MT against 10 (over 3%) is refused for site', ex.status === 409 && ex.code === 'excess');
-ok('9 MT (within the order) is accepted', (await site.call('POST', `/api/procurement/pos/${po.id}/grn-lines`, { challan_no: 'CH' + Math.random().toString(36).slice(2, 10), lines: [{ po_item_id: lines[0].id, qty_received: 9 }] })).status === 200);
-ok('the PM accepts extra only with a reason', (await pm.call('POST', `/api/procurement/pos/${po.id}/grn-lines`, { challan_no: 'CH' + Math.random().toString(36).slice(2, 10), lines: [{ po_item_id: lines[0].id, qty_received: 1.5 }] })).code === 'excess'
-  && (await pm.call('POST', `/api/procurement/pos/${po.id}/grn-lines`, { challan_no: 'CH' + Math.random().toString(36).slice(2, 10), lines: [{ po_item_id: lines[0].id, qty_received: 1.5 }], excess_note: 'Cut lengths, agreed' })).status === 200);
+ok('9 MT (within the order) is accepted', (await site.call('POST', `/api/procurement/pos/${po.id}/grn-lines`, { challan_no: 'CH' + Math.random().toString(36).slice(2, 10), photo_doc_id: await gatePhoto(pid), lines: [{ po_item_id: lines[0].id, qty_received: 9 }] })).status === 200);
+ok('the PM accepts extra only with a reason', (await pm.call('POST', `/api/procurement/pos/${po.id}/grn-lines`, { challan_no: 'CH' + Math.random().toString(36).slice(2, 10), photo_doc_id: await gatePhoto(pid), lines: [{ po_item_id: lines[0].id, qty_received: 1.5 }] })).code === 'excess'
+  && (await pm.call('POST', `/api/procurement/pos/${po.id}/grn-lines`, { challan_no: 'CH' + Math.random().toString(36).slice(2, 10), photo_doc_id: await gatePhoto(pid), lines: [{ po_item_id: lines[0].id, qty_received: 1.5 }], excess_note: 'Cut lengths, agreed' })).status === 200);
 ok('a bill from a different vendor than the PO is refused', (await acc.call('POST', '/api/procurement/bills', { po_id: po.id, vendor_id: v2, bill_no: 'X1', amount_paise: 100 * L })).status === 400);
 const good = await acc.call('POST', '/api/procurement/bills', { po_id: po.id, vendor_id: v1, bill_no: 'SB-' + run, amount_paise: 3540 * L, gst_paise: 540 * L });
 ok('a bill within what was received (6 MT of 10.5) is not held', good.status === 200 && good.data.on_hold === false, JSON.stringify(good));
