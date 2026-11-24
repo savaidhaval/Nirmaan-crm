@@ -103,16 +103,16 @@ ok('sales cannot read the numbering report', (await sales.call('GET', `/api/sale
 
 // =========================== WP-12 ===========================
 const holdUnit = await mkUnit(); const leadK = await mkLead(sales, 'Kulkarni');
-const hold = await sales.call('POST', `/api/sales/inventory/${holdUnit}/hold`, { lead_id: leadK, hours: 1 });
+const hold = await sales.call('POST', `/api/sales/inventory/${holdUnit}/hold`, { token_mode: 'upi', token_ref: 'UTR' + Math.random().toString(36).slice(2, 10), token_amount_paise: 100000, lead_id: leadK, hours: 1 });
 ok('sales holds a flat for a lead', hold.status === 200);
 const stk = (await pm.call('GET', `/api/reports/stacking?project_id=${pid}`)).data;
 const hu = stk.units.find((u) => u.id === holdUnit);
 ok('the flat card says who holds it, for which lead, until when', hu && hu.state === 'token_locked' && hu.holder && hu.holder_lead === 'Kulkarni ' + run && hu.blocked_till, JSON.stringify(hu));
-ok('another salesperson cannot take over the hold (not their lead)', [403, 409].includes((await sales2.call('POST', `/api/sales/inventory/${holdUnit}/hold`, { lead_id: leadK })).status));
+ok('another salesperson cannot take over the hold (not their lead)', [403, 409].includes((await sales2.call('POST', `/api/sales/inventory/${holdUnit}/hold`, { token_mode: 'upi', token_ref: 'UTR' + Math.random().toString(36).slice(2, 10), token_amount_paise: 100000, lead_id: leadK })).status));
 await fetch(BASE + '/__scheduled?cron=30+*+*+*+*'); await new Promise((r) => setTimeout(r, 1500));
 ok('holder is warned an hour before it ends', JSON.stringify((await sales.call('GET', '/api/notifications')).data).includes('Hold ending soon'));
 sql(`UPDATE sal_inventory SET blocked_till = datetime('now', '-5 minutes') WHERE id = ${holdUnit}`);
-const holdB = await mkUnit(); const leadL = await mkLead(sales, 'Lonkar'); await sales.call('POST', `/api/sales/inventory/${holdB}/hold`, { lead_id: leadL, hours: 1 }); sql(`UPDATE sal_inventory SET blocked_till = datetime('now', '-1 minutes') WHERE id = ${holdB}`);
+const holdB = await mkUnit(); const leadL = await mkLead(sales, 'Lonkar'); await sales.call('POST', `/api/sales/inventory/${holdB}/hold`, { token_mode: 'upi', token_ref: 'UTR' + Math.random().toString(36).slice(2, 10), token_amount_paise: 100000, lead_id: leadL, hours: 1 }); sql(`UPDATE sal_inventory SET blocked_till = datetime('now', '-1 minutes') WHERE id = ${holdB}`);
 await fetch(BASE + '/__scheduled?cron=30+*+*+*+*'); await new Promise((r) => setTimeout(r, 1800));
 const inv = (await o.call('GET', `/api/sales/inventory?project_id=${pid}`)).data.inventory;
 ok('both expired holds are released by the hourly sweep', inv.find((u) => u.id === holdUnit).status === 'available' && inv.find((u) => u.id === holdB).status === 'available');

@@ -21,10 +21,13 @@ export async function partnerPayBlock(env, partnerId) {
   return null;
 }
 
-// Optional lock (setting sales.lock_above_cc = on): flats above the highest floor covered by an approved CC / plinth CC / further CC cannot be sold.
+// Lock (setting sales.lock_above_cc, on unless set to off): flats above the highest floor covered by an approved CC / plinth CC / further CC cannot be sold.
 // No CC floor recorded = no lock. Returns a plain message, or null.
+// A switch that is on unless someone set it to 'off' (nothing writes defaults into the settings table).
+export const isOn = async (env, getSetting, key) => (await getSetting(env, key)) !== 'off';
+
 export async function ccSaleBlock(env, getSetting, unit) {
-  if ((await getSetting(env, 'sales.lock_above_cc')) !== 'on' || unit.floor == null) return null;
+  if (!(await isOn(env, getSetting, 'sales.lock_above_cc')) || unit.floor == null) return null;
   const st = await approvalState(env, unit.project_id);
   const upto = st.ccUpto(unit.wing || null);
   if (upto == null || unit.floor <= upto) return null;

@@ -115,7 +115,7 @@ async function unitDrill(u) {
     <div class="kv"><span>Rate-card price</span><b>${moneyP(u.list_paise)}</b>${u.rate_sqft_paise ? `<span>Rate on RERA carpet</span><b>${moneyP(u.rate_sqft_paise)} / sq ft</b>` : ''}${u.rera_carpet_sqft ? `<span>RERA carpet</span><b>${esc(u.rera_carpet_sqft)} sq ft</b>` : ''}${u.carpet_sqft ? `<span>Carpet</span><b>${esc(u.carpet_sqft)} sq ft</b>` : ''}
     ${u.customer ? `<span>Buyer</span><b>${esc(u.customer)}</b>` : ''}${u.agreed_paise ? `<span>Agreed price</span><b>${moneyP(u.agreed_paise)}</b>` : ''}${u.holder ? `<span>Held by</span><b>${esc(u.holder)}${u.holder_lead ? ' for ' + esc(u.holder_lead) : ''} until ${esc(String(u.blocked_till).substring(0, 16))}</b>` : ''}</div>
     <div class="row-btns">
-      ${u.state === 'available' && canSell ? '<button class="btn small btn-primary" id="ud-hold">Hold 48h for a lead</button><button class="btn small" id="ud-book">Book</button>' : ''}
+      ${u.state === 'available' && canSell ? '<button class="btn small btn-primary" id="ud-hold">Block with token</button><button class="btn small" id="ud-book">Book</button>' : ''}
       ${u.state === 'token_locked' && canSell ? '<button class="btn small btn-primary" id="ud-book">Convert to booking</button><button class="btn small" id="ud-rel">Release</button>' : ''}${u.state === 'token_locked' && mgr ? '<button class="btn small" id="ud-ext">Extend 24h</button>' : ''}
       ${u.booking_id ? '<button class="btn small btn-primary" id="ud-bk">Open booking</button>' : ''}
       <button class="btn small" id="ud-cs">Cost sheet</button>${mgr && !u.booking_id && u.state !== 'rehab' && u.state !== 'landowner' ? '<button class="btn small" id="ud-price">Change price</button>' : ''}</div>
@@ -126,8 +126,10 @@ async function unitDrill(u) {
   if ($('ud-hold')) $('ud-hold').onclick = async () => {
     let leads = []; try { leads = (await api('/api/sales/leads')).data.leads.filter((x) => !['booked', 'lost'].includes(x.status)); } catch (e) { /* ignore */ }
     if (!leads.length) { toast('Add a lead first, then hold a flat for them.'); return; }
-    const v = await openForm({ title: 'Hold for a lead', intro: 'The hold lasts 48 hours and the flat returns to the pool automatically. Convert it to a booking with a token before then.', fields: [{ name: 'lead_id', label: 'Lead', type: 'select', options: leads.map((x) => [x.id, `${x.name} · ${x.phone}`]) }] });
-    if (v && await act(api(`/api/sales/inventory/${u.id}/hold`, { method: 'POST', body: { lead_id: Number(v.lead_id) } }), 'Held for 48 hours')) done();
+    const v = await openForm({ title: 'Block this flat for a lead', intro: 'Enter how the token was paid. Accounts must confirm it reached the bank within 48 hours, or the flat goes back on sale. Once confirmed it stays yours for a few days to complete the booking.', fields: [{ name: 'lead_id', label: 'Lead', type: 'select', options: leads.map((x) => [x.id, `${x.name} · ${x.phone}`]) },
+      { name: 'token_mode', label: 'Token paid by', type: 'select', options: [['upi', 'UPI'], ['neft', 'NEFT / RTGS'], ['cheque', 'Cheque']] }, { name: 'token_ref', label: 'UTR number or cheque number', required: !mgr }, { name: 'token_amount_paise', label: 'Token amount (₹)', type: 'money', required: !mgr }] });
+    if (v) { const body = { lead_id: Number(v.lead_id) }; if (v.token_ref) { body.token_mode = v.token_mode; body.token_ref = v.token_ref; body.token_amount_paise = v.token_amount_paise; }
+      if (await act(api(`/api/sales/inventory/${u.id}/hold`, { method: 'POST', body }), 'Blocked. Accounts will confirm the token.')) done(); }
   };
   if ($('ud-rel')) $('ud-rel').onclick = async () => { if (await act(api(`/api/sales/inventory/${u.id}/release`, { method: 'POST' }), 'Released')) done(); };
   if ($('ud-ext')) $('ud-ext').onclick = async () => { const v = await openForm({ title: 'Extend hold', fields: [{ name: 'reason', label: 'Reason', required: true }] }); if (v && await act(api(`/api/sales/inventory/${u.id}/extend`, { method: 'POST', body: v }), 'Extended 24h')) done(); };
@@ -281,8 +283,14 @@ renderAudit = PAGES.audit = function (main) {
 };
 
 // ---------- Settings: new controls ----------
+// These switches are ON until someone sets them to Off (nothing is stored for them until then).
+const ON_BY_DEFAULT = ['sales.lock_above_cc', 'sales.hold_needs_token', 'sales.broker_needs_confirmation'];
 Object.assign(SETTING_LABELS, {
   'sales.max_discount_bp': ['Discount a sales rep may give (basis points; 100 = 1%)', 'number'], 'sales.pm_max_discount_bp': ['Discount a PM may give (basis points)', 'number'], 'sales.max_holds_per_user': ['Flats one rep may hold at a time', 'number'],
+  'sales.sla_minutes': ['Minutes to call a new lead before it moves to the next executive (0 = off; checked every 15 minutes)', 'number'], 'sales.rehold_block_hours': ['Hours a closer cannot re-block a flat they released or let lapse', 'number'],
+  'sales.lock_above_cc': ['Do not sell flats above the approved CC floor', 'onoff'], 'sales.hold_needs_token': ['Salespeople must enter token details to block a flat', 'onoff'], 'sales.broker_needs_confirmation': ['A broker counts only if the buyer confirmed them at reception', 'onoff'],
+  'sales.source_lock_days': ['Days a broker keeps a buyer after the buyer confirms (45 or 60)', 'number'], 'sales.token_cleared_hold_days': ['Days a flat stays blocked after Accounts clears the token', 'number'],
+  'sales.brochure_url': ['Brochure link sent in the WhatsApp welcome message', 'text'], 'sales.map_url': ['Site office map link (blank = project location)', 'text'],
   'tax.stamp_duty_bp': ['Stamp duty (basis points; 500 = 5%)', 'number'], 'tax.metro_cess_bp': ['Metro cess (basis points)', 'number'], 'tax.women_concession_bp': ['Stamp duty concession for women (basis points)', 'number'],
   'tax.registration_bp': ['Registration fee (basis points)', 'number'], 'tax.registration_cap_paise': ['Registration fee cap (paise; 3000000 = ₹30,000)', 'number'], 'tax.gst_bp': ['GST on under-construction flats (basis points)', 'number'],
 });

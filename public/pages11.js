@@ -37,11 +37,18 @@ async function costSheetsModal(u) {
   ov.innerHTML = `<div class="modal"><h2>Cost sheets · ${esc(u.wing ? u.wing + '-' : '')}${esc(u.unit_no)}</h2><p class="muted">Rate card ${moneyP(u.list_paise)}. A booking can take its price from an approved sheet.</p>
     ${isRole(...SALES_WORKERS) ? '<button class="btn btn-primary btn-full" id="cs-new">+ New cost sheet</button>' : ''}
     ${sheets.map((s) => `<div class="card"><div class="row"><div><b>Version ${s.version}${s.lead_name ? ' · ' + esc(s.lead_name) : ''}</b><p class="muted">Agreement ${moneyP(s.agreement_value_paise)} · total with taxes ${moneyP(s.total_paise)}${s.below_list_paise ? `<br><b>${moneyP(s.below_list_paise)} below the rate card</b>` : ''}${s.below_msp ? `<br><b style="color:#b91c1c">Below the minimum selling price (${moneyP(s.msp_paise)}): Owner approval PIN needed</b>` : ''}</p></div>${chip(String(s.status).replace(/_/g, ' '), CS_TONE[s.status])}</div>
-      <div class="row-btns"><button class="btn small" data-csp="${s.id}">Print / save as PDF</button>${['draft', 'rejected'].includes(s.status) && (s.created_by === currentUser.id || isRole('owner')) ? `<button class="btn small btn-primary" data-css="${s.id}">Send for approval</button>` : ''}
+      <div class="row-btns"><button class="btn small" data-csp="${s.id}">Print / save as PDF</button><button class="btn small" data-csw="${s.id}">Send on WhatsApp</button>${['draft', 'rejected'].includes(s.status) && (s.created_by === currentUser.id || isRole('owner')) ? `<button class="btn small btn-primary" data-css="${s.id}">Send for approval</button>` : ''}
       ${s.status === 'pending_approval' && isRole(...SALES_APPROVERS) && (s.created_by !== currentUser.id || currentUser.role === 'owner') ? `<button class="btn small btn-primary" data-csa="approve" data-id="${s.id}" data-msp="${s.below_msp ? 1 : 0}">Approve</button><button class="btn small" data-csa="reject" data-id="${s.id}">Reject</button>` : ''}</div></div>`).join('') || '<p class="muted">No cost sheet yet.</p>'}
     <div class="modal-actions"><button class="btn btn-primary" id="cs-x">Close</button></div></div>`;
   document.body.appendChild(ov); $('cs-x').onclick = () => ov.remove();
   const again = () => { ov.remove(); costSheetsModal(u); };
+  ov.querySelectorAll('[data-csw]').forEach((x) => { x.onclick = async () => {
+    const s = sheets.find((y) => String(y.id) === x.dataset.csw); let phone = '';
+    if (s.lead_id) { try { phone = (await api('/api/sales/leads/' + s.lead_id)).data.lead.phone; } catch (e) { /* not your lead */ } }
+    const stamp = new Date(Date.now() + 19800000).toISOString().replace('T', ' ').substring(0, 16) + ' IST';
+    const text = `Cost sheet ${u.wing ? u.wing + '-' : ''}${u.unit_no} (version ${s.version}, ${stamp})\nAgreement value: ${moneyP(s.agreement_value_paise)}\nGST: ${moneyP(s.gst_paise)}\nStamp duty: ${moneyP(s.stamp_duty_paise)}\nRegistration: ${moneyP(s.registration_paise)}\nTotal: ${moneyP(s.total_paise)}\nThis is an estimate and may change. Taxes and duties are as per the rates in force.`;
+    window.open(phone ? waLink(phone, text) : 'https://wa.me/?text=' + encodeURIComponent(text), '_blank', 'noopener');
+  }; });
   ov.querySelectorAll('[data-csp]').forEach((x) => { x.onclick = () => openPrint('costsheet', x.dataset.csp); });
   ov.querySelectorAll('[data-css]').forEach((x) => { x.onclick = async () => { if (await act(api(`/api/sales/cost-sheets/${x.dataset.css}/submit`, { method: 'POST' }), 'Sent for approval')) again(); }; });
   ov.querySelectorAll('[data-csa]').forEach((x) => { x.onclick = async () => {

@@ -13,6 +13,7 @@ import * as gdrive from './core/gdrive.js';
 import { registerSalesOps, expireHolds, LEAD_TRANSITIONS, shared as salesShared } from './routes/sales_ops.js';
 import { registerSales3, ensureDemandNumber, handoverDueSweep } from './routes/sales3.js';
 import { registerM2Gaps, partnerPayBlock, leadSlaReassign } from './routes/m2gaps.js';
+import { registerM2Step2 } from './routes/m2step2.js';
 import { registerBulkDemands, demandLetterHtml } from './routes/bulk_demands.js';
 import { registerReports } from './routes/reports.js';
 import { registerFinance } from './routes/finance.js';
@@ -563,6 +564,7 @@ const EDITABLE_SETTINGS = ['po.pm_approval_limit_paise', 'access.allow_second_ow
   'brochure.price_list_default_audience', 'storage.warn_percent', 'sales.max_holds_per_user', 'sales.max_discount_bp', 'sales.pm_max_discount_bp',
   'interest.rate_bp', 'interest.grace_days', 'interest.enabled', 'security.require_mfa_roles', 'tax.stamp_duty_bp', 'tax.metro_cess_bp', 'tax.women_concession_bp', 'tax.registration_bp', 'tax.registration_cap_paise', 'tax.gst_bp',
   'con.enabled', 'con.pm_approval_limit_paise', 'con.gst_bp', 'con.tds_bp', 'budget.gst_basis', 'petty.low_balance_paise', 'ai.enabled', 'ai.daily_limit', 'ai.model', 'rera.designated_pct_bp', 'fea.review_days', 'red.member_doc_checklist', 'red.rent_due_day', 'red.oc_grace_days', 'red.demolition_proofs', 'red.rtgs_min_paise', 'apr.alert_days', 'bank.keep_days', 'drawing.ack_hours', 'sales.bulk_daily_limit', 'sales.bulk_chunk', 'sales.demand_link_days', 'sales.visit_objections', 'sales.visit_radius_m',
+  'sales.sla_minutes', 'sales.rehold_block_hours', 'sales.lock_above_cc', 'sales.hold_needs_token', 'sales.broker_needs_confirmation', 'sales.source_lock_days', 'sales.token_cleared_hold_days', 'sales.brochure_url', 'sales.map_url',
   'sales.receipt_approval_limit_paise', 'sales.discount_pm_limit_paise', 'sales.handover_template', 'apr.designations', 'con.variation_owner_limit_paise', 'con.advance_recovery_bp', 'con.dlp_months', 'pro.tolerance_bp', 'tax.tds_no_pan_bp', 'rera.cert_valid_days', 'qa.pour_checklist', 'qa.cube_7day_pct_bp', 'dpr.activities', 'dpr.safety_checks', 'bd.vacate_to_plinth_months', 'bd.completion_months', 'bd.steps_79a'];
 
 router.post('/api/settings/:key', async (req, env) => {
@@ -1718,7 +1720,7 @@ router.get('/api/export/:what', async (req, env) => {
 // Tables are read in parts so one request or cron run never goes near the free plan's 50-queries-per-run cap.
 const EXPORT_TABLES = ['projects', 'apr_items', 'apr_events', 'drw_drawings', 'drw_revisions', 'site_milestones', 'site_dprs', 'site_snags', 'pro_vendors', 'pro_rfqs', 'pro_quotes', 'pro_pos', 'pro_po_items', 'pro_grns', 'pro_bills',
     'sal_leads', 'sal_activities', 'sal_visits', 'sal_inventory', 'sal_partners', 'sal_bookings', 'sal_plan_stages', 'sal_demands', 'sal_receipts', 'documents', 'audit_log',
-    'pro_grn_items', 'pro_payments', 'ppl_staff', 'ppl_hiring', 'ppl_candidates', 'sal_brokerage_payments', 'sal_refunds', 'sal_interest_waivers', 'sal_hold_log', 'mkt_spend', 'brands', 'counters',
+    'pro_grn_items', 'pro_payments', 'ppl_staff', 'ppl_hiring', 'ppl_candidates', 'sal_brokerage_payments', 'sal_refunds', 'sal_interest_waivers', 'sal_hold_log', 'sal_hold_tokens', 'sal_checkins', 'mkt_spend', 'brands', 'counters',
     'pro_indents', 'pro_indent_items', 'pro_rfq_items', 'pro_quote_items',
     'site_dpr_labour', 'bud_heads', 'stk_items', 'stk_balance', 'stk_moves', 'pro_party_docs', 'pro_professionals', 'ai_log', 'sal_receipt_requests', 'sal_adjustments', 'sal_booking_parties', 'sal_cost_sheets', 'sal_cost_sheet_lines', 'sal_handover', 'sal_handover_items', 'sal_booking_loans', 'rera_account_entries', 'eng_kudos', 'fea_versions', 'sal_bulk_runs', 'sal_bulk_items', 'drw_acks', 'tally_export_log', 'brand_profiles', 'project_members', 'drive_folders', 'bank_profiles', 'bank_import_batches', 'bank_import_rows', 'red_societies', 'red_members', 'red_consent_events', 'red_member_docs', 'red_rehab_allotments', 'red_transit_terms', 'red_transit_schedule', 'red_transit_payments', 'red_corpus_entries', 'red_meetings', 'red_meeting_attendees', 'red_rent_changes', 'red_site_proofs', 'red_payout_batches', 'prj_autodcr_history', 'apr_steps', 'apr_deps', 'con_variations', 'con_measurements', 'rera_certificates', 'qa_pours', 'qa_cubes', 'qa_ncrs', 'site_dpr_work', 'site_ms_changes', 'prj_holds', 'con_debit_notes', 'bud_items', 'bd_opportunities', 'bd_followups', 'bd_studies', 'bd_steps', 'prj_lifecycle', 'pty_funds', 'pty_entries', 'con_contractors', 'con_work_orders', 'con_wo_items', 'con_ra_bills', 'con_ra_lines', 'con_payments', 'con_ledger'];
 const EXPORT_PARTS = 3;
@@ -2328,6 +2330,7 @@ registerTally(router, { withAuth, json, serverError, visibleProjectIds, nowStr, 
 registerBank(router, { withAuth, json, serverError, visibleProjectIds, nowStr, getSetting, csvBom });
 registerBulkDemands(router, { withAuth, json, serverError, visibleProjectIds, getSetting, nowStr, printBrand, csvBom });
 registerM2Gaps(router, { withAuth, json, serverError, visibleProjectIds, getSetting, nowStr, encryptSetting });
+registerM2Step2(router, { withAuth, json, serverError, visibleProjectIds, getSetting, nowStr, checkRateLimit, clientIp, printBrand });
 registerSales3(router, { withAuth, json, serverError, visibleProjectIds, getSetting, nowStr, encryptSetting, decryptSetting, csvBom, printBrand, shared: salesShared });
 
 // ---------- Branding routes ----------
@@ -3408,11 +3411,17 @@ async function runCron(cron, env) {
   // 30 13 * * * = 19:00 IST DPR nudge
   // 30 * * * * = hourly reminder sweep + email retry
   // 30 20 * * * = 02:00 IST nightly backup
+  // */15 * * * * = lead call-deadline check (the fifth and last free-plan cron)
+
+  if (cron === '*/15 * * * *') {
+    // Every 15 minutes: a new lead nobody has called within the SLA goes to the next executive (business hours only; 2 statements when nothing is late)
+    await leadSlaReassign(env, getSetting, nowStr);
+    return;
+  }
 
   if (cron === '30 * * * *') {
     // Hourly: retry failed emails (max 3 attempts each)
     await retryFailedEmails(env);
-    await leadSlaReassign(env, getSetting, nowStr);
     await leadSlaNudges(env);
     await expireHolds(env);
     await raDueSweep(env, getSetting);
@@ -3462,7 +3471,7 @@ export default {
         return json({ ok: true, env: env.ENVIRONMENT || 'production' });
       }
       await ensureBootstrap(env);
-      if (path.startsWith('/api/') || path.startsWith('/s/') || path.startsWith('/d/') || path.startsWith('/brand/')) {
+      if (path.startsWith('/api/') || path.startsWith('/s/') || path.startsWith('/c/') || path.startsWith('/d/') || path.startsWith('/brand/')) {
         // Test builds only (QCOUNT_LOG is set in .dev.vars / CI, never in production): report how many database statements a request used.
         if (env.QCOUNT_LOG) {
           let n = 0; const db = env.DB;

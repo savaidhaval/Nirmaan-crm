@@ -48,6 +48,7 @@ ok('MSP can be set for a whole project by rate per sq ft', proj.status === 200 &
 const part = (await o.call('POST', '/api/sales/partners', { firm: 'zz Realty ' + run, brokerage_default_bp: 200 })).data.id;
 const part2 = (await o.call('POST', '/api/sales/partners', { firm: 'zz Other ' + run, brokerage_default_bp: 200 })).data.id;
 const leadP = (await o.call('POST', '/api/sales/leads', { name: 'zz via broker ' + run, phone: phone(), project_id: pid, channel_partner_id: part, consent: true })).data.id;
+sql(`UPDATE sal_leads SET source_confirmed_at = datetime('now'), source_locked_until = '2099-01-01' WHERE id = ${leadP}`);   // the buyer confirmed this broker at reception
 const uP = await mkUnit();
 const wrong = await o.call('POST', '/api/sales/bookings', { unit_id: uP, lead_id: leadP, customer_name: 'zz cust', channel_partner_id: part2, token_paise: 1000000 });
 ok('a different broker cannot be tagged at booking', wrong.status === 409 && wrong.code === 'partner_lock', JSON.stringify(wrong));
@@ -79,16 +80,16 @@ ok('changing KYC details needs a fresh approval', (await pay()).code === 'partne
 
 // ---------- Re-hold block ----------
 const uH = await mkUnit(); const leadH = (await sales.call('POST', '/api/sales/leads', { name: 'zz hold ' + run, phone: phone(), project_id: pid, consent: true })).data.id;
-ok('closer holds a flat', (await sales.call('POST', `/api/sales/inventory/${uH}/hold`, { lead_id: leadH })).status === 200);
+ok('closer holds a flat', (await sales.call('POST', `/api/sales/inventory/${uH}/hold`, { token_mode: 'upi', token_ref: 'UTR' + Math.random().toString(36).slice(2, 10), token_amount_paise: 100000, lead_id: leadH })).status === 200);
 ok('and releases it', (await sales.call('POST', `/api/sales/inventory/${uH}/release`, {})).status === 200);
-const again = await sales.call('POST', `/api/sales/inventory/${uH}/hold`, { lead_id: leadH });
+const again = await sales.call('POST', `/api/sales/inventory/${uH}/hold`, { token_mode: 'upi', token_ref: 'UTR' + Math.random().toString(36).slice(2, 10), token_amount_paise: 100000, lead_id: leadH });
 ok('the same closer cannot re-block it straight away', again.status === 409 && again.code === 'rehold', JSON.stringify(again));
-ok('a manager is not blocked', (await o.call('POST', `/api/sales/inventory/${uH}/hold`, { lead_id: leadH })).status === 200);
+ok('a manager is not blocked', (await o.call('POST', `/api/sales/inventory/${uH}/hold`, { token_mode: 'upi', token_ref: 'UTR' + Math.random().toString(36).slice(2, 10), token_amount_paise: 100000, lead_id: leadH })).status === 200);
 await o.call('POST', `/api/sales/inventory/${uH}/release`, {});
 const uH2 = await mkUnit(); const leadH2 = (await sales.call('POST', '/api/sales/leads', { name: 'zz hold2 ' + run, phone: phone(), project_id: pid, consent: true })).data.id;
-await sales.call('POST', `/api/sales/inventory/${uH2}/hold`, { lead_id: leadH2, hours: 1 }); sql(`UPDATE sal_inventory SET blocked_till = datetime('now', '-2 minutes') WHERE id = ${uH2}`);
+await sales.call('POST', `/api/sales/inventory/${uH2}/hold`, { token_mode: 'upi', token_ref: 'UTR' + Math.random().toString(36).slice(2, 10), token_amount_paise: 100000, lead_id: leadH2, hours: 1 }); sql(`UPDATE sal_inventory SET blocked_till = datetime('now', '-2 minutes') WHERE id = ${uH2}`);
 await fetch(BASE + '/__scheduled?cron=30+*+*+*+*'); await new Promise((r) => setTimeout(r, 2000));
-ok('a lapsed hold also blocks the same closer from re-blocking it', (await sales.call('POST', `/api/sales/inventory/${uH2}/hold`, { lead_id: leadH2 })).code === 'rehold');
+ok('a lapsed hold also blocks the same closer from re-blocking it', (await sales.call('POST', `/api/sales/inventory/${uH2}/hold`, { token_mode: 'upi', token_ref: 'UTR' + Math.random().toString(36).slice(2, 10), token_amount_paise: 100000, lead_id: leadH2 })).code === 'rehold');
 
 // ---------- "Is this number ours?" ----------
 const ph = phone(); const leadR = (await o.call('POST', '/api/sales/leads', { name: 'zz Mehta ' + run, phone: ph, project_id: pid, config_pref: '3BHK', channel_partner_id: part2, consent: true })).data.id;
@@ -113,14 +114,14 @@ const hourIST = new Date(Date.now() + 19800000).getUTCHours();
 if (hourIST >= 9 && hourIST < 19) {
   const leadS = (await sales.call('POST', '/api/sales/leads', { name: 'zz sla ' + run, phone: phone(), project_id: pid, consent: true })).data.id;
   sql(`UPDATE sal_leads SET created_at = datetime('now', '-30 minutes') WHERE id = ${leadS}`);
-  await fetch(BASE + '/__scheduled?cron=30+*+*+*+*'); await new Promise((r) => setTimeout(r, 2500));
+  await fetch(BASE + '/__scheduled?cron=*/15+*+*+*+*'); await new Promise((r) => setTimeout(r, 2500));
   const l = (await o.call('GET', `/api/sales/leads/${leadS}`)).data.lead;
   ok('an uncalled lead is moved to the next executive after the SLA', l.assigned_to !== sales.id && l.sla_reassigns === 1, JSON.stringify(l));
   ok('the new executive and the managers are told', JSON.stringify((await o.call('GET', '/api/notifications')).data).includes('moved to the next executive'));
   const touched = (await sales2.call('POST', '/api/sales/leads', { name: 'zz sla2 ' + run, phone: phone(), project_id: pid, consent: true })).data.id;
   await sales2.call('POST', `/api/sales/leads/${touched}/activity`, { type: 'call', note: 'spoke', next_followup_at: iso(1) + 'T10:00' });
   sql(`UPDATE sal_leads SET created_at = datetime('now', '-30 minutes') WHERE id = ${touched}`);
-  await fetch(BASE + '/__scheduled?cron=30+*+*+*+*'); await new Promise((r) => setTimeout(r, 2500));
+  await fetch(BASE + '/__scheduled?cron=*/15+*+*+*+*'); await new Promise((r) => setTimeout(r, 2500));
   ok('a lead that was called is left alone', (await o.call('GET', `/api/sales/leads/${touched}`)).data.lead.sla_reassigns === 0);
 } else console.log('SKIP  SLA reassign (outside 09:00-19:00 India time)');
 

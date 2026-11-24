@@ -1,7 +1,7 @@
 # Module 2 (Pre-Sales, Channel Partners & Live Tower Inventory): gap review
 
 Source: `Module_2.docx` (Dhaval, 2026-11-24). Compared with the code at migration 0043.
-Status: **step 1 built (migration 0044)**. Steps 2 to 4 wait for the decisions at the bottom.
+Status: **steps 1 and 2 built (migrations 0044, 0045)** after Dhaval's answers (below). Still open: the pricing matrix, broker flyers (no broker access, so these become staff tools or are dropped) and portal field mappings.
 
 ## What the document asks for, and where it stands
 
@@ -43,3 +43,19 @@ Status: **step 1 built (migration 0044)**. Steps 2 to 4 wait for the decisions a
 - Step 2: reception check-in, buyer confirmation page, source lock (Decisions 2, 3).
 - Step 3: broker links (pre-visit check, own leads, flyers with agency name) (Decision 3), portal field mappings (A1).
 - Step 4: pricing matrix and one-tap cost sheet with PLC / parking / club lines, WhatsApp share links, milestone re-engagement (Decision 1), token clearance (Decision 6).
+
+## Answers received (2026-11-24) and what was built
+
+1. WhatsApp: one-tap links. Built: welcome pack on a lead, cost-sheet message, site updates to warm buyers with consent. No WhatsApp API, no cost.
+2. Free alternative to OTP. Built: reception QR, buyer confirms on their own phone, 45-day lock (setting; change to 60 if wanted).
+3. Broker access: none. No broker login and no broker link. Brokers are entered by staff at reception or lead registration. The broker-side pre-visit check and flyer studio are therefore not built; the staff "Is this number already ours?" card covers the check. A staff-made co-branded flyer can be built later if wanted.
+4. Lock flats above the approved CC floor: built and ON by default.
+5. 15-minute SLA: built on the fifth free cron. All five free-plan crons are now used.
+6. Token clearance: built (hold with UTR or cheque number and amount, Accounts clears).
+7. PAN and MahaRERA compulsory, GSTIN optional: as already built in step 1.
+
+## Still to do (needs your word)
+- Pricing matrix (floor-rise per floor, PLC rules, standard parking and club charges) and one-tap cost sheet from it.
+- Photo of the UTR or cheque on a token (the proof_doc_id field exists; the upload button is not on the screen yet).
+- Per-portal mappings for 99acres, MagicBricks, Housing.com and Meta lead forms.
+- Staff-made co-branded flyer (only if you still want it, given no broker access).

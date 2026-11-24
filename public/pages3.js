@@ -14,11 +14,12 @@ async function leadDetail(id) {
   const ov = document.createElement('div'); ov.className = 'modal-overlay';
   ov.innerHTML = `<div class="modal"><div class="row"><div><h2>${esc(l.name)}</h2><p class="muted">${esc(l.config_pref || '')} ${l.next_followup_at ? '· next follow-up ' + esc(String(l.next_followup_at).replace('T', ' ').substring(0, 16)) : ''}</p></div>${statusChip(l.status)}</div>
     <div class="row-btns"><a class="btn small btn-primary" href="tel:${esc(l.phone)}">📞 Call</a><a class="btn small" href="${waLink(l.phone, 'Hello ' + l.name + ', thank you for your interest. ')}" target="_blank" rel="noopener">WhatsApp</a>
-      <button class="btn small" id="ld-log">Log a call / note</button><button class="btn small" id="ld-visit">Schedule visit</button></div>
+      <button class="btn small" id="ld-welcome">Send welcome pack</button><button class="btn small" id="ld-log">Log a call / note</button><button class="btn small" id="ld-visit">Schedule visit</button></div>
     ${d.visits.filter((v) => v.status === 'scheduled').map((v) => `<div class="card" style="margin-top:12px"><b>Visit ${esc(String(v.visit_at).replace('T', ' ').substring(0, 16))}</b><div class="row-btns"><button class="btn small" data-vs="done" data-id="${v.id}">Visited</button><button class="btn small" data-vs="no_show" data-id="${v.id}">No-show</button><button class="btn small" data-vs="cancelled" data-id="${v.id}">Cancel</button></div></div>`).join('')}
     <h3>Timeline</h3>${d.activities.map((a) => `<p>• <b>${esc(a.type)}</b>${a.outcome ? ' (' + esc(a.outcome) + ')' : ''} ${a.note ? '— ' + esc(a.note) : ''} <span class="muted">${esc(a.by_name || '')} · ${esc(dateIST(a.created_at))}</span></p>`).join('') || '<p class="muted">Nothing logged yet.</p>'}
     <div class="modal-actions"><button class="btn btn-primary" id="ld-close">Close</button></div></div>`;
   document.body.appendChild(ov);
+  $('ld-welcome').onclick = async () => { try { const w = (await api('/api/sales/leads/' + id + '/welcome')).data; if (!w.has_brochure || !w.has_map) toast('Tip: add the brochure link and map link in Settings (sales.brochure_url, sales.map_url) so they go in the message.'); window.open(waLink(w.phone, w.text), '_blank', 'noopener'); } catch (e) { toast(e.message); } };
   const reopen = () => { ov.remove(); leadDetail(id); if ($('sales-list')) loadSales(); };
   $('ld-close').onclick = () => { ov.remove(); if ($('sales-list')) loadSales(); };
   $('ld-log').onclick = async () => {

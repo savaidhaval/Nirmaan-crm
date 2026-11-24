@@ -22,7 +22,7 @@ const SETTING_GROUPS = [
 ];
 function settingInput(k, kind, v) {
   if (kind === 'basis') return `<select data-key="${k}" data-kind="${kind}"><option value="exclusive"${v !== 'inclusive' ? ' selected' : ''}>Without GST</option><option value="inclusive"${v === 'inclusive' ? ' selected' : ''}>With GST</option></select>`;
-  if (kind === 'onoff') return `<select data-key="${k}" data-kind="${kind}"><option value="off"${v !== 'on' ? ' selected' : ''}>Off</option><option value="on"${v === 'on' ? ' selected' : ''}>On</option></select>`;
+  if (kind === 'onoff') { const on = ON_BY_DEFAULT.includes(k) ? v !== 'off' : v === 'on'; return `<select data-key="${k}" data-kind="${kind}"><option value="off"${!on ? ' selected' : ''}>Off</option><option value="on"${on ? ' selected' : ''}>On</option></select>`; }
   const shown = kind === 'money' ? ((Number(v) || 0) / 100) : (v == null ? '' : v);
   if (kind === 'text') return `<textarea data-key="${k}" data-kind="${kind}" rows="2">${esc(shown)}</textarea>`;
   return `<input data-key="${k}" data-kind="${kind}" inputmode="decimal" value="${esc(shown)}">`;

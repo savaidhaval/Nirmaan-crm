@@ -15,7 +15,7 @@ await o.call('POST', '/api/sales/plan-stages', { project_id: pid, stages: [{ sta
 const mkUnit = async (wing, floor, n, type, extra = {}) => (await o.call('POST', '/api/sales/inventory', { project_id: pid, wing, floor, unit_no: n, type, price_paise: 10000000, rera_carpet_sqft: 500, ...extra })).data.id;
 const a301 = await mkUnit('A', 3, '301', '2BHK'); const a302 = await mkUnit('A', 3, '302', '2BHK'); const a801 = await mkUnit('A', 8, '801', '3BHK'); const a802 = await mkUnit('A', 8, '802', '3BHK'); const rehab = await mkUnit('A', 1, '101', '1BHK', { category: 'rehab', price_paise: 0 });
 const lead = (await sales.call('POST', '/api/sales/leads', { name: 'zz held', phone: '92' + digits, project_id: pid, source: 'meta' })).data.id;
-await sales.call('POST', `/api/sales/inventory/${a802}/hold`, { lead_id: lead });
+await sales.call('POST', `/api/sales/inventory/${a802}/hold`, { token_mode: 'upi', token_ref: 'UTR' + Math.random().toString(36).slice(2, 10), token_amount_paise: 100000, lead_id: lead });
 const b1 = (await o.call('POST', '/api/sales/bookings', { unit_id: a301, customer_name: 'zz one', token_paise: 100000 })).data.id;
 const b2 = (await o.call('POST', '/api/sales/bookings', { unit_id: a801, customer_name: 'zz two', agreed_price_paise: 9500000, discount_reason: 'launch offer approved', token_paise: 100000 })).data.id;
 await o.call('POST', `/api/sales/bookings/${b2}/registration`, { agreement_date: '2026-11-01', registration_date: '2026-11-15' });

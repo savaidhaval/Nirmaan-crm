@@ -25,7 +25,7 @@ export function registerReports(router, h) {
         WHERE i.project_id = ? AND i.deleted_at IS NULL ORDER BY i.wing, i.floor DESC, i.unit_no`).bind(pid).all();
       const seeNames = ['owner', 'pm', 'accounts', 'sales'].includes(req.user.role);
       const seeAllBuckets = ['owner', 'pm', 'accounts'].includes(req.user.role);   // sales and others never see rehab or landowner flats
-      const lockCc = (await getSetting(env, 'sales.lock_above_cc')) === 'on';
+      const lockCc = (await getSetting(env, 'sales.lock_above_cc')) !== 'off';   // on unless switched off
       const st = lockCc ? await approvalState(env, pid) : null;
       const units = rows.results.filter((u) => seeAllBuckets || (u.category !== 'rehab' && u.category !== 'landowner')).map((u) => {
         let state = 'available';

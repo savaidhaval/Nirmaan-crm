@@ -3,6 +3,7 @@
 // D1 has no SELECT ... FOR UPDATE; every claim below is a single conditional UPDATE whose `changes` count decides the winner.
 import { saleBlock, holdFor } from '../core/gates.js';
 import { ccSaleBlock } from './m2gaps.js';
+import { holdTokenCheck, holdTokenInsert } from './m2step2.js';
 
 export const LEAD_TRANSITIONS = {
   new: ['contacted', 'interested', 'visit_scheduled', 'lost'],
@@ -168,11 +169,14 @@ export function registerSalesOps(router, h) {
         const prev = await env.DB.prepare("SELECT ended_at FROM sal_hold_log WHERE unit_id = ? AND user_id = ? AND ended_at > datetime('now', '-' || ? || ' hours') ORDER BY id DESC LIMIT 1").bind(u.id, req.user.user_id, hrs).first();
         if (prev) return json({ ok: false, error: `You already held this flat and it went back without a token. You cannot block it again for ${hrs} hours. Ask a manager if the buyer is ready to pay.`, code: 'rehold' }, 409);
       }
+      const tk = await holdTokenCheck(env, getSetting, req.user, b); if (tk.error) return json({ ok: false, error: tk.error, code: 'token_proof' }, 400);
       const hours = Math.min(48, Math.max(1, Number(b.hours) || 48));
       const until = new Date(Date.now() + hours * 3600000).toISOString().replace('T', ' ').substring(0, 19);
+      const holdAt = nowStr();
       const r = await env.DB.prepare("UPDATE sal_inventory SET status = 'held', hold_by = ?, hold_lead_id = ?, hold_at = ?, blocked_till = ? WHERE id = ? AND status = 'available' AND deleted_at IS NULL")
-        .bind(req.user.user_id, leadId, nowStr(), until, u.id).run();
+        .bind(req.user.user_id, leadId, holdAt, until, u.id).run();
       if (!r.meta.changes) return json({ ok: false, error: 'Someone else already holds or has booked this flat.' }, 409);
+      if (tk.token) await holdTokenInsert(env, u, req.user, leadId, holdAt, tk.token, nowStr);
       await audit(env, req.user, 'hold', 'sal_inventory', u.id, `${u.wing || ''}-${u.unit_no} held for lead "${lead.name}" until ${until}`);
       return json({ ok: true, data: { blocked_till: until } });
     } catch (e) { return serverError(e, 'hold'); }
@@ -286,8 +290,14 @@ export function registerSalesOps(router, h) {
       // The broker is whoever registered the lead (locked at registration). A booking inherits it; tagging a different broker afterwards needs the Owner and a written reason.
       const asked = b.channel_partner_id && (await env.DB.prepare('SELECT id FROM sal_partners WHERE id = ? AND deleted_at IS NULL').bind(Number(b.channel_partner_id)).first()) ? Number(b.channel_partner_id) : null;
       const bookLeadId = b.lead_id ? Number(b.lead_id) : ((sheet && sheet.lead_id) || unit.hold_lead_id || null);
-      const leadRow = bookLeadId ? await env.DB.prepare('SELECT channel_partner_id FROM sal_leads WHERE id = ?').bind(bookLeadId).first() : null;
-      const lockedPartner = leadRow && leadRow.channel_partner_id ? Number(leadRow.channel_partner_id) : null;
+      const leadRow = bookLeadId ? await env.DB.prepare('SELECT channel_partner_id, source_confirmed_at, source_locked_until FROM sal_leads WHERE id = ?').bind(bookLeadId).first() : null;
+      let lockedPartner = leadRow && leadRow.channel_partner_id ? Number(leadRow.channel_partner_id) : null;
+      // The broker counts only if the buyer confirmed them at reception and the lock (45 days by default) is still running.
+      let warning = null;
+      if (lockedPartner && (await getSetting(env, 'sales.broker_needs_confirmation')) !== 'off' && !(leadRow.source_confirmed_at && leadRow.source_locked_until >= new Date(Date.now() + 19800000).toISOString().slice(0, 10))) {
+        warning = 'The channel partner on this lead is not on the booking: the buyer did not confirm them at reception, or the source lock has ended. The Owner can still add them with a written reason.';
+        lockedPartner = null;
+      }
       let partnerId = lockedPartner, partnerNote = '';
       if (asked && asked !== lockedPartner) {
         if (user.role !== 'owner' || String(b.partner_override_reason || '').trim().length < 10) return json({ ok: false, error: lockedPartner ? 'This lead was registered by another channel partner. The broker cannot be changed at booking.' : 'A broker can be tagged only when the lead is registered, before the visit. Only the Owner can add one now, with a written reason.', code: 'partner_lock' }, 409);
@@ -322,7 +332,7 @@ export function registerSalesOps(router, h) {
       stmts.push(env.DB.prepare('INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, ?, ?, ?, ?, ?)')
         .bind(user.user_id, 'create', 'sal_bookings', bookingId, `Booked ${unit.wing ? unit.wing + '-' : ''}${unit.unit_no} for ${name}: agreed ${rupees(agreed)} vs rate card ${rupees(list)}${partnerNote}${discountBp ? ` (discount ${(discountBp / 100).toFixed(2)}%, reason: ${b.discount_reason}${approvedBy ? ', approved by user ' + approvedBy : ''})` : ''}, token ${rupees(token)}`, now));
       await env.DB.batch(stmts);
-      return json({ ok: true, data: { id: bookingId, demands: stages.length, discount_bp: discountBp, warning: null } });
+      return json({ ok: true, data: { id: bookingId, demands: stages.length, discount_bp: discountBp, warning } });
     } catch (e) {
       // Undo the claim so the flat does not stay stuck as booked without a booking.
       if (claimed) { try { await env.DB.prepare("UPDATE sal_inventory SET status = ?, hold_by = ?, hold_lead_id = ?, hold_at = ?, blocked_till = ? WHERE id = ? AND status = 'booked' AND NOT EXISTS (SELECT 1 FROM sal_bookings WHERE unit_id = ? AND status <> 'cancelled' AND deleted_at IS NULL)").bind(claimed.status, claimed.hold_by, claimed.hold_lead_id, claimed.hold_at, claimed.blocked_till, claimed.id, claimed.id).run(); } catch (e2) { /* logged below */ } }
