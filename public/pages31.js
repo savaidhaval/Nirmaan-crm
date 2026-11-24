@@ -6,7 +6,7 @@ Object.assign(ICONS, {
 });
 const NAV_MODULES = [
   ['1. Land & Approvals', 'g-projects', ['bd', 'projects', 'tasks', 'approvals', 'redevelopment', 'siteboard', 'feasibility']],
-  ['2. Pre-Sales & Inventory', 'g-sales', ['sales', 'stacking', 'brochures', 'enquiryform']],
+  ['2. Pre-Sales & Inventory', 'g-sales', ['sales', 'reception', 'tokens', 'updates', 'stacking', 'pricing', 'brochures', 'enquiryform']],
   ['3. Site & Contractors', 'g-site', ['drawings', 'site', 'quality', 'stores', 'procurement', 'contractors', 'budget', 'boq', 'petty']],
   ['4. Collections & RERA', 'g-money', ['demandletters', 'rera', 'bank', 'tally', 'finance', 'reports']],
   ['5. Possession & Society', 'g-handover', ['possession', 'snags']],

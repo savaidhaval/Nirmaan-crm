@@ -6,6 +6,8 @@
 // Money is integer paise. Tax and stamp-duty rates are inputs taken from Settings: nothing is hard-coded (confirm with your CA / advocate).
 import { emit } from '../core/events.js';
 import { saleBlock, approvalState, holdFor } from '../core/gates.js';
+import { checkPin } from '../core/pin.js';
+import { ccSaleBlock } from './m2gaps.js';
 
 const rupees = (p) => '₹' + (Number(p) / 100).toLocaleString('en-IN');
 const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : 0; };
@@ -340,6 +342,7 @@ export function registerSales3(router, h) {
       if (unit.category === 'landowner') return json({ ok: false, error: 'Landowner-share flats are not sold from here.' }, 400);
       { const blk = await saleBlock(env, unit.project_id); if (blk) return json({ ok: false, error: blk, code: 'rera' }, 409); }
       { const held = await holdFor(env, unit.project_id, unit.wing); if (held) return json({ ok: false, error: held + '. No cost sheets until the hold is released.', code: 'hold' }, 409); }
+      { const cc = await ccSaleBlock(env, getSetting, unit); if (cc) return json({ ok: false, error: cc, code: 'cc_floor' }, 409); }
       const leadId = b.lead_id ? Number(b.lead_id) : null;
       if (leadId) {
         const l = await env.DB.prepare('SELECT assigned_to FROM sal_leads WHERE id = ? AND deleted_at IS NULL').bind(leadId).first();
@@ -369,8 +372,8 @@ export function registerSales3(router, h) {
       const total = agreement + gst + stamp + reg, below = Math.max(0, list - agreement);
       const prev = await env.DB.prepare('SELECT COALESCE(MAX(version), 0) AS v FROM sal_cost_sheets WHERE unit_id = ? AND COALESCE(lead_id, 0) = COALESCE(?, 0)').bind(unit.id, leadId).first();
       const ins = await env.DB.prepare(`INSERT INTO sal_cost_sheets (unit_id, lead_id, version, area_basis, area_sqft, base_rate_paise_per_sqft, base_paise, additions_paise, discount_paise, list_paise, agreement_value_paise, below_list_paise,
-          gst_bp, gst_paise, stamp_duty_bp, stamp_duty_paise, registration_paise, total_paise, status, note, created_by, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?)`)
-        .bind(unit.id, leadId, prev.v + 1, basis, area, rate, base, additions, discount, list, agreement, below, gstBp, gst, stampBp, stamp, reg, total, String(b.note || '').slice(0, 300), req.user.user_id, nowStr()).run();
+          gst_bp, gst_paise, stamp_duty_bp, stamp_duty_paise, registration_paise, total_paise, status, note, created_by, created_at, below_msp, msp_paise) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?)`)
+        .bind(unit.id, leadId, prev.v + 1, basis, area, rate, base, additions, discount, list, agreement, below, gstBp, gst, stampBp, stamp, reg, total, String(b.note || '').slice(0, 300), req.user.user_id, nowStr(), unit.msp_paise && agreement < unit.msp_paise ? 1 : 0, unit.msp_paise || null).run();
       const id = ins.meta.last_row_id;
       await env.DB.batch([
         ...lines.map((l) => env.DB.prepare('INSERT INTO sal_cost_sheet_lines (sheet_id, label, kind, amount_paise) VALUES (?, ?, ?, ?)').bind(id, l.label, l.kind, l.amount)),
@@ -378,7 +381,7 @@ export function registerSales3(router, h) {
         env.DB.prepare("UPDATE sal_cost_sheets SET status = 'superseded' WHERE unit_id = ? AND COALESCE(lead_id, 0) = COALESCE(?, 0) AND id != ? AND booking_id IS NULL AND status IN ('draft', 'pending_approval', 'approved')").bind(unit.id, leadId, id),
         audit(env, req.user, 'create', 'sal_cost_sheets', id, `Cost sheet v${prev.v + 1} for ${unit.wing ? unit.wing + '-' : ''}${unit.unit_no}: agreement ${rupees(agreement)}, ${rupees(below)} below the rate card`),
       ]);
-      return json({ ok: true, data: { id, version: prev.v + 1, agreement_value_paise: agreement, gst_paise: gst, stamp_duty_paise: stamp, registration_paise: reg, total_paise: total, below_list_paise: below } });
+      return json({ ok: true, data: { id, version: prev.v + 1, below_msp: !!(unit.msp_paise && agreement < unit.msp_paise), agreement_value_paise: agreement, gst_paise: gst, stamp_duty_paise: stamp, registration_paise: reg, total_paise: total, below_list_paise: below } });
     } catch (e) { return serverError(e, 'cs-create'); }
   }));
 
@@ -409,7 +412,7 @@ export function registerSales3(router, h) {
       if (s.created_by !== req.user.user_id && req.user.role !== 'owner') return json({ ok: false, error: 'Only the person who made it can send it for approval.' }, 403);
       const r = await env.DB.prepare("UPDATE sal_cost_sheets SET status = 'pending_approval' WHERE id = ? AND status IN ('draft', 'rejected')").bind(s.id).run();
       if (!r.meta.changes) return json({ ok: false, error: 'Only a draft can be sent for approval.' }, 409);
-      await shared.notifyApprovers(env, req.user.user_id, `Cost sheet to approve: ${rupees(s.agreement_value_paise)}`, s.below_list_paise ? `${rupees(s.below_list_paise)} below the rate card.` : 'At the rate card.');
+      await shared.notifyApprovers(env, req.user.user_id, `Cost sheet to approve: ${rupees(s.agreement_value_paise)}`, (s.below_msp ? 'BELOW MINIMUM SELLING PRICE: Owner approval PIN needed. ' : '') + (s.below_list_paise ? `${rupees(s.below_list_paise)} below the rate card.` : 'At the rate card.'));
       return json({ ok: true });
     } catch (e) { return serverError(e, 'cs-submit'); }
   }));
@@ -422,8 +425,13 @@ export function registerSales3(router, h) {
       const b = await req.json().catch(() => ({}));
       const limit = Math.round(num(await getSetting(env, 'sales.discount_pm_limit_paise')));
       if (approve && req.user.role !== 'owner' && s.below_list_paise > limit) return json({ ok: false, error: `This cost sheet is ${rupees(s.below_list_paise)} below the rate card, above the PM's limit (${rupees(limit)}). The Owner must approve it.` }, 403);
+      // Below the minimum selling price: only the Owner, and only with the approval PIN (the digital sign-off trail).
+      if (approve && s.below_msp) {
+        if (req.user.role !== 'owner') return json({ ok: false, error: `This cost sheet is below the flat's minimum selling price (${rupees(s.msp_paise)}). Only the Owner can approve it, with the approval PIN.` }, 403);
+        const pe = await checkPin(env, req.user.user_id, b.pin); if (pe) return json({ ok: false, error: pe, code: 'pin_required' }, 400);
+      }
       if (!approve && !String(b.note || '').trim()) return json({ ok: false, error: 'Please say why it is rejected.' }, 400);
-      const r = await env.DB.prepare("UPDATE sal_cost_sheets SET status = ?, approved_by = ?, approved_at = ?, decision_note = ? WHERE id = ? AND status = 'pending_approval'").bind(approve ? 'approved' : 'rejected', req.user.user_id, nowStr(), String(b.note || '').slice(0, 200), s.id).run();
+      const r = await env.DB.prepare("UPDATE sal_cost_sheets SET status = ?, approved_by = ?, approved_at = ?, decision_note = ?, msp_approved_by = ? WHERE id = ? AND status = 'pending_approval'").bind(approve ? 'approved' : 'rejected', req.user.user_id, nowStr(), String(b.note || '').slice(0, 200), approve && s.below_msp ? req.user.user_id : null, s.id).run();
       if (!r.meta.changes) return json({ ok: false, error: 'This cost sheet is not waiting for approval.' }, 409);
       await audit(env, req.user, approve ? 'approve' : 'reject', 'sal_cost_sheets', s.id, `${req.user.name} ${approve ? 'approved' : 'rejected'} cost sheet v${s.version} (${rupees(s.agreement_value_paise)}, ${rupees(s.below_list_paise)} below rate card)${s.created_by === req.user.user_id ? ' (approved by Owner as maker)' : ''}`).run();
       if (s.created_by) await env.DB.prepare('INSERT INTO notifications (user_id, title, body, link, created_at) VALUES (?, ?, ?, ?, ?)').bind(s.created_by, `Cost sheet ${approve ? 'approved' : 'rejected'}`, String(b.note || ''), 'sales', nowStr()).run();

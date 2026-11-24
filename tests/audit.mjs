@@ -51,8 +51,8 @@ ok('manager can reopen', (await o.call('POST', `/api/sales/leads/${sl}/activity`
 const u1 = await mkUnit('H');
 const hl = (await s1.call('POST', '/api/sales/leads', { name: 'zz hold', phone: '94' + digits, project_id: pid })).data.id;
 ok('hold needs a lead', (await s1.call('POST', `/api/sales/inventory/${u1}/hold`, {})).status === 400);
-ok('cannot hold for someone else\'s lead', (await s2.call('POST', `/api/sales/inventory/${u1}/hold`, { lead_id: hl })).status === 403);
-const holds = await Promise.all([s1.call('POST', `/api/sales/inventory/${u1}/hold`, { lead_id: hl }), o.call('POST', `/api/sales/inventory/${u1}/hold`, { lead_id: hl }), pm.call('POST', `/api/sales/inventory/${u1}/hold`, { lead_id: hl })]);
+ok('cannot hold for someone else\'s lead', (await s2.call('POST', `/api/sales/inventory/${u1}/hold`, { token_mode: 'upi', token_ref: 'UTR' + Math.random().toString(36).slice(2, 10), token_amount_paise: 100000, lead_id: hl })).status === 403);
+const holds = await Promise.all([s1.call('POST', `/api/sales/inventory/${u1}/hold`, { token_mode: 'upi', token_ref: 'UTR' + Math.random().toString(36).slice(2, 10), token_amount_paise: 100000, lead_id: hl }), o.call('POST', `/api/sales/inventory/${u1}/hold`, { token_mode: 'upi', token_ref: 'UTR' + Math.random().toString(36).slice(2, 10), token_amount_paise: 100000, lead_id: hl }), pm.call('POST', `/api/sales/inventory/${u1}/hold`, { token_mode: 'upi', token_ref: 'UTR' + Math.random().toString(36).slice(2, 10), token_amount_paise: 100000, lead_id: hl })]);
 ok('simultaneous holds: exactly one winner', holds.filter((h) => h.status === 200).length === 1 && holds.filter((h) => h.status === 409).length === 2, JSON.stringify(holds.map((h) => h.status)));
 const winner = holds.findIndex((h) => h.status === 200);
 ok('other rep cannot book a held flat', (await s2.call('POST', '/api/sales/bookings', { unit_id: u1, customer_name: 'zz thief', token_paise: 100000 })).status === 409);

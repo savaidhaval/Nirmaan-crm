@@ -14,11 +14,12 @@ async function leadDetail(id) {
   const ov = document.createElement('div'); ov.className = 'modal-overlay';
   ov.innerHTML = `<div class="modal"><div class="row"><div><h2>${esc(l.name)}</h2><p class="muted">${esc(l.config_pref || '')} ${l.next_followup_at ? '· next follow-up ' + esc(String(l.next_followup_at).replace('T', ' ').substring(0, 16)) : ''}</p></div>${statusChip(l.status)}</div>
     <div class="row-btns"><a class="btn small btn-primary" href="tel:${esc(l.phone)}">📞 Call</a><a class="btn small" href="${waLink(l.phone, 'Hello ' + l.name + ', thank you for your interest. ')}" target="_blank" rel="noopener">WhatsApp</a>
-      <button class="btn small" id="ld-log">Log a call / note</button><button class="btn small" id="ld-visit">Schedule visit</button></div>
+      <button class="btn small" id="ld-welcome">Send welcome pack</button><button class="btn small" id="ld-log">Log a call / note</button><button class="btn small" id="ld-visit">Schedule visit</button></div>
     ${d.visits.filter((v) => v.status === 'scheduled').map((v) => `<div class="card" style="margin-top:12px"><b>Visit ${esc(String(v.visit_at).replace('T', ' ').substring(0, 16))}</b><div class="row-btns"><button class="btn small" data-vs="done" data-id="${v.id}">Visited</button><button class="btn small" data-vs="no_show" data-id="${v.id}">No-show</button><button class="btn small" data-vs="cancelled" data-id="${v.id}">Cancel</button></div></div>`).join('')}
     <h3>Timeline</h3>${d.activities.map((a) => `<p>• <b>${esc(a.type)}</b>${a.outcome ? ' (' + esc(a.outcome) + ')' : ''} ${a.note ? '— ' + esc(a.note) : ''} <span class="muted">${esc(a.by_name || '')} · ${esc(dateIST(a.created_at))}</span></p>`).join('') || '<p class="muted">Nothing logged yet.</p>'}
     <div class="modal-actions"><button class="btn btn-primary" id="ld-close">Close</button></div></div>`;
   document.body.appendChild(ov);
+  $('ld-welcome').onclick = async () => { try { const w = (await api('/api/sales/leads/' + id + '/welcome')).data; if (!w.has_brochure || !w.has_map) toast('Tip: add the brochure link and map link in Settings (sales.brochure_url, sales.map_url) so they go in the message.'); window.open(waLink(w.phone, w.text), '_blank', 'noopener'); } catch (e) { toast(e.message); } };
   const reopen = () => { ov.remove(); leadDetail(id); if ($('sales-list')) loadSales(); };
   $('ld-close').onclick = () => { ov.remove(); if ($('sales-list')) loadSales(); };
   $('ld-log').onclick = async () => {
@@ -50,6 +51,15 @@ async function leadDetail(id) {
 // ---------- Sales screen extras: follow-ups strip, partners, funnel ----------
 async function decorateSales(el) {
   const mgr = ['owner', 'pm', 'accounts'].includes(currentUser.role);
+  el.insertAdjacentHTML('afterbegin', `<div class="card" id="numchk"><b>Is this number already ours?</b><p class="muted">Type a buyer's mobile number. It shows who registered them first (a channel partner, or us) and, for your own leads, their last visit and preferences.</p><div class="row-btns" style="margin:0"><input id="numchk-in" type="tel" inputmode="numeric" placeholder="10-digit mobile" style="flex:1;min-width:160px;min-height:48px;padding:0 14px;border:0;border-radius:14px;background:#f0f0f3"><button class="btn small btn-primary" id="numchk-go">Check</button></div><div id="numchk-out"></div></div>`);
+  $('numchk-go').onclick = async () => {
+    const out = $('numchk-out'); out.innerHTML = '';
+    try {
+      const d = (await api('/api/sales/recognize?phone=' + encodeURIComponent($('numchk-in').value))).data;
+      out.innerHTML = !d.registered ? '<p style="margin:10px 0 0"><b>Not registered.</b> A new lead can be added.</p>'
+        : `<p style="margin:10px 0 0"><b>Already registered</b> by ${esc(d.by)} on ${esc(d.on)}${d.closer ? ' · closer ' + esc(d.closer) : ''}.</p>` + (d.name ? `<p class="muted">${esc(d.name)} · ${esc(String(d.status || '').replace(/_/g, ' '))}${d.config_pref ? ' · wants ' + esc(d.config_pref) : ''}${d.budget_paise ? ' · budget ' + moneyP(d.budget_paise) : ''}${d.visits ? ' · ' + d.visits + ' visit' + (d.visits > 1 ? 's' : '') + ', last ' + esc(d.last_visit || '') : ' · no visit yet'}</p>` : '');
+    } catch (e) { out.innerHTML = '<p class="error">' + esc(e.message) + '</p>'; }
+  };
   try {
     const f = (await api('/api/sales/followups')).data;
     if (f.followups.length || f.visits.length) {
@@ -68,7 +78,9 @@ async function decorateSales(el) {
       ${fun.data.source.map((s) => `<p style="margin:2px 0">${esc(s.source || 'other')}: ${s.n} leads, ${s.booked || 0} booked</p>`).join('')}</div>`;
     html += `<h3>Channel partners</h3><div class="row-btns" style="margin:0 0 10px"><button class="btn small" id="pt-add">+ Add partner</button></div>` + (par.data.partners.map((p) => {
       const payable = p.earned_paise - p.paid_paise;
-      return `<div class="card"><div class="row"><div><b>${esc(p.firm)}</b><p class="muted">${esc(p.contact || '')} ${esc(p.phone || '')}${p.brokerage_default_bp ? ' · default ' + (p.brokerage_default_bp / 100) + '%' : ''}</p></div><div style="text-align:right"><div>Payable <b>${moneyP(Math.max(payable, 0))}</b></div><div class="muted">earned ${moneyP(p.earned_paise)} · paid ${moneyP(p.paid_paise)}</div></div></div>${userCanClient('sales', 'A') ? `<div class="row-btns"><button class="btn small" data-pay="${p.id}">Record payment</button></div>` : ''}</div>`;
+      const kycTone = p.kyc_status === 'approved' ? (p.rera_valid_till && p.rera_valid_till < today() ? 'bad' : 'good') : 'warn';
+      const kycText = p.kyc_status === 'approved' ? (p.rera_valid_till && p.rera_valid_till < today() ? 'MahaRERA expired ' + p.rera_valid_till : 'KYC approved · RERA till ' + (p.rera_valid_till || '')) : 'KYC pending: brokerage locked';
+      return `<div class="card"><div class="row"><div><b>${esc(p.firm)}</b> ${chip(kycText, kycTone)}<p class="muted">${esc(p.contact || '')} ${esc(p.phone || '')}${p.brokerage_default_bp ? ' · default ' + (p.brokerage_default_bp / 100) + '%' : ''}${p.rera_no ? ' · RERA ' + esc(p.rera_no) : ''}${p.pan_last4 ? ' · PAN ••••' + esc(p.pan_last4) : ''}${p.gstin ? ' · GSTIN ' + esc(p.gstin) : ''}</p></div><div style="text-align:right"><div>Payable <b>${moneyP(Math.max(payable, 0))}</b></div><div class="muted">earned ${moneyP(p.earned_paise)} · paid ${moneyP(p.paid_paise)}</div></div></div><div class="row-btns">${userCanClient('sales', 'A') ? `<button class="btn small" data-pay="${p.id}">Record payment</button>` : ''}<button class="btn small" data-kyc="${p.id}">KYC details</button>${p.kyc_status !== 'approved' && ['owner', 'accounts'].includes(currentUser.role) ? `<button class="btn small btn-primary" data-kyca="${p.id}">Approve KYC</button>` : ''}</div></div>`;
     }).join('') || '<p class="muted">No partners yet.</p>');
     el.insertAdjacentHTML('beforeend', html);
     $('pt-add').onclick = async () => {
@@ -76,6 +88,12 @@ async function decorateSales(el) {
       if (!v) return; if (v.brokerage_default_bp !== undefined && v.brokerage_default_bp !== '') v.brokerage_default_bp = Math.round(Number(v.brokerage_default_bp) * 100);
       if (await act(api('/api/sales/partners', { method: 'POST', body: v }), 'Partner added')) loadSales();
     };
+    el.querySelectorAll('[data-kyc]').forEach((b) => { b.onclick = async () => {
+      const p = par.data.partners.find((x) => String(x.id) === b.dataset.kyc);
+      const v = await openForm({ title: 'Partner KYC: ' + p.firm, intro: 'MahaRERA certificate number and expiry, PAN and GSTIN. Saving any change needs a fresh approval. Brokerage cannot be paid until it is approved and the MahaRERA registration is valid.', fields: [{ name: 'rera_no', label: 'MahaRERA agent registration no.', value: p.rera_no || '' }, { name: 'rera_valid_till', label: 'MahaRERA valid till', type: 'date', value: p.rera_valid_till || '' }, { name: 'pan', label: 'PAN', placeholder: p.pan_last4 ? 'on file, ends ' + p.pan_last4 + ' (leave blank to keep)' : 'ABCDE1234F' }, { name: 'gstin', label: 'GSTIN', value: p.gstin || '' }] });
+      if (v && await act(api(`/api/sales/partners/${b.dataset.kyc}/kyc`, { method: 'POST', body: v }), 'Saved. Approve it to release brokerage.')) loadSales();
+    }; });
+    el.querySelectorAll('[data-kyca]').forEach((b) => { b.onclick = async () => { if (await act(api(`/api/sales/partners/${b.dataset.kyca}/kyc/approve`, { method: 'POST' }), 'KYC approved')) loadSales(); }; });
     el.querySelectorAll('[data-pay]').forEach((b) => { b.onclick = async () => {
       const v = await openForm({ title: 'Brokerage payment', fields: [{ name: 'amount_paise', label: 'Amount (₹)', type: 'money', required: true }, { name: 'tds_paise', label: 'TDS deducted (₹)', type: 'money' }, { name: 'paid_on', label: 'Paid on', type: 'date', value: today() }, { name: 'ref_no', label: 'Reference' }] });
       if (v && await act(api(`/api/sales/partners/${b.dataset.pay}/payments`, { method: 'POST', body: v }), 'Recorded')) loadSales();

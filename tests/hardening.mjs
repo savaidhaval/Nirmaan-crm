@@ -13,7 +13,7 @@ import fs from 'node:fs';
 const src = ['src/index.js', ...fs.readdirSync('src/routes').map((f) => 'src/routes/' + f)].map((f) => fs.readFileSync(f, 'utf8')).join('\n');
 const routes = [...new Set([...src.matchAll(/router\.(get|post|put|delete)\(\s*'([^']+)'/g)].map((m) => m[1].toUpperCase() + ' ' + m[2]))].map((x) => { const [method, path] = x.split(' '); return { method, path, url: path.replace(/:[a-zA-Z_]+/g, '1') }; });
 console.log(`INFO  ${routes.length} routes found`);
-const PUBLIC = [/^\/api\/health/, /^\/api\/auth\//, /^\/api\/storage\/google\/callback/, /^\/api\/public\//, /^\/s\//, /^\/d\//, /^\/brand\//, /^\/api\/webhooks\//, /^\/api\/branding\/public/, /^\/api\/legal/, /^\/__/];
+const PUBLIC = [/^\/api\/health/, /^\/api\/auth\//, /^\/api\/storage\/google\/callback/, /^\/api\/public\//, /^\/s\//, /^\/c\//, /^\/d\//, /^\/brand\//, /^\/api\/webhooks\//, /^\/api\/branding\/public/, /^\/api\/legal/, /^\/__/];
 const isPublic = (p) => PUBLIC.some((re) => re.test(p));
 const priv = routes.filter((r) => !isPublic(r.path));
 // harness users

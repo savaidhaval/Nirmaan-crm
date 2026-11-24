@@ -1,4 +1,5 @@
 // routes/reports.js — executive reporting: stacking plan, cash flow + escrow, receivable aging, marketing/CP ROI, velocity + discount leakage.
+import { approvalState } from '../core/gates.js';
 export function registerReports(router, h) {
   const { withAuth, json, serverError, visibleProjectIds, getSetting, nowStr } = h;
   const MONEY_ROLES = ['owner', 'pm', 'accounts'];
@@ -17,26 +18,30 @@ export function registerReports(router, h) {
       const pid = Number(new URL(req.url).searchParams.get('project_id'));
       const ids = await scopeIds(env, req.user, pid);
       if (!pid || !ids.length) return json({ ok: false, error: 'Pick a project.' }, 400);
-      const rows = await env.DB.prepare(`SELECT i.id, i.wing, i.floor, i.unit_no, i.type, i.category, i.status, i.price_paise, i.floor_rise_paise, i.carpet_sqft, i.rera_carpet_sqft, i.blocked_till, i.hold_by,
+      const rows = await env.DB.prepare(`SELECT i.id, i.wing, i.floor, i.unit_no, i.type, i.category, i.status, i.price_paise, i.floor_rise_paise, i.msp_paise, i.plc_tags, i.carpet_sqft, i.rera_carpet_sqft, i.blocked_till, i.hold_by,
         hu.name AS holder, hl.name AS holder_lead, b.id AS booking_id, b.customer_name, b.agreed_price_paise, b.registration_date, b.status AS booking_status
         FROM sal_inventory i LEFT JOIN users hu ON hu.id = i.hold_by LEFT JOIN sal_leads hl ON hl.id = i.hold_lead_id
         LEFT JOIN sal_bookings b ON b.unit_id = i.id AND b.status <> 'cancelled' AND b.deleted_at IS NULL
         WHERE i.project_id = ? AND i.deleted_at IS NULL ORDER BY i.wing, i.floor DESC, i.unit_no`).bind(pid).all();
       const seeNames = ['owner', 'pm', 'accounts', 'sales'].includes(req.user.role);
-      const units = rows.results.map((u) => {
+      const seeAllBuckets = ['owner', 'pm', 'accounts'].includes(req.user.role);   // sales and others never see rehab or landowner flats
+      const lockCc = (await getSetting(env, 'sales.lock_above_cc')) !== 'off';   // on unless switched off
+      const st = lockCc ? await approvalState(env, pid) : null;
+      const units = rows.results.filter((u) => seeAllBuckets || (u.category !== 'rehab' && u.category !== 'landowner')).map((u) => {
         let state = 'available';
         if (u.category === 'rehab') state = 'rehab';
         else if (u.category === 'landowner') state = 'landowner';
         else if (u.status === 'possessed') state = 'possessed';
         else if (u.booking_id) state = u.registration_date ? 'registered' : 'booked';
         else if (u.status === 'held') state = 'token_locked';
+        else if (st && u.floor != null && st.ccUpto(u.wing || null) != null && u.floor > st.ccUpto(u.wing || null)) state = 'not_open';   // above the approved CC floor
         const list = u.price_paise + (u.floor_rise_paise || 0);
-        return { id: u.id, wing: u.wing || '', floor: u.floor, unit_no: u.unit_no, type: u.type, state, list_paise: list, carpet_sqft: u.carpet_sqft, rera_carpet_sqft: u.rera_carpet_sqft,
+        return { id: u.id, wing: u.wing || '', floor: u.floor, unit_no: u.unit_no, type: u.type, state, list_paise: list, msp_paise: ['owner', 'pm'].includes(req.user.role) ? u.msp_paise : null, plc_tags: ['owner', 'pm'].includes(req.user.role) ? (u.plc_tags || '') : null, carpet_sqft: u.carpet_sqft, rera_carpet_sqft: u.rera_carpet_sqft,
           rate_sqft_paise: u.rera_carpet_sqft ? Math.round(list / u.rera_carpet_sqft) : null, holder: state === 'token_locked' ? u.holder : null, holder_lead: state === 'token_locked' && seeNames ? u.holder_lead : null, blocked_till: state === 'token_locked' ? u.blocked_till : null,
           booking_id: seeNames ? u.booking_id : null, customer: seeNames && state !== 'available' ? u.customer_name : null, agreed_paise: seeNames ? u.agreed_price_paise : null };
       });
       const counts = {}; let value = 0; let soldValue = 0;
-      for (const u of units) { counts[u.state] = (counts[u.state] || 0) + 1; if (u.state !== 'rehab' && u.state !== 'landowner') { value += u.list_paise; if (['booked', 'registered', 'possessed'].includes(u.state)) soldValue += u.agreed_paise || u.list_paise; } }
+      for (const u of units) { counts[u.state] = (counts[u.state] || 0) + 1; if (u.state !== 'rehab' && u.state !== 'landowner' && u.state !== 'not_open') { value += u.list_paise; if (['booked', 'registered', 'possessed'].includes(u.state)) soldValue += u.agreed_paise || u.list_paise; } }
       return json({ ok: true, data: { units, counts, total_list_value_paise: value, sold_value_paise: soldValue } });
     } catch (e) { return serverError(e, 'stacking'); }
   }));
