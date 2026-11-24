@@ -189,3 +189,6 @@ Code complete on branch claude/compassionate-knuth-rll4qm; migrations 0040, 0041
 ## Menu by module, Module 5 screens (migration 0043)
 Branch claude/compassionate-knuth-rll4qm, NOT merged (waiting for Dhaval's approval). Menu regrouped by module in public/pages31.js (a final wrapper over earlier menus; pages32.js adds the Possession and Snags screens). Verified for all 8 roles: nothing lost, nothing repeated, each screen under its module; 46 owner screens open without errors. Site page keeps its own snag list.
 
+## Welcome page and project chooser (step 1, front-end only)
+Branch claude/compassionate-knuth-rll4qm, NOT merged (waiting for Dhaval's approval). public/pages33.js (loaded last) adds the Welcome page, project home, company menu and project menu, project chip in the top bar. Browser-checked as owner, site engineer, sales and HR (see CHANGELOG). Decisions from Dhaval: (1) everyone except the Owner sees only assigned projects, (2) a redevelopment project starts after the 79A process is completed and the society gives the preferred-developer / appointment letter; a land project starts when the land is bought, (3) the Owner's Welcome page shows company-wide figures, (4) a project shows only the modules that apply to it. Not built yet: (1), (2), (3) figures on Welcome, (4) stage rules.
+

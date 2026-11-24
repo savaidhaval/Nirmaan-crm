@@ -519,3 +519,9 @@ body.hc .task-row.late { border-left-width: 8px !important; }
 .lc-step.done { border-left-color: #16a34a; }
 .lc-step.next { border-left-color: #1d4ed8; background: rgba(29, 78, 216, .05); }
 .set-group summary { cursor: pointer; min-height: 48px; }
+
+/* Welcome page and project chip */
+.proj-card { text-align: left; cursor: pointer; display: flex; flex-direction: column; gap: 6px; border: 0; font: inherit; color: inherit; }
+.proj-card .btn { align-self: flex-start; margin-top: 4px; }
+.proj-chip { max-width: 34vw; min-width: 0; flex-shrink: 1; display: inline-flex; align-items: center; gap: 6px; }
+.proj-chip span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
