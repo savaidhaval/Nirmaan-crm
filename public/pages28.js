@@ -77,8 +77,8 @@ async function bdUpload(file, title) {
 const BD_HELP = `<details class="card"><summary><b>How this works</b></summary>
   <p>Every new project starts here. Add the society or land as an <b>opportunity</b>, then:</p>
   <p>1. <b>Follow-ups</b>: record each call or meeting and the next date (you get a reminder that day).<br>2. <b>Feasibility study</b>: attach the report and the cost and revenue figures.<br>
-  3. <b>79A process</b> (societies only): tick each step as the society completes it.<br>4. <b>Development agreement</b>: record it when signed, then when registered.<br>
-  5. <b>Open as project</b>: creates the project with its approvals list (CFO NOC, concessions, IOD, CC, OC...), the feasibility study and the society.</p>
+  3. <b>79A process</b> (societies only): tick each step as the society completes it.<br>4. <b>The paper that starts the project</b>: for a society, its appointment letter (after the 79A process); for land, the registered sale deed. A JV or other deal starts when its development agreement is registered.<br>
+  5. <b>Open as project</b>: creates the project with its approvals list (CFO NOC, concessions, IOD, CC, OC...), the feasibility study and the society. The development agreement can be recorded before or after.</p>
   <p class="muted">Usual times: vacating to plinth CC 6 to 8 months; plinth CC to completion 36 months. Change them in Settings → Business development.</p></details>`;
 
 async function renderBd(main) {
@@ -136,8 +136,14 @@ async function bdDetail(id) {
   const stepsDone = d.steps.filter((x) => x.done_on).length;
   const fact = (l, v) => (v || v === 0 ? `<div class="fact"><span class="muted">${esc(l)}</span><b>${v}</b></div>` : '');
   const stages = BD_STAGES.filter((s) => society || s !== 'process_79a');
-  const nextAction = !open ? '' : o.stage === 'da_registered' ? 'convert' : o.stage === 'da_signed' ? 'registered' : !d.studies.length ? (d.followups.length ? 'study' : 'followup') : society && stepsDone < d.steps.length ? 'steps' : 'signed';
-  const BTN = { followup: ['bd-fu', 'Add follow-up'], study: ['bd-study', 'Add feasibility study'], steps: ['bd-steps-go', 'Tick 79A steps'], signed: ['bd-signed', 'DA signed'], registered: ['bd-reg', 'DA registered'], convert: ['bd-convert', 'Open as project'] };
+  // A society starts with its appointment letter after the 79A process; land when it is bought; a JV or other deal when its DA is registered.
+  const paperDeal = society || o.kind === 'land', hasPaper = !!o.start_paper_doc_id;
+  const nextAction = !open ? '' : paperDeal
+    ? (society && stepsDone < d.steps.length ? (!d.studies.length ? (d.followups.length ? 'study' : 'followup') : 'steps') : !hasPaper ? 'paper' : 'convert')
+    : o.stage === 'da_registered' ? 'convert' : o.stage === 'da_signed' ? 'registered' : !d.studies.length ? (d.followups.length ? 'study' : 'followup') : 'signed';
+  const BTN = { followup: ['bd-fu', 'Add follow-up'], study: ['bd-study', 'Add feasibility study'], steps: ['bd-steps-go', 'Tick 79A steps'], signed: ['bd-signed', 'DA signed'], registered: ['bd-reg', 'DA registered'], convert: ['bd-convert', 'Open as project'],
+    paper: ['bd-paper', society ? 'Record the appointment letter' : 'Record the land purchase'] };
+  const daNext = !open ? '' : o.stage === 'da_registered' ? '' : o.stage === 'da_signed' ? 'registered' : (d.studies.length ? 'signed' : '');   // optional for a society or land deal
   const btn = (k, primary) => (bdCan(k === 'followup' || k === 'study' ? 'C' : 'A') ? `<button class="btn${primary ? ' btn-primary' : ''}" id="${BTN[k][0]}">${BTN[k][1]}</button>` : '');
   main.innerHTML = `<button class="btn small" id="bd-back">← All deals</button>
     <h1 style="margin-bottom:2px">${esc(o.name)}</h1>
@@ -145,10 +151,11 @@ async function bdDetail(id) {
     <div class="card"><div class="bd-steps" style="display:flex;flex-wrap:wrap;gap:6px">${stages.map((s) => { const i = BD_STAGES.indexOf(s); const past = i < at || (o.stage === 'da_registered' && i === at); return chip((past ? '✓ ' : '') + BD_STAGE_LABEL[s], past ? 'good' : i === at ? 'info' : ''); }).join(' ')}</div></div>
     ${o.project_id ? `<div class="card"><b>This deal is now a project.</b> <button class="btn small btn-primary" id="bd-open-project">Open the project</button></div>` : ''}
     ${o.override_note ? `<div class="card task-row late"><b>DA signed with 79A steps open</b><p class="muted">${esc(o.override_note)}</p></div>` : ''}
-    ${open ? `<div class="row-btns" style="margin:12px 0">${nextAction ? btn(nextAction, true) : ''}${['followup', 'study'].filter((k) => k !== nextAction).map((k) => btn(k)).join('')}${bdCan('E') ? '<button class="btn" id="bd-edit">Edit details</button><button class="btn" id="bd-close">Lost / dropped</button>' : ''}</div>` : ''}
+    ${open ? `<div class="row-btns" style="margin:12px 0">${nextAction ? btn(nextAction, true) : ''}${['followup', 'study', ...(paperDeal ? [hasPaper && nextAction !== 'paper' ? 'paper' : '', daNext] : [])].filter((k) => k && k !== nextAction).map((k) => btn(k)).join('')}${bdCan('E') ? '<button class="btn" id="bd-edit">Edit details</button><button class="btn" id="bd-close">Lost / dropped</button>' : ''}</div>` : ''}
     <h3>Details</h3><div class="card facts">${fact('Address', esc(o.address || ''))}${fact('Ward', esc(o.ward || ''))}${fact('Members / flats', o.members_count)}${fact('Plot area', o.plot_area_sqm ? o.plot_area_sqm + ' sq m' : '')}
       ${fact('Contact', o.contact_name || o.contact_phone ? `${esc(o.contact_name || '')} ${o.contact_phone ? `<a href="tel:${esc(o.contact_phone)}">${esc(o.contact_phone)}</a>` : ''}` : '')}${fact('Source', esc(o.source || ''))}
       ${fact('Next follow-up', esc(o.next_followup || ''))}${fact('DA signed', o.da_signed_on ? `${esc(o.da_signed_on)}${o.da_doc_id ? ` <a class="btn small" href="/api/files/download/${o.da_doc_id}?inline=1" target="_blank" rel="noopener">View</a>` : ''}` : '')}
+      ${fact(society ? 'Appointment letter' : 'Land bought (sale deed)', o.start_paper_on ? `${esc(o.start_paper_ref || '')} dated ${esc(o.start_paper_on)}${o.start_paper_doc_id ? ` <a class="btn small" href="/api/files/download/${o.start_paper_doc_id}?inline=1" target="_blank" rel="noopener">View</a>` : ''}` : '')}
       ${fact('DA registered', o.da_registered_on ? `${esc(o.da_reg_no || '')} on ${esc(o.da_registered_on)}` : '')}${fact('Notes', esc(o.notes || ''))}${fact('Why closed', esc(o.lost_reason || ''))}</div>
     ${society ? `<h3 id="bd-79a">79A process (${stepsDone} of ${d.steps.length})</h3><p class="help">Steps the society takes to pick a developer. Confirm the exact procedure with your advocate.</p>
       ${d.steps.map((x, i) => `<div class="card"><div class="row"><div><b>${i + 1}. ${esc(x.step)}</b>${x.done_on ? `<p>${chip('Done ' + x.done_on, 'good')}${x.note ? ' <span class="muted">' + esc(x.note) + '</span>' : ''}${x.document_id ? ` <a class="btn small" href="/api/files/download/${x.document_id}?inline=1" target="_blank" rel="noopener">View paper</a>` : ''}</p>` : '<p class="muted">Not done yet</p>'}</div>
@@ -198,6 +205,15 @@ async function bdDetail(id) {
   on('bd-reg', async () => {
     const v = await openForm({ title: 'Development agreement registered', fields: [{ name: 'da_reg_no', label: 'Registration number', required: true }, { name: 'da_registered_on', label: 'Registered on', type: 'date', required: true, value: todayStr() }] });
     if (v && await act(api(`/api/bd/opportunities/${id}/da`, { method: 'POST', body: { action: 'registered', ...v } }), 'DA registered')) again();
+  });
+  on('bd-paper', async () => {
+    const v = await openForm({ title: society ? "Society's appointment letter" : 'Land purchase', intro: society ? 'The letter the society gives us after the 79A process (preferred developer / appointment). The project can be opened once it is recorded.' : 'The registered sale deed (or its Index-II). The project can be opened once it is recorded.', fields: [
+      { name: 'on', label: society ? 'Date on the letter' : 'Sale deed registered on', type: 'date', required: true, value: todayStr() },
+      { name: 'ref', label: society ? 'Letter number / reference' : 'Registration number', required: true },
+      { name: 'file', label: society ? 'Scanned letter' : 'Scanned sale deed or Index-II', type: 'file', required: true }] });
+    if (!v) return;
+    const doc = await bdUpload(v.file, `${o.name} ${society ? 'appointment letter' : 'sale deed'}`); if (!doc) return;
+    if (await act(api(`/api/bd/opportunities/${id}/start-paper`, { method: 'POST', body: { on: v.on, ref: v.ref, doc_id: doc } }), 'Saved')) again();
   });
   on('bd-convert', async () => {
     const v = await openForm({ title: 'Open as a project', intro: 'Creates the project with the approvals list (CFO NOC, concessions, IOD, CC, OC...), the site milestones up to plinth, the latest feasibility study' + (society ? ' and the society.' : '.'), fields: [
