@@ -14,6 +14,16 @@ const ORG_GROUPS = [
 ];
 Object.assign(ICONS, { projects: ICONS.projects || 'M3 21h18M5 21V7l7-4 7 4v14', welcome: 'M3 11l9-8 9 8M5 10v10h14V10' });
 
+// ---------- which modules apply to the chosen project ----------
+// Redevelopment screens only for a redevelopment project. A project that has not started (no appointment letter / sale deed yet)
+// opens only Land & Approvals; the server refuses new work elsewhere too (src/core/projgate.js).
+const REDEV_ONLY33 = new Set(['redevelopment']);
+const curProject33 = () => (scopeProject > 0 ? (projectCache || []).find((x) => x.id === scopeProject) : null);
+const notStarted33 = (p) => !!p && p.start_basis === 'pending';
+let LOCKED33 = new Set();   // screens of Modules 2-5 while the chosen project has not started (filled by pages43.js, the last menu wrapper)
+const START_WHAT33 = (p) => (p.type === 'redevelopment' ? { paper: "the society's appointment letter", why: 'A redevelopment project starts once the 79A process is complete and the society gives us its appointment (preferred developer) letter.', btn: 'Record the appointment letter', date: 'Date on the letter', ref: 'Letter number / reference', file: 'Scanned letter' }
+  : { paper: 'the land purchase', why: 'A land project starts once the land is bought and the sale deed is registered.', btn: 'Record the land purchase', date: 'Sale deed registered on', ref: 'Registration number', file: 'Scanned sale deed or Index-II' });
+
 // ---------- the menu: company menu until a project is chosen, then that project's modules ----------
 const _sidebarItems33 = sidebarItems;
 sidebarItems = function (role) {
@@ -50,6 +60,8 @@ const _navigate33 = navigate;
 navigate = function (route) {
   if (route === 'welcome') { setScopeProject(0); route = 'home'; }
   else if (!scopeProject && !ORG_ROUTES.has(route)) { toast('Choose a project first.', 3000); route = 'home'; }
+  else if (notStarted33(curProject33()) && (sidebarItems(currentUser.role), LOCKED33.has(route))) { toast('This project has not started yet. Only Land & Approvals is open.', 3500); route = 'home'; }
+  else if (REDEV_ONLY33.has(route) && curProject33() && curProject33().type !== 'redevelopment') { toast('Redevelopment is only for redevelopment projects.', 3000); route = 'home'; }
   return _navigate33(route);
 };
 const _logout33 = logout;
@@ -65,7 +77,8 @@ renderApp = function () {
 fillProjectPicker = async function () {
   const sel = $('project-picker'); if (sel) sel.hidden = true;
   if (!currentUser || !scopeProject) return;
-  try { const ps = await getProjects(); if (!ps.some((p) => p.id === scopeProject)) { setScopeProject(0); renderApp(); } } catch (e) { /* offline: keep it */ }
+  const had = !!projectCache;
+  try { const ps = await getProjects(); if (!ps.some((p) => p.id === scopeProject)) { setScopeProject(0); renderApp(); } else if (!had) renderApp(); /* first load: the menu now knows the project's type and stage */ } catch (e) { /* offline: keep it */ }
 };
 function paintProjectChip() {
   const bar = document.querySelector('.top-right'); if (!bar || !currentUser) return;
@@ -100,15 +113,39 @@ async function renderWelcome(main) {
     ${orgHtml ? `<h2>Company</h2>${orgHtml}` : ''}`;
   main.querySelectorAll('[data-pick]').forEach((b) => { b.onclick = () => { setScopeProject(b.dataset.pick); navigate('home'); }; });
   main.querySelectorAll('[data-org]').forEach((b) => { b.onclick = () => navigate(b.dataset.org); });
+  if (owner) {   // everyone except the Owner sees only the projects they are on: say who is on none
+    try {
+      const un = (await api('/api/access/unassigned')).data;
+      const h2 = main.querySelector('h2');
+      if (un.count && h2 && main.isConnected) h2.insertAdjacentHTML('beforebegin', `<div class="card task-row late" id="wl-unassigned"><b>${un.count} ${un.count === 1 ? 'person is' : 'people are'} not on any project yet</b>
+        <p class="muted">${esc(un.people.map((x) => x.name).join(', '))}${un.count > un.people.length ? ' and others' : ''}. They see no project until you add them.</p><button class="btn small btn-primary" data-org="users">Add them in Users &amp; access</button></div>`);
+      const b = main.querySelector('#wl-unassigned [data-org]'); if (b) b.onclick = () => navigate('users');
+    } catch (e) { /* offline: skip the reminder */ }
+  }
 }
 async function renderProjectHome(main) {
   let projects = []; try { projects = await getProjects(); } catch (e) { projects = []; }
   const p = projects.find((x) => x.id === scopeProject);
   if (!p) { setScopeProject(0); renderWelcome(main); return; }
   const mods = projectModulesFor(currentUser.role);
+  const pending = notStarted33(p), w = START_WHAT33(p), mgr = ['owner', 'pm'].includes(currentUser.role);
+  // the modules this role would get once the project starts, shown greyed until then
+  const later = pending ? (() => { const keep = p.start_basis; p.start_basis = null; try { return projectModulesFor(currentUser.role).filter(([g]) => !mods.some(([m]) => m === g)); } finally { p.start_basis = keep; } })() : [];
   const blurb = { '1.': 'Approvals, redevelopment, site readiness', '2.': 'Leads, inventory, brochures', '3.': 'Site, drawings, procurement, contractors', '4.': 'Demands, RERA account, bank, reports', '5.': 'Possession, handover and snags' };
-  main.innerHTML = `<button class="btn small" id="ph-back">← All projects</button><h1>${esc(p.name)}</h1><p class="help">${esc(p.code || '')} · ${esc(typeLabel33(p))}</p>
-    ${mods.length ? mods.map(([name, items]) => `<div class="card"><b>${esc(name)}</b><p class="muted">${esc(blurb[name.slice(0, 2)] || '')}</p><div class="row-btns">${items.map((i) => `<button class="btn small" data-go="${i.route}">${esc(t(i.label))}</button>`).join('')}</div></div>`).join('') : '<div class="empty-state"><p>Nothing in this project is open to your role yet.</p></div>'}`;
+  const basis = { appointment_letter: 'appointment letter', land_purchase: 'sale deed', da_registered: 'development agreement' };
+  main.innerHTML = `<button class="btn small" id="ph-back">← All projects</button><h1>${esc(p.name)}</h1><p class="help">${esc(p.code || '')} · ${esc(typeLabel33(p))}${p.started_on && basis[p.start_basis] ? ` · started ${esc(p.started_on)} (${basis[p.start_basis]}${p.start_ref ? ' ' + esc(p.start_ref) : ''})` : ''}</p>
+    ${pending ? `<div class="card task-row late" id="ph-start"><b>Not started yet</b><p>${esc(w.why)} Until then only Land &amp; Approvals is open.</p>
+      ${mgr ? `<button class="btn btn-primary" id="ph-start-btn">${esc(w.btn)}</button>` : `<p class="muted">The Owner or the PM records ${esc(w.paper)}.</p>`}</div>` : ''}
+    ${mods.length ? mods.map(([name, items]) => `<div class="card"><b>${esc(name)}</b><p class="muted">${esc(blurb[name.slice(0, 2)] || '')}</p><div class="row-btns">${items.map((i) => `<button class="btn small" data-go="${i.route}">${esc(t(i.label))}</button>`).join('')}</div></div>`).join('') : (later.length ? '' : '<div class="empty-state"><p>Nothing in this project is open to your role yet.</p></div>')}
+    ${later.map(([name]) => `<div class="card locked" aria-disabled="true" style="opacity:.6"><b>🔒 ${esc(name)}</b><p class="muted">Opens when the project starts.</p></div>`).join('')}`;
   $('ph-back').onclick = () => navigate('welcome');
   main.querySelectorAll('[data-go]').forEach((b) => { b.onclick = () => navigate(b.dataset.go); });
+  if ($('ph-start-btn')) $('ph-start-btn').onclick = async () => {
+    const v = await openForm({ title: w.btn, intro: w.why, fields: [{ name: 'started_on', label: w.date, type: 'date', required: true, value: todayStr() }, { name: 'start_ref', label: w.ref, required: true }, { name: 'file', label: w.file, type: 'file', required: true }] });
+    if (!v) return;
+    const fd = new FormData(); fd.append('file', typeof compressFile === 'function' ? await compressFile(v.file) : v.file, v.file.name);
+    fd.append('title', `${p.name} ${p.type === 'redevelopment' ? 'appointment letter' : 'sale deed'}`); fd.append('category', 'agreement'); fd.append('module', 'projects'); fd.append('project_id', String(p.id)); fd.append('audience', 'internal');
+    const up = await act(api('/api/files/upload', { method: 'POST', body: fd })); if (!up) return;
+    if (await act(api(`/api/projects/${p.id}/start`, { method: 'POST', body: { started_on: v.started_on, start_ref: v.start_ref, start_doc_id: up.data.id } }), 'Project started')) { await getProjects(true); renderApp(); }
+  };
 }
