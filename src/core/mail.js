@@ -105,9 +105,11 @@ export async function notifyMissingDprs(env) {
   const missing = await env.DB.prepare(`SELECT p.id, p.name FROM projects p WHERE p.deleted_at IS NULL AND p.status NOT IN ('completed', 'on_hold')
     AND NOT EXISTS (SELECT 1 FROM site_dprs d WHERE d.project_id = p.id AND d.report_date = ? AND d.deleted_at IS NULL)`).bind(today).all();
   if (!missing.results.length) return 0;
-  const users = await env.DB.prepare("SELECT id FROM users WHERE active = 1 AND deleted_at IS NULL AND role IN ('owner', 'pm')").all();
-  for (const m of missing.results) for (const u of users.results) {
-    await env.DB.prepare('INSERT INTO notifications (user_id, title, body, link, created_at) VALUES (?, ?, ?, ?, ?)').bind(u.id, `No site report yet: ${m.name}`, 'Nobody has filed today\'s work report.', 'site', nowStr()).run();
-  }
+  // One statement for every project and every Owner / PM (it was one per project per person: 112 at 110 projects, over the free-plan 50).
+  const list = JSON.stringify(missing.results.map((m) => ({ name: m.name })));
+  await env.DB.prepare(`INSERT INTO notifications (user_id, title, body, link, created_at)
+    SELECT u.id, 'No site report yet: ' || json_extract(m.value, '$.name'), 'Nobody has filed today''s work report.', 'site', ?2
+    FROM json_each(?1) m CROSS JOIN users u WHERE u.active = 1 AND u.deleted_at IS NULL AND u.role IN ('owner', 'pm')
+    ORDER BY m.key, u.id`).bind(list, nowStr()).run();
   return missing.results.length;
 }
