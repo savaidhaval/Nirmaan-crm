@@ -42,7 +42,7 @@ ok('bad letter style refused', (await o.call('POST', '/api/branding', { letterhe
 
 // people
 const pos = (await hr.call('POST', '/api/people/hiring', { position: 'Site engineer' })).data.id;
-const cand = (await hr.call('POST', `/api/people/hiring/${pos}/candidates`, { name: 'Zz Candidate', phone: '999' })).data.id;
+const cand = (await hr.call('POST', `/api/people/hiring/${pos}/candidates`, { name: 'Zz Candidate', phone: '9990001112' })).data.id;
 ok('hr moves candidate to interview', (await hr.call('POST', `/api/people/candidates/${cand}/status`, { status: 'interview', interview_on: '2099-01-01T10:00' })).status === 200);
 ok('interview-day list shows them', (await hr.call('GET', '/api/people/interviews')).data.interviews.some((i) => i.name === 'Zz Candidate'));
 const hired = await hr.call('POST', `/api/people/candidates/${cand}/status`, { status: 'hired' });
