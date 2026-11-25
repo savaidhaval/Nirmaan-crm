@@ -1100,12 +1100,13 @@ async function loadSales() {
     let html = '<h3>Flats</h3>' + (inv.map((u) => `<div class="card"><div class="row"><div><b>${esc(u.wing ? u.wing + '-' : '')}${esc(u.unit_no)}</b> · ${esc(u.type || '')}<p class="muted">${esc(u.project)} · ${moneyP(u.price_paise)}</p></div>${statusChip(u.status)}</div>${u.status === 'available' && userCanClient('sales', 'C') ? `<button class="btn small" data-book="${u.id}">Book this flat</button>` : ''}</div>`).join('') || '<p class="muted">No flats added yet.</p>');
     html += '<h3>Bookings</h3>' + (bookings.data.bookings.map((b) => `<div class="card clickable" data-bk="${b.id}"><div class="row"><div><b>${esc(b.customer_name)}</b> · ${esc(b.wing || '')}-${esc(b.unit_no)}<p class="muted">${moneyP(b.collected_paise)} of ${moneyP(b.agreed_price_paise)} collected</p></div>${statusChip(b.status)}</div></div>`).join('') || '<p class="muted">No bookings yet.</p>');
     html += '<h3>Leads</h3>' + (leads.data.leads.map((l) => `<div class="card clickable" data-lead="${l.id}"><div class="row"><div><b>${esc(l.name)}</b><p class="muted">${esc(l.phone)} · ${esc(l.source || '')}${l.next_followup_at ? ' · next ' + esc(String(l.next_followup_at).substring(0, 10)) : ''}</p></div>${statusChip(l.status)}</div></div>`).join('') || '<p class="muted">No leads yet.</p>');
-    const el = $('sales-list'); el.innerHTML = html;
+    const el = $('sales-list'); if (!el) return;   // the person left the Sales screen (e.g. booked from the Stacking plan)
+    el.innerHTML = html;
     el.querySelectorAll('[data-book]').forEach((b) => { b.onclick = () => bookUnit(inv.find((u) => String(u.id) === b.dataset.book)); });
     el.querySelectorAll('[data-bk]').forEach((b) => { b.onclick = () => bookingDetail(b.dataset.bk); });
     el.querySelectorAll('[data-lead]').forEach((b) => { b.onclick = () => leadDetail(b.dataset.lead); });
     if (typeof decorateSales === 'function') decorateSales(el);
-  } catch (e) { $('sales-list').innerHTML = `<div class="error">${esc(e.message)}</div>`; }
+  } catch (e) { if ($('sales-list')) $('sales-list').innerHTML = `<div class="error">${esc(e.message)}</div>`; }
 }
 
 // ---------- Init extras ----------

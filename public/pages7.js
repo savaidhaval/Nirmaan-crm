@@ -28,10 +28,11 @@ async function loadContractors() {
     const [wos, cons] = await Promise.all([api('/api/contractors/work-orders'), api('/api/contractors/contractors')]);
     let html = '<h3>Work orders</h3>' + (wos.data.work_orders.map((w) => `<div class="card clickable" data-wo="${w.id}"><div class="row"><div><b>${esc(w.wo_no)}</b> · ${esc(w.contractor)}<p class="muted">${esc(w.project)}${site ? '' : ' · ' + moneyP(w.value_paise)}</p></div>${statusChip(w.status)}</div></div>`).join('') || '<p class="muted">No work orders yet.</p>');
     html += '<h3>Contractors</h3>' + (cons.data.contractors.map((c) => `<div class="card ${site ? '' : 'clickable'}" data-con="${c.id}"><div class="row"><div><b>${esc(c.name)}</b><p class="muted">${esc(c.trade || '')}${c.phone ? ' · ' + esc(c.phone) : ''}${c.pan_masked ? ' · PAN ' + esc(c.pan_masked) : ''}</p></div>${c.active ? '' : chip('Inactive')}</div></div>`).join('') || '<p class="muted">No contractors yet. Add one to start.</p>');
-    const el = $('con-list'); el.innerHTML = html;
+    const el = $('con-list'); if (!el) return;   // the person left the Contractors screen
+    el.innerHTML = html;
     el.querySelectorAll('[data-wo]').forEach((b) => { b.onclick = () => woDetail(b.dataset.wo); });
     if (!site) el.querySelectorAll('[data-con]').forEach((b) => { b.onclick = () => contractorLedger(b.dataset.con); });
-  } catch (e) { $('con-list').innerHTML = `<div class="error">${esc(e.message)}</div>`; }
+  } catch (e) { if ($('con-list')) $('con-list').innerHTML = `<div class="error">${esc(e.message)}</div>`; }
 }
 
 // Rows of item / qty / unit / rate. Resolves to items or null.
