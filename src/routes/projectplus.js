@@ -504,7 +504,7 @@ export function registerProjectPlus(router, h) {
     add('plinth', 'Plinth', msOf(/plinth/i), { phase: 'Construction' });
     add('further_cc', 'Further CC (above plinth)', apr1((i) => i.gate === 'plinth_cc' || i.gate === 'further_cc'), { phase: 'Construction' });
     add('oc', 'Occupation certificate (OC)', apr1((i) => i.gate === 'oc'), { phase: 'Completion', target: plinthCc.on ? addMonths(plinthCc.on, doneMonths) : null, target_note: `${doneMonths} months from plinth CC` });
-    for (const x of steps) { x.done = !!x.done; x.late = !!(x.target && !x.done && x.target < today); if (x.manual === undefined) x.manual = !!LC_MANUAL[x.key] && !(x.key === 'da_registered' && deal) && !(x.key === 'vacating' && society); }
+    for (const x of steps) { x.done = !!x.done; x.late = !!(x.target && !x.done && x.target < today); if (x.manual === undefined) x.manual = !!LC_MANUAL[x.key] && !(x.key === 'da_registered' && deal && deal.da_registered_on) && !(x.key === 'vacating' && society); }
     const next = steps.find((x) => !x.done && !x.optional);
     return { project: { id: p.id, name: p.name, society }, steps, next: next ? next.key : null, deal: deal ? { id: deal.id, name: deal.name } : null, settings: { vacate_to_plinth_months: vacMonths, completion_months: doneMonths } };
   }

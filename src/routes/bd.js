@@ -228,23 +228,58 @@ export function registerBd(router, h) {
     } catch (e) { return serverError(e, 'bd-edit'); }
   }));
 
+  // The paper that lets the deal become a project: the society's appointment letter (after the 79A process) or the registered sale deed for land.
+  router.post('/api/bd/opportunities/:id/start-paper', async (req, env) => withAuth(req, env, 'bd', 'A', async (req, env) => {
+    try {
+      const o = await load(env, req.params.id); if (!o) return bad('Not found.', 404);
+      if (o.status !== 'open') return bad('This opportunity is closed.', 409);
+      if (o.kind !== 'society' && o.kind !== 'land') return bad('A JV or other deal becomes a project once its development agreement is registered.', 400);
+      const b = await req.json();
+      if (!isDate(b.on) || b.on > todayIST()) return bad(o.kind === 'society' ? 'Enter the date on the appointment letter (not in the future).' : 'Enter the date the sale deed was registered (not in the future).');
+      const ref = str(b.ref, 80); if (!ref) return bad(o.kind === 'society' ? 'Enter the letter number or reference.' : 'Enter the sale deed registration number.');
+      const doc = Number(b.doc_id) || 0; if (!doc || !(await docOk(env, doc))) return bad(o.kind === 'society' ? 'Attach the scanned appointment letter.' : 'Attach the scanned sale deed (or its Index-II).');
+      const what = o.kind === 'society' ? 'appointment letter' : 'land purchase';
+      await env.DB.batch([
+        env.DB.prepare('UPDATE bd_opportunities SET start_paper_on = ?, start_paper_ref = ?, start_paper_doc_id = ? WHERE id = ?').bind(b.on, ref, doc, o.id),
+        audit(env, req.user, 'start_paper', o.id, `${o.name}: ${what} ${ref} dated ${b.on}`),
+      ]);
+      return json({ ok: true });
+    } catch (e) { return serverError(e, 'bd-start-paper'); }
+  }));
+
   // Becomes a project: the project, its approvals checklist (with CFO NOC and concessions before the IOD), the lifecycle milestones,
-  // the latest feasibility study and (society) the society record. Only after the DA is registered.
+  // the latest feasibility study and (society) the society record. Only once the project may start (see below).
   router.post('/api/bd/opportunities/:id/convert', async (req, env) => withAuth(req, env, 'bd', 'A', async (req, env) => {
     try {
       if (!['owner', 'pm'].includes(req.user.role)) return bad('Only the Owner or the PM can open the project.', 403);
       const o = await load(env, req.params.id); if (!o) return bad('Not found.', 404);
       if (o.project_id) return bad('This opportunity is already a project.', 409);
-      if (o.stage !== 'da_registered') return bad('The development agreement must be registered first.', 409, 'da');
+      // When a project may start (Dhaval, Nov 2026): a society after the 79A process, with the appointment letter;
+      // land once it is bought (sale deed); a JV or other deal once the development agreement is registered.
+      let start;
+      if (o.kind === 'society' || o.kind === 'land') {
+        if (o.kind === 'society' && !o.override_note) {
+          const list = await steps79a(env);
+          const got = (await env.DB.prepare('SELECT step FROM bd_steps WHERE opportunity_id = ? AND done_on IS NOT NULL').bind(o.id).all()).results.map((x) => x.step);
+          const open = list.filter((x) => !got.includes(x));
+          if (open.length) return bad(`The 79A process is not complete: ${open.join('; ')}.`, 409, '79a');
+        }
+        if (!o.start_paper_on || !o.start_paper_doc_id) return bad(o.kind === 'society' ? "Record the society's appointment letter first." : 'Record the land purchase (registered sale deed) first.', 409, 'start_paper');
+        start = [o.kind === 'society' ? 'appointment_letter' : 'land_purchase', o.start_paper_on, o.start_paper_ref, o.start_paper_doc_id];
+      } else {
+        if (o.stage !== 'da_registered') return bad('The development agreement must be registered first.', 409, 'da');
+        start = ['da_registered', o.da_registered_on, o.da_reg_no, o.da_doc_id];
+      }
       const b = await req.json();
       const code = str(b.code, 20).toUpperCase(); if (!code) return bad('Give the project a short code (used in PO numbers).');
       if (await env.DB.prepare('SELECT 1 AS x FROM projects WHERE code = ?').bind(code).first()) return bad('That project code is taken.', 409);
       const name = str(b.name, 150) || o.name; const redev = o.kind === 'society';
       const study = await env.DB.prepare('SELECT * FROM bd_studies WHERE opportunity_id = ? ORDER BY version DESC LIMIT 1').bind(o.id).first();
       const now = nowStr();
-      const p = await env.DB.prepare(`INSERT INTO projects (name, code, address, ward, city, type, status, rera_no, budget_paise, notes, created_at, members_count, plot_area_sqm, brand_id)
-        VALUES (?, ?, ?, ?, 'Mumbai', ?, 'planning', '', ?, ?, ?, ?, ?, ?)`).bind(name, code, o.address || '', o.ward || '', redev ? 'redevelopment' : 'new_build', study && study.est_cost_paise ? study.est_cost_paise : 0,
-        `From Business Development: DA ${o.da_reg_no || ''} registered ${o.da_registered_on || ''}`, now, o.members_count, o.plot_area_sqm, await defaultBrandId(env)).run();
+      const p = await env.DB.prepare(`INSERT INTO projects (name, code, address, ward, city, type, status, rera_no, budget_paise, notes, created_at, members_count, plot_area_sqm, brand_id, start_basis, started_on, start_ref, start_doc_id)
+        VALUES (?, ?, ?, ?, 'Mumbai', ?, 'planning', '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).bind(name, code, o.address || '', o.ward || '', redev ? 'redevelopment' : 'new_build', study && study.est_cost_paise ? study.est_cost_paise : 0,
+        o.da_registered_on ? `From Business Development: DA ${o.da_reg_no || ''} registered ${o.da_registered_on}` : `From Business Development: ${start[0] === 'appointment_letter' ? 'appointment letter' : 'sale deed'} ${start[2] || ''} dated ${start[1]}`,
+        now, o.members_count, o.plot_area_sqm, await defaultBrandId(env), start[0], start[1], start[2] || null, start[3] || null).run();
       const pid = p.meta.last_row_id;
       const ms = BUILD_MILESTONES.filter(([n]) => n !== 'Basement' || b.has_basement).map(([n, floor], i) => ({ n, floor, sort: (i + 1) * 10 }));
       const stmts = [

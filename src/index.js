@@ -7,7 +7,7 @@ import {
 } from './core/auth.js';
 import { userCan, visibleProjectIds } from './core/permissions.js';
 import { getSetting, setSetting, appKeyBytes } from './core/settings.js';
-import { query } from './core/db.js';
+import { query, withLongInLists } from './core/db.js';
 import { sendMail, retryFailedEmails, sendDigest, notifyMissingDprs, getEmailConfig, esc as escHtml } from './core/mail.js';
 import * as gdrive from './core/gdrive.js';
 import { registerSalesOps, expireHolds, LEAD_TRANSITIONS, shared as salesShared } from './routes/sales_ops.js';
@@ -41,6 +41,8 @@ import { registerDrawingAcks, drawingAckSweep } from './routes/drw_acks.js';
 import { registerVisits, visitOptions, cleanFeedback } from './routes/visits.js';
 import { registerProjectPlus } from './routes/projectplus.js';
 import { registerBd, bdSweep } from './routes/bd.js';
+import { requestProjectId, projectGate, startGateOn } from './core/projgate.js';
+import { registerProjStart } from './routes/projstart.js';
 import { registerQuality, cubeSweep } from './routes/quality.js';
 import { registerRera, reraSweep } from './routes/rera.js';
 import { registerAi } from './routes/ai.js';
@@ -105,6 +107,10 @@ async function withAuth(req, env, module, action, handler, requireHeader = true)
       return json({ ok: false, error: 'Invalid request.' }, 403);
     }
   }
+  // The project check (core/projgate.js): a request that names a project must come from someone on it, and a project
+  // that has not started takes no new work outside Land & Approvals.
+  const gatePid = await requestProjectId(req);
+  if (gatePid) { const refused = await projectGate(env, user, gatePid, module, req.method, json); if (refused) return refused; }
   req.user = user;
   req.env = env;
   // The project picker: GET ?project_id=N narrows every project-scoped list to that project (permissions.visibleProjectIds).
@@ -226,10 +232,16 @@ router.post('/api/projects', async (req, env) => {
       const newBrand = wantBrand && (await env.DB.prepare('SELECT id FROM brands WHERE id = ? AND deleted_at IS NULL').bind(wantBrand).first()) ? wantBrand : await defaultBrandId(env);
       const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
       const result = await env.DB.prepare(`
-        INSERT INTO projects (name, code, address, ward, city, type, status, rera_no, rera_expiry, start_date, target_date, budget_paise, notes, brand_id, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      `).bind(name, code, address || '', ward || '', city || 'Mumbai', type || 'new_build', status || 'planning', rera_no || '', rera_expiry || '', start_date || '', target_date || '', budget_paise || 0, notes || '', newBrand, now).run();
-      await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, ?, 'projects', ?, ?, ?)`).bind(user.user_id, 'create', result.meta.last_row_id, `Created project "${name}" (${code})`, now).run();
+        INSERT INTO projects (name, code, address, ward, city, type, status, rera_no, rera_expiry, start_date, target_date, budget_paise, notes, brand_id, created_at, start_basis)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `).bind(name, code, address || '', ward || '', city || 'Mumbai', type || 'new_build', status || 'planning', rera_no || '', rera_expiry || '', start_date || '', target_date || '', budget_paise || 0, notes || '', newBrand, now,
+        // opened here, not from Business Development: it waits for its start paper (appointment letter or sale deed), core/projgate.js
+        (await startGateOn(env)) ? 'pending' : null).run();
+      await env.DB.batch([
+        env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, ?, 'projects', ?, ?, ?)`).bind(user.user_id, 'create', result.meta.last_row_id, `Created project "${name}" (${code})`, now),
+        // the PM who opens a project is on it (everyone except the Owner sees only their projects)
+        env.DB.prepare(`INSERT INTO project_members (project_id, user_id, added_by, created_at) SELECT ?, ?, ?, ? WHERE ? != 'owner'`).bind(result.meta.last_row_id, user.user_id, user.user_id, now, user.role),
+      ]);
       return json({ ok: true, data: { id: result.meta.last_row_id } });
     } catch (e) {
       return serverError(e, 'create');
@@ -603,7 +615,7 @@ const EDITABLE_SETTINGS = ['sales.possession_notice_days', 'hv.link_days', 'hv.t
   'interest.rate_bp', 'interest.grace_days', 'interest.enabled', 'security.require_mfa_roles', 'tax.stamp_duty_bp', 'tax.metro_cess_bp', 'tax.women_concession_bp', 'tax.registration_bp', 'tax.registration_cap_paise', 'tax.gst_bp',
   'con.enabled', 'con.pm_approval_limit_paise', 'con.gst_bp', 'con.tds_bp', 'budget.gst_basis', 'petty.low_balance_paise', 'ai.enabled', 'ai.daily_limit', 'ai.model', 'rera.designated_pct_bp', 'fea.review_days', 'red.member_doc_checklist', 'red.rent_due_day', 'red.oc_grace_days', 'red.demolition_proofs', 'red.rtgs_min_paise', 'apr.alert_days', 'bank.keep_days', 'drawing.ack_hours', 'sales.bulk_daily_limit', 'sales.bulk_chunk', 'sales.demand_link_days', 'sales.visit_objections', 'sales.visit_radius_m',
   'sales.letter_signatory', 'sales.collection_account_text', 'sales.cancel_cap_bp', 'sales.refund_days', 'sales.cancel_admin_paise', 'sales.afs_gate', 'tax.tds_194ia_on', 'tax.tds_194ia_threshold_paise', 'tax.tds_194ia_bp', 'sales.receipt_backdate_days', 'sales.remind_before_days', 'sales.remind_interest_days', 'sales.bank_followup_days', 'pro.grn_gate', 'stk.wastage_alert_bp', 'stk.wastage_defaults', 'site.dpr_radius_m', 'site.dual_signoff', 'con.gst_hold', 'sales.sla_minutes', 'sales.rehold_block_hours', 'sales.lock_above_cc', 'sales.hold_needs_token', 'sales.broker_needs_confirmation', 'sales.source_lock_days', 'sales.token_cleared_hold_days', 'sales.brochure_url', 'sales.map_url',
-  'sales.receipt_approval_limit_paise', 'sales.discount_pm_limit_paise', 'sales.handover_template', 'apr.designations', 'con.variation_owner_limit_paise', 'con.advance_recovery_bp', 'con.dlp_months', 'pro.tolerance_bp', 'tax.tds_no_pan_bp', 'rera.cert_valid_days', 'qa.pour_checklist', 'qa.cube_7day_pct_bp', 'dpr.activities', 'dpr.safety_checks', 'bd.vacate_to_plinth_months', 'bd.completion_months', 'bd.steps_79a'];
+  'sales.receipt_approval_limit_paise', 'sales.discount_pm_limit_paise', 'sales.handover_template', 'apr.designations', 'con.variation_owner_limit_paise', 'con.advance_recovery_bp', 'con.dlp_months', 'pro.tolerance_bp', 'tax.tds_no_pan_bp', 'rera.cert_valid_days', 'qa.pour_checklist', 'qa.cube_7day_pct_bp', 'dpr.activities', 'dpr.safety_checks', 'projects.start_gate', 'bd.vacate_to_plinth_months', 'bd.completion_months', 'bd.steps_79a'];
 
 router.post('/api/settings/:key', async (req, env) => {
   return withAuth(req, env, 'users_settings', 'E', async (req, env) => {
@@ -2400,6 +2412,7 @@ registerProfile(router, { withAuth, json, serverError, visibleProjectIds, nowStr
 registerFeasibility(router, { withAuth, json, serverError, visibleProjectIds, nowStr });
 registerVisits(router, { withAuth, json, serverError, visibleProjectIds, getSetting, nowStr, leadAccess, csvBom });
 registerProjectPlus(router, { withAuth, json, serverError, visibleProjectIds, nowStr, getSetting });
+registerProjStart(router, { withAuth, json, serverError, nowStr });
 registerBd(router, { withAuth, json, serverError, nowStr, getSetting, defaultBrandId, loadMumbaiTemplate, feasibilityFromStudy, societyForProject });
 registerQuality(router, { withAuth, json, serverError, visibleProjectIds, nowStr, getSetting, userCan });
 registerRera(router, { withAuth, json, serverError, visibleProjectIds, nowStr, getSetting, csvBom });
@@ -3493,6 +3506,7 @@ async function leadSlaNudges(env) {
 }
 
 async function scheduled(event, env, ctx) {
+  env = Object.assign(Object.create(env), { DB: withLongInLists(env.DB) });   // lists of more than 100 projects (core/db.js)
   if (env.ENVIRONMENT === 'staging') return; // staging guard
   const cron = event.cron;
 
@@ -3559,6 +3573,7 @@ async function runCron(cron, env) {
 // ---------- Main fetch handler ----------
 export default {
   async fetch(request, env, ctx) {
+    env = Object.assign(Object.create(env), { DB: withLongInLists(env.DB) });   // lists of more than 100 projects (core/db.js)
     const url = new URL(request.url);
     const path = url.pathname;
     try {

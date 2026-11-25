@@ -1,4 +1,5 @@
 import { createRequire } from 'node:module';
+import { execSync } from 'node:child_process';
 const { chromium } = createRequire(import.meta.url)('/opt/node-tools/node_modules/playwright');
 const BASE = process.env.BASE || 'http://localhost:8787', run = Date.now().toString(36);
 let pass = 0, fail = 0; const ok = (n, c, x = '') => { c ? pass++ : fail++; console.log(`${c ? 'PASS' : 'FAIL'}  ${n}${c ? '' : '  ' + x}`); };
@@ -6,6 +7,9 @@ const H = { 'X-NirmaanCRM': '1', 'Content-Type': 'application/json' };
 const b = await chromium.launch(); const ctx = await b.newContext({ viewport: { width: 390, height: 800 } });
 await ctx.request.post(BASE + '/api/auth/login', { headers: H, data: { email: 'owner@test.local', password: 'CiStrongPass-12345' } });
 const pid = (await (await ctx.request.post(BASE + '/api/projects', { headers: H, data: { name: 'Sw ' + run, rera_no: 'P51800088888', code: 'SW' + run.toUpperCase().slice(-5), type: 'new_build' } })).json()).data.id;
+
+// projects made here have not 'started' (rule 0056); mark them as started the way an older project is, so every module is open
+execSync("npx wrangler d1 execute nirmaan-db --local --command \"UPDATE projects SET start_basis = NULL WHERE start_basis = 'pending'\"", { cwd: process.env.REPO || '.', stdio: 'ignore' });
 await ctx.request.post(BASE + '/api/sales/inventory', { headers: H, data: { project_id: pid, wing: 'A', floor: 1, unit_no: '101', rera_carpet_sqft: 500, price_paise: 100000000 } });
 await ctx.request.post(BASE + '/api/budget/heads', { headers: H, data: { project_id: pid, code: 'ST', name: 'Steel', budget_paise: 50000000 } });
 await ctx.addInitScript((id) => { try { localStorage.setItem('nirmaan.project', String(id)); if (!sessionStorage.getItem('x')) { localStorage.setItem('nirmaan.psf', '0'); sessionStorage.setItem('x', '1'); } } catch (e) {} }, pid);

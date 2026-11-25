@@ -1,4 +1,5 @@
 import { createRequire } from 'node:module';
+import { execSync } from 'node:child_process';
 const { chromium } = createRequire(import.meta.url)('/opt/node-tools/node_modules/playwright');
 const BASE = process.env.BASE || 'http://localhost:8787', SHOTS = '/tmp/claude-0/scratch/shots', run = Date.now().toString(36);
 let pass = 0, fail = 0; const ok = (n, c, x = '') => { c ? pass++ : fail++; console.log(`${c ? 'PASS' : 'FAIL'}  ${n}${c ? '' : '  ' + x}`); };
@@ -6,6 +7,9 @@ class C { constructor() { this.cookie = ''; } async call(m, p, b) { const h = { 
   const r = await fetch(BASE + p, { method: m, headers: h, body }); const sc = r.headers.get('set-cookie'); if (sc) this.cookie = sc.split(';')[0]; let d = null; try { d = await r.json(); } catch (e) {} return { status: r.status, data: d && d.data, err: d && d.error }; } }
 const o = new C(); await o.call('POST', '/api/auth/login', { email: 'owner@test.local', password: 'CiStrongPass-12345' });
 const pid = (await o.call('POST', '/api/projects', { name: 'PSF Tower ' + run, rera_no: 'P51800099999', code: 'PS' + run.toUpperCase().slice(-5), type: 'new_build', budget_paise: 5e9 })).data.id;
+
+// projects made here have not 'started' (rule 0056); mark them as started the way an older project is, so every module is open
+execSync("npx wrangler d1 execute nirmaan-db --local --command \"UPDATE projects SET start_basis = NULL WHERE start_basis = 'pending'\"", { cwd: process.env.REPO || '.', stdio: 'ignore' });
 const unit = (b) => o.call('POST', '/api/sales/inventory', { project_id: pid, price_paise: 100000000, ...b });
 await unit({ wing: 'A', floor: 1, unit_no: '101', rera_carpet_sqft: 500 }); await unit({ wing: 'A', floor: 2, unit_no: '201', rera_carpet_sqft: 500 });
 const errs = [];
