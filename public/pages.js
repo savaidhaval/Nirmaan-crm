@@ -27,6 +27,8 @@ async function getProjects(force) {
 async function projectOptions() {
   return (await getProjects()).map((p) => [p.id, p.name]);
 }
+// " selected" for the project picked at the top, so a page with its own project list opens on that project, not the first one.
+const pickedProject = (v) => (scopeProject && String(v) === String(scopeProject) ? ' selected' : '');
 
 // ---------- Modal form helper ----------
 // openForm({title, fields:[{name,label,type,options,required,value,placeholder,help}], submit}) -> values | null

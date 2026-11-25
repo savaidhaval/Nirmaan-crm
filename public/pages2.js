@@ -109,7 +109,7 @@ newDpr = async function () {
   const projects = await projectOptions();
   const ov = document.createElement('div'); ov.className = 'modal-overlay';
   ov.innerHTML = `<div class="modal"><h2>${esc(t("Today's work report"))}</h2><form id="dpr-form">
-    <div class="field"><label>${esc(t('Project'))}</label><select id="dpr-project">${projects.map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join('')}</select></div>
+    <div class="field"><label>${esc(t('Project'))}</label><select id="dpr-project">${projects.map(([v, l]) => `<option value="${esc(v)}"${pickedProject(v)}>${esc(l)}</option>`).join('')}</select></div>
     <div class="field"><label>${esc(t('Date'))}</label><input id="dpr-date" type="date" value="${today()}"></div>
     <div class="field"><label>${esc(t('What work happened today?'))} *</label><textarea id="dpr-summary" rows="3"></textarea></div>
     <div class="field"><label>${esc(t('Labour on site'))}</label><div id="dpr-labour"></div></div>

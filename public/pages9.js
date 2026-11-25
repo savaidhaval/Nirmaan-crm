@@ -29,7 +29,7 @@ async function renderStores(main) {
   const projects = await projectOptions();
   if (!projects.length) { main.innerHTML = '<h1>Store</h1><div class="card"><p>No projects yet.</p></div>'; return; }
   const mgr = isRole('owner', 'pm', 'purchase');
-  main.innerHTML = `<h1>Store</h1><div class="field"><label>Project</label><select id="stk-project">${projects.map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join('')}</select></div>
+  main.innerHTML = `<h1>Store</h1><div class="field"><label>Project</label><select id="stk-project">${projects.map(([v, l]) => `<option value="${esc(v)}"${pickedProject(v)}>${esc(l)}</option>`).join('')}</select></div>
     <div class="grid"><button class="btn btn-primary btn-full" id="stk-issue">📤 Issue to work</button>
     <button class="btn btn-full" id="stk-receive">📥 Stock received</button><button class="btn btn-full" id="stk-adjust">⚖ Stock count differs</button>${mgr ? '<button class="btn btn-full" id="stk-item">➕ New item</button><button class="btn btn-full" id="stk-transfer">🚚 Send to another site</button>' : ''}</div><div id="stk-body">Loading...</div>`;
   const pid = () => Number($('stk-project').value);

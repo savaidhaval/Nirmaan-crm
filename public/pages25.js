@@ -152,7 +152,7 @@ newDpr = async function () {
     <div class="field"><label>Wing</label><input data-w="wing"></div><div class="field"><label>Floor</label><input data-w="floor" type="number" step="any" inputmode="decimal"></div>
     <div class="field"><label>How much</label><input data-w="qty" type="number" step="any" inputmode="decimal"></div><div class="field"><label>Unit</label><select data-w="unit"><option></option>${['cum', 'sqm', 'rmt', 'MT', 'nos', '%'].map((u) => `<option>${u}</option>`).join('')}</select></div></div></div>`;
   ov.innerHTML = `<div class="modal"><h2>Today's work report</h2><form id="dpr-form">
-    <div class="field"><label>Project</label><select id="dpr-project">${projects.map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join('')}</select></div>
+    <div class="field"><label>Project</label><select id="dpr-project">${projects.map(([v, l]) => `<option value="${esc(v)}"${pickedProject(v)}>${esc(l)}</option>`).join('')}</select></div>
     <div class="field"><label>Date</label><input id="dpr-date" type="date" value="${today()}"></div>
     <h3>Work done</h3><div id="dpr-lines">${line()}</div><button type="button" class="btn small" id="dpr-addline">+ Another activity</button>
     <div class="field"><label>Anything else (optional)</label><textarea id="dpr-summary" rows="2"></textarea></div>

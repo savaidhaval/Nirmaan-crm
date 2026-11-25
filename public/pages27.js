@@ -224,7 +224,7 @@ async function renderBoq(main) {
   const projects = await projectOptions();
   if (!projects.length) { main.innerHTML = '<h1>BOQ</h1><div class="empty-state"><p>No projects yet.</p></div>'; return; }
   main.innerHTML = `<h1>BOQ</h1><p class="help">Bill of quantities under each budget head. Work orders and POs linked to an item show how much is committed, measured and billed against it.</p>
-    <div class="field"><label>Project</label><select id="boq-p">${projects.map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join('')}</select></div><div id="boq-body">Loading...</div>`;
+    <div class="field"><label>Project</label><select id="boq-p">${projects.map(([v, l]) => `<option value="${esc(v)}"${pickedProject(v)}>${esc(l)}</option>`).join('')}</select></div><div id="boq-body">Loading...</div>`;
   const load = async () => {
     const pid = Number($('boq-p').value), el = $('boq-body');
     try {
