@@ -553,3 +553,10 @@ id TEXT PK, source TEXT, seen_at TEXT
 - chs_society (one row per project: society_name, stage proposed | provisional | registered, registration_no, registered_on, share_cert_count, shares_issued_on, conveyance_on, conveyance_ref, notes) and chs_committee (role chairman | secretary | treasurer | member, name, phone, since). In the backup list.
 - Settings: sales.possession_notice_days (30), hv.link_days (14), hv.touchup_days (7); sales.nodues_strict now defaults to ON.
 - Public routes: GET /h/:token (page), GET|POST /api/public/hv/:token, GET /api/public/complaint-config, POST /api/public/complaint. Staff routes: /api/plans, POST /api/sales/bookings/:id/possession-notice, POST /api/sales/bookings/:id/hv-link, /api/sales/slots, GET /api/sales/bookings/:id/fitout, POST /api/sales/bookings/:id/fitout-noc (+/revoke), /api/chs/expenses (+certify, reverse), GET /api/chs/statement, /api/chs/society, /api/chs/committee, GET /api/dlp/qr-link; print kinds possnotice, fitoutnoc, dlpdebit, chsstatement.
+
+## 0056 project start
+- projects: start_basis (NULL = existed before this rule, treated as started | pending | appointment_letter | land_purchase | da_registered), started_on (date on the paper, IST), start_ref (letter number or sale deed registration number), start_doc_id (documents.id of the scan). A project opened directly is 'pending' while setting projects.start_gate is on (default on); a pending project takes no new work in the sales, brochures, share links, drawings, site, procurement, contractors, stores, budget, petty cash, RERA, bank or Tally areas.
+- bd_opportunities: start_paper_on, start_paper_ref, start_paper_doc_id (society: appointment letter after the 79A process; land: registered sale deed). Copied to the project when it is opened.
+- No new table, so the backup and Export-everything lists are unchanged (both copy whole rows).
+- Settings: projects.start_gate (on), access.limit_roles_to_assigned_projects default is now pm, site, sales, accounts, purchase, hr, viewer.
+- Routes: POST /api/projects/:id/start (Owner or PM on the project), POST /api/bd/opportunities/:id/start-paper, GET /api/access/unassigned (Owner).

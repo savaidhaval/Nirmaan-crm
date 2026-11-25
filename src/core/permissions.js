@@ -2,6 +2,7 @@
 // Actions: V=View, C=Create, E=Edit, A=Approve, X=Export
 
 const ROLES = ['owner', 'pm', 'site', 'sales', 'accounts', 'purchase', 'hr', 'viewer'];
+const NOT_OWNER = ROLES.filter((r) => r !== 'owner');
 
 // Module → role → permissions string
 const MATRIX = {
@@ -145,17 +146,18 @@ export async function visibleProjectIds(env, user) {
 
 export async function getLimitRoles(env) {
   const val = await getSetting(env, 'access.limit_roles_to_assigned_projects');
-  if (val === null) return ['site'];
+  // Dhaval's rule (Nov 2026): everyone except the Owner sees only the projects they are added to.
+  if (val === null) return NOT_OWNER;
   if (Array.isArray(val)) return val;
   if (typeof val === 'string') {
     try {
       const parsed = JSON.parse(val);
-      return Array.isArray(parsed) ? parsed : ['site'];
+      return Array.isArray(parsed) ? parsed : NOT_OWNER;
     } catch (e) {
-      return ['site'];
+      return NOT_OWNER;
     }
   }
-  return ['site'];
+  return NOT_OWNER;
 }
 
 export async function canSeeProject(env, user, projectId) {

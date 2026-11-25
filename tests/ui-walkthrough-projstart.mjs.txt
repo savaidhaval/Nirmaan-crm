@@ -1,0 +1,85 @@
+// Phone-size walkthrough: projects by role and stage (assigned projects only, start paper, locked modules).
+// Run: SHOTS=<dir> node tests/ui-walkthrough-projstart.mjs (copy to .mjs first) against a local Worker.
+import { createRequire } from 'node:module';
+const { chromium } = createRequire(import.meta.url)(process.env.PW || 'playwright');
+const BASE = process.env.BASE || 'http://localhost:8787', SHOTS = process.env.SHOTS || '/tmp/shots';
+const run = Date.now().toString(36);
+let pass = 0, fail = 0; const ok = (n, c, x = '') => { c ? pass++ : fail++; console.log(`${c ? 'PASS' : 'FAIL'}  ${n}${c ? '' : '  ' + x}`); };
+class C { constructor() { this.cookie = ''; } async call(m, p, b) { const h = { 'X-NirmaanCRM': '1' }; if (this.cookie) h.cookie = this.cookie; let body; if (b) { h['Content-Type'] = 'application/json'; body = JSON.stringify(b); }
+  const r = await fetch(BASE + p, { method: m, headers: h, body }); const sc = r.headers.get('set-cookie'); if (sc) this.cookie = sc.split(';')[0]; let d = null; try { d = await r.json(); } catch (e) {} return { status: r.status, data: d && d.data, err: d && d.error }; } }
+const OWNER_PW = process.env.OWNER_PASSWORD || 'CiStrongPass-12345';
+const o = new C(); await o.call('POST', '/api/auth/login', { email: 'owner@test.local', password: OWNER_PW });
+await o.call('POST', '/api/settings/access.limit_roles_to_assigned_projects', { value: ['pm', 'site', 'sales', 'accounts', 'purchase', 'hr', 'viewer'] });
+await o.call('POST', '/api/settings/projects.start_gate', { value: 'on' });
+const fs = await import('node:fs'); fs.mkdirSync(SHOTS, { recursive: true });
+const pdfPath = SHOTS + '/deed.pdf'; fs.writeFileSync(pdfPath, '%PDF-1.4 sale deed');
+const land = (await o.call('POST', '/api/projects', { name: 'Pushpak Plot ' + run.slice(-3), code: 'PP' + run.toUpperCase().slice(-5), type: 'new_build' })).data.id;
+const other = (await o.call('POST', '/api/projects', { name: 'Shanti CHS ' + run.slice(-3), code: 'SC' + run.toUpperCase().slice(-5), type: 'redevelopment' })).data.id;
+const users = {};
+for (const [role, projects] of [['sales', [land]], ['pm', [land]], ['accounts', []]]) {
+  const email = `uips-${role}-${run}@test.local`; const r = await o.call('POST', '/api/users', { name: 'Asha ' + role, email, role, projects });
+  const c = new C(); await c.call('POST', '/api/auth/login', { email, password: r.data.temporaryPassword }); const pw = 'UiStrongPass-' + run;
+  await c.call('POST', '/api/auth/change-password', { currentPassword: r.data.temporaryPassword, newPassword: pw }); users[role] = { email, pw };
+}
+const browser = await chromium.launch();
+async function page(role) {
+  const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2 });
+  const email = role === 'owner' ? 'owner@test.local' : users[role].email, password = role === 'owner' ? OWNER_PW : users[role].pw;
+  const r = await ctx.request.post(BASE + '/api/auth/login', { headers: { 'X-NirmaanCRM': '1', 'Content-Type': 'application/json' }, data: { email, password } });
+  if (!r.ok()) throw new Error('login ' + role + ' ' + r.status());
+  const p = await ctx.newPage(); p.on('pageerror', (e) => { fail++; console.log('PAGEERROR', role, e.message); });
+  await p.goto(BASE + '/'); await p.waitForFunction(() => typeof navigate === 'function' && typeof currentUser !== 'undefined' && currentUser, null, { timeout: 15000 });
+  await p.waitForTimeout(1200); return p;
+}
+const shot = (p, n) => p.screenshot({ path: `${SHOTS}/${n}.png`, fullPage: true });
+const openProject = async (p, id) => { await p.evaluate(async (id) => { await getProjects(true); setScopeProject(id); navigate('home'); }, id); await p.waitForTimeout(1200); };
+const menu = (p) => p.evaluate(() => sidebarItems(currentUser.role).flatMap((g) => g[1]).map((i) => i.route));
+
+// Owner: Welcome lists both projects and who is on none
+const op = await page('owner');
+await op.waitForSelector('#wl-unassigned', { timeout: 8000 }).catch(() => {});
+ok('Owner Welcome warns about people on no project', /not on any project/.test(await op.textContent('#app-main')));
+await op.screenshot({ path: SHOTS + '/91-owner-welcome.png' });
+// Owner opens the land project: not started, only Land & Approvals, the rest locked
+await openProject(op, land);
+const t1 = await op.textContent('#app-main');
+ok('a new project says "Not started yet" with the land purchase button', /Not started yet/.test(t1) && /Record the land purchase/.test(t1));
+ok('locked modules are shown greyed', (await op.$$('.card.locked')).length >= 3);
+const m1 = await menu(op);
+ok('the menu holds Land & Approvals only', m1.includes('approvals') && !m1.includes('sales') && !m1.includes('site') && !m1.includes('redevelopment'), m1.join());
+await shot(op, '92-not-started');
+await op.evaluate(() => navigate('sales')); await op.waitForTimeout(600);
+ok('opening Sales in a not-started project goes back home', await op.evaluate(() => currentPage === 'home'));
+// record the land purchase
+await op.click('#ph-start-btn'); await op.waitForSelector('#f_start_ref');
+await op.fill('#f_start_ref', 'BDR-4/5521/2026'); await op.setInputFiles('#f_file', pdfPath);
+await shot(op, '93-start-form');
+await op.click('#modal-form button[type=submit]'); await op.waitForTimeout(2000);
+const t2 = await op.textContent('#app-main');
+ok('after the sale deed the project shows every module', !/Not started yet/.test(t2) && /2\. Pre-Sales/.test(t2) && /started/.test(t2), t2.slice(0, 300));
+await shot(op, '94-started');
+// Sales person: sees only their project, and its sales screens
+const sp = await page('sales');
+const st = await sp.textContent('#app-main');
+ok('sales sees only the project they are on', st.includes('Pushpak Plot') && !st.includes('Shanti CHS'));
+await shot(sp, '95-sales-welcome');
+await openProject(sp, land);
+const m2 = await menu(sp);
+ok('inside the project sales sees its sales screens and no approvals admin', m2.includes('sales') && !m2.includes('users'), m2.join());
+await shot(sp, '96-sales-project');
+// Accounts person on no project
+const ap = await page('accounts');
+ok('someone on no project is told to ask the Owner', /not on any project yet/.test(await ap.textContent('#app-main')));
+await shot(ap, '97-accounts-none');
+// redevelopment project for the Owner: redevelopment screen shows, appointment letter is asked for
+await openProject(op, other);
+const t3 = await op.textContent('#app-main');
+ok('a redevelopment project asks for the appointment letter', /Record the appointment letter/.test(t3) && /79A/.test(t3));
+ok('the redevelopment screen shows on a redevelopment project', (await menu(op)).includes('redevelopment'));
+await shot(op, '98-redev-not-started');
+
+await o.call('POST', '/api/settings/access.limit_roles_to_assigned_projects', { value: ['site'] });
+await o.call('POST', '/api/settings/projects.start_gate', { value: 'off' });
+await browser.close();
+console.log(`\n${pass} passed, ${fail} failed`);
+process.exit(fail ? 1 : 0);
