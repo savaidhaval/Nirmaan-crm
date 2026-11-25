@@ -7,7 +7,7 @@ import {
 } from './core/auth.js';
 import { userCan, visibleProjectIds } from './core/permissions.js';
 import { getSetting, setSetting, appKeyBytes } from './core/settings.js';
-import { query } from './core/db.js';
+import { query, withLongInLists } from './core/db.js';
 import { sendMail, retryFailedEmails, sendDigest, notifyMissingDprs, getEmailConfig, esc as escHtml } from './core/mail.js';
 import * as gdrive from './core/gdrive.js';
 import { registerSalesOps, expireHolds, LEAD_TRANSITIONS, shared as salesShared } from './routes/sales_ops.js';
@@ -3493,6 +3493,7 @@ async function leadSlaNudges(env) {
 }
 
 async function scheduled(event, env, ctx) {
+  env = Object.assign(Object.create(env), { DB: withLongInLists(env.DB) });   // lists of more than 100 projects (core/db.js)
   if (env.ENVIRONMENT === 'staging') return; // staging guard
   const cron = event.cron;
 
@@ -3559,6 +3560,7 @@ async function runCron(cron, env) {
 // ---------- Main fetch handler ----------
 export default {
   async fetch(request, env, ctx) {
+    env = Object.assign(Object.create(env), { DB: withLongInLists(env.DB) });   // lists of more than 100 projects (core/db.js)
     const url = new URL(request.url);
     const path = url.pathname;
     try {
