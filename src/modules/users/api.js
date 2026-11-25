@@ -62,10 +62,9 @@ async function createUser(req, env) {
   `, [name, email, phone || '', role, hash, bytesToBase64(salt), lang || 'en', extra_roles ? JSON.stringify(extra_roles) : null, now]);
   const userId = result.meta.last_row_id;
   // Add project memberships
-  if (projects && Array.isArray(projects)) {
-    for (const pid of projects) {
-      await run(env.DB, 'INSERT INTO project_members (project_id, user_id, added_by, created_at) VALUES (?, ?, ?, ?)', [pid, userId, user.user_id, now]);
-    }
+  if (projects && Array.isArray(projects) && projects.length) {
+    // one statement for all projects (a loop used one per project, over the free-plan 50 for a person on many projects)
+    await run(env.DB, 'INSERT INTO project_members (project_id, user_id, added_by, created_at) SELECT DISTINCT value, ?, ?, ? FROM json_each(?)', [userId, user.user_id, now, JSON.stringify(projects)]);
   }
   await audit(env, user.user_id, 'create', 'users', userId, `Added ${name} as ${roleLabel(role)}`);
   return Response.json({ ok: true, data: { id: userId, temporaryPassword: tempPassword } });
@@ -111,8 +110,8 @@ async function updateUser(req, env) {
   // Update project memberships
   if (body.projects !== undefined && Array.isArray(body.projects)) {
     await run(env.DB, 'UPDATE project_members SET removed_at = ? WHERE user_id = ? AND removed_at IS NULL', [now, id]);
-    for (const pid of body.projects) {
-      await run(env.DB, 'INSERT INTO project_members (project_id, user_id, added_by, created_at) VALUES (?, ?, ?, ?)', [pid, id, user.user_id, now]);
+    if (body.projects.length) {
+      await run(env.DB, 'INSERT INTO project_members (project_id, user_id, added_by, created_at) SELECT DISTINCT value, ?, ?, ? FROM json_each(?)', [id, user.user_id, now, JSON.stringify(body.projects)]);
     }
   }
   await audit(env, user.user_id, 'edit', 'users', id, `Updated user ${id}`);

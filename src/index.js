@@ -347,10 +347,9 @@ router.post('/api/users', async (req, env) => {
     const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
     const result = await env.DB.prepare(`INSERT INTO users (name, email, phone, role, password_hash, password_salt, lang, active, must_change_password, extra_roles, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 1, 1, ?, ?)`).bind(name, email, phone || '', role, hash, bytesToBase64(salt), lang || 'en', extra_roles ? JSON.stringify(extra_roles) : null, now).run();
     const userId = result.meta.last_row_id;
-    if (projects && Array.isArray(projects)) {
-      for (const pid of projects) {
-        await env.DB.prepare('INSERT INTO project_members (project_id, user_id, added_by, created_at) VALUES (?, ?, ?, ?)').bind(pid, userId, user.user_id, now).run();
-      }
+    if (projects && Array.isArray(projects) && projects.length) {
+      // one statement for all projects (a loop used one per project, over the free-plan 50 for a person on many projects)
+      await env.DB.prepare('INSERT INTO project_members (project_id, user_id, added_by, created_at) SELECT DISTINCT value, ?, ?, ? FROM json_each(?)').bind(userId, user.user_id, now, JSON.stringify(projects)).run();
     }
     await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, ?, 'users', ?, ?, ?)`).bind(user.user_id, 'create', userId, `Added ${name} as ${roleLabel(role)}`, now).run();
     return json({ ok: true, data: { id: userId, temporaryPassword: tempPassword } });
@@ -411,12 +410,12 @@ router.put('/api/users/:id', async (req, env) => {
       const cur = await env.DB.prepare('SELECT project_id FROM project_members WHERE user_id = ? AND removed_at IS NULL').bind(target.id).all();
       const have = cur.results.map((r) => r.project_id);
       const now = nowStr();
-      for (const pid of pids.filter((x) => !have.includes(x))) {
-        await env.DB.prepare('INSERT INTO project_members (project_id, user_id, added_by, created_at) VALUES (?, ?, ?, ?)').bind(pid, target.id, req.user.user_id, now).run();
-      }
-      for (const pid of have.filter((x) => !pids.includes(x))) {
-        await env.DB.prepare('UPDATE project_members SET removed_at = ? WHERE project_id = ? AND user_id = ? AND removed_at IS NULL').bind(now, pid, target.id).run();
-      }
+      // two statements at most, however many projects change (a loop used one per project)
+      const add = [...new Set(pids.filter((x) => !have.includes(x)))], drop = have.filter((x) => !pids.includes(x));
+      const st = [];
+      if (add.length) st.push(env.DB.prepare('INSERT INTO project_members (project_id, user_id, added_by, created_at) SELECT value, ?, ?, ? FROM json_each(?)').bind(target.id, req.user.user_id, now, JSON.stringify(add)));
+      if (drop.length) st.push(env.DB.prepare('UPDATE project_members SET removed_at = ? WHERE user_id = ? AND removed_at IS NULL AND project_id IN (SELECT value FROM json_each(?))').bind(now, target.id, JSON.stringify(drop)));
+      if (st.length) await env.DB.batch(st);
     }
     if (body.role && body.role !== target.role) await env.DB.prepare('DELETE FROM sessions WHERE user_id = ?').bind(target.id).run();
     await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, 'update', 'users', ?, ?, ?)`).bind(req.user.user_id, target.id, `Updated ${target.name}`, nowStr()).run();
