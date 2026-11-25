@@ -1,0 +1,153 @@
+import { createRequire } from 'node:module';
+import { execSync } from 'node:child_process';
+const { chromium } = createRequire(import.meta.url)('/opt/node-tools/node_modules/playwright');
+const BASE = process.env.BASE || 'http://localhost:8787', SHOTS = '/tmp/claude-0/scratch/shots', run = Date.now().toString(36);
+let pass = 0, fail = 0; const ok = (n, c, x = '') => { c ? pass++ : fail++; console.log(`${c ? 'PASS' : 'FAIL'}  ${n}${c ? '' : '  ' + x}`); };
+class C { constructor() { this.cookie = ''; } async call(m, p, b) { const h = { 'X-NirmaanCRM': '1' }; if (this.cookie) h.cookie = this.cookie; let body; if (b) { h['Content-Type'] = 'application/json'; body = JSON.stringify(b); }
+  const r = await fetch(BASE + p, { method: m, headers: h, body }); const sc = r.headers.get('set-cookie'); if (sc) this.cookie = sc.split(';')[0]; let d = null; try { d = await r.json(); } catch (e) {} return { status: r.status, data: d && d.data, err: d && d.error }; } }
+const o = new C(); await o.call('POST', '/api/auth/login', { email: 'owner@test.local', password: 'CiStrongPass-12345' });
+const pid = (await o.call('POST', '/api/projects', { name: 'PSF Tower ' + run, rera_no: 'P51800099999', code: 'PS' + run.toUpperCase().slice(-5), type: 'new_build', budget_paise: 5e9 })).data.id;
+
+// projects made here have not 'started' (rule 0056); mark them as started the way an older project is, so every module is open
+execSync("npx wrangler d1 execute nirmaan-db --local --command \"UPDATE projects SET start_basis = NULL WHERE start_basis = 'pending'\"", { cwd: process.env.REPO || '.', stdio: 'ignore' });
+const unit = (b) => o.call('POST', '/api/sales/inventory', { project_id: pid, price_paise: 100000000, ...b });
+await unit({ wing: 'A', floor: 1, unit_no: '101', rera_carpet_sqft: 500 }); await unit({ wing: 'A', floor: 2, unit_no: '201', rera_carpet_sqft: 500 });
+const errs = [];
+const browser = await chromium.launch();
+const ctx = await browser.newContext({ viewport: { width: 390, height: 800 } });
+await ctx.request.post(BASE + '/api/auth/login', { headers: { 'X-NirmaanCRM': '1', 'Content-Type': 'application/json' }, data: { email: 'owner@test.local', password: 'CiStrongPass-12345' } });
+await ctx.addInitScript((id) => { try { localStorage.setItem('nirmaan.project', String(id)); } catch (e) {} }, pid);
+const p = await ctx.newPage(); const dialogs = []; p.on('dialog', (d) => { dialogs.push(d.message()); d.accept(); }); p.on('pageerror', (e) => { errs.push(e.message); console.log('PAGEERROR', e.stack); });
+p.on('console', (m) => { if (m.type() === 'error') console.log('CONSOLE', m.text()); });
+await p.goto(BASE + '/'); await p.waitForFunction(() => typeof navigate === 'function' && typeof currentUser !== 'undefined' && currentUser, null, { timeout: 15000 });
+await p.evaluate((id) => setScopeProject(id), pid);
+const go = async (r) => { await p.waitForTimeout(1500); await p.evaluate((x) => navigate(x), r); await p.waitForTimeout(1500); };
+const shot = (n) => p.screenshot({ path: `${SHOTS}/${n}.png`, fullPage: true });
+const body = async () => (await p.textContent('body')).replace(/\s+/g, ' ');
+
+// ===== menu switch =====
+await p.click('#btn-user-menu'); await p.waitForTimeout(300);
+const menuTxt = await p.textContent('#menu-psf').catch(() => null);
+ok('menu shows "Show ₹ per sq ft: Off"', /Off/.test(menuTxt || ''), menuTxt);
+await shot('01-menu');
+await Promise.all([p.waitForTimeout(1500), p.click('#menu-psf')]);
+await p.waitForFunction(() => typeof navigate === 'function' && typeof currentUser !== 'undefined' && currentUser, null, { timeout: 15000 });
+await p.evaluate((id) => setScopeProject(id), pid);
+ok('after tap, switch is On', /On/.test(await p.textContent('#menu-psf')));
+console.log('URL after reload', p.url());
+
+// ===== price list area card =====
+await go('pricing'); await p.waitForTimeout(800);
+let t = await body(); ok('price list shows project area card', /Project area for "per sq ft" figures/.test(t) && /1000 sq ft/.test(t), t.slice(0, 600));
+ok('area card only once', (t.match(/Project area for "per sq ft"/g) || []).length === 1, String((t.match(/Project area for "per sq ft"/g) || []).length));
+await shot('02-pricing');
+// change area basis to builtup 5000
+await p.click('[data-psf-area]'); await p.waitForSelector('#f_area_basis');
+await p.selectOption('#f_area_basis', 'builtup'); await p.fill('#f_builtup_sqft', '5000'); await shot('03-area-form');
+await Promise.all([p.waitForTimeout(1500), p.click('#modal-form button[type=submit]')]);
+await p.waitForFunction(() => typeof navigate === 'function' && typeof currentUser !== 'undefined' && currentUser, null, { timeout: 15000 });
+console.log('URL after area save', p.url(), 'title', await p.textContent('h1').catch(() => ''));
+const a = (await o.call('GET', `/api/areas?project_id=${pid}`)).data; ok('area saved as builtup 5000', a.area_sqft === 5000, JSON.stringify(a));
+await p.evaluate((id) => setScopeProject(id), pid);
+
+// ===== stacking: average rate, book with rate psf =====
+await go('stacking'); await p.selectOption('#stk-proj', String(pid)).catch(() => {}); await p.waitForTimeout(1200);
+t = await body(); ok('stacking shows average rate per sq ft', /Average rate.*₹2,00,000 \/ sq ft|Average rate.*\/ sq ft/.test(t), t.slice(0, 500)); console.log('  stacking:', (t.match(/Average rate[^.]{0,120}/) || [''])[0]);
+await shot('04-stacking');
+// add flat priced by psf
+await p.click('#stk-add'); await p.waitForSelector('#f_rate_psf');
+const fids = await p.$$eval('#modal-form input, #modal-form select', (els) => els.map((e) => e.id)); console.log('  new flat fields', fids.join(','));
+await p.fill('#f_wing', 'B').catch(() => {}); await p.fill('#f_floor', '3').catch(() => {}); await p.fill('#f_unit_no', '301').catch(() => {});
+await p.fill('#f_rera_carpet_sqft', '600').catch(() => {}); await p.fill('#f_rate_psf', '15000'); await shot('05-newflat');
+await p.click('#modal-form button[type=submit]'); await p.waitForTimeout(1500);
+const inv = (await o.call('GET', `/api/sales/inventory?project_id=${pid}`)).data; const units = inv.units || inv.inventory || inv;
+const b301 = (Array.isArray(units) ? units : []).find((u) => u.unit_no === '301');
+ok('flat priced at 15,000/sq ft x 600 = ₹90,00,000', b301 && b301.price_paise === 900000000, JSON.stringify(b301 || inv).slice(0, 300));
+// book flat 101 at rate psf
+await go('stacking'); await p.selectOption('#stk-proj', String(pid)).catch(() => {}); await p.waitForTimeout(1200);
+const u101 = await p.$('text=101'); if (u101) await u101.click(); await p.waitForTimeout(800); await shot('06-unit-drill');
+const bookBtn = await p.$('#ud-book'); ok('flat card has Book button', !!bookBtn);
+if (bookBtn) {
+  await bookBtn.click(); await p.waitForTimeout(1000); await shot('07-book-form');
+  const has = !!(await p.$('#f_rate_psf')); ok('booking form offers rate per sq ft', has);
+  const bf = await p.$$eval('#modal-form input, #modal-form select, #modal-form textarea', (els) => els.map((e) => e.id + (e.required ? '*' : ''))); console.log('  booking fields', bf.join(','));
+  for (const [id, v] of [['#f_buyer_name', 'Psf Buyer'], ['#f_name', 'Psf Buyer'], ['#f_customer_name', 'Psf Buyer'], ['#f_buyer_phone', '9876543210'], ['#f_phone', '9876543210']]) await p.fill(id, v).catch(() => {});
+  if (has) await p.fill('#f_rate_psf', '18000');
+  await p.click('#modal-form button[type=submit]'); await p.waitForTimeout(2000); await shot('08-after-book');
+  console.log('  toast:', await p.textContent('#toast').catch(() => ''));
+  const bk = (await o.call('GET', `/api/sales/bookings?project_id=${pid}`)).data; const list = bk.bookings || bk;
+  const mine = (Array.isArray(list) ? list : []).find((x) => /101/.test(JSON.stringify(x)) && x.project_id === pid);
+  ok('booking agreed price = 18,000 x 500 = ₹90,00,000', mine && mine.agreed_price_paise === 900000000, JSON.stringify(mine || bk).slice(0, 400));
+  if (mine) {
+    await p.evaluate(() => document.querySelectorAll('.modal-overlay').forEach((x) => x.remove()));
+    await p.evaluate((id) => bookingDetail(id), mine.id); await p.waitForTimeout(2500); await shot('09-booking-detail');
+    const mt = (await p.evaluate(() => [...document.querySelectorAll('.modal-overlay')].map((o) => o.innerText).join(' | '))).replace(/\s+/g, ' ');
+    ok('booking detail shows Per sq ft card', /Per sq ft/.test(mt) && /18,000 \/ sq ft/.test(mt), mt.slice(0, 600));
+    ok('only one per sq ft card', (await p.$$('[data-psf-card]')).length === 1, String((await p.$$('[data-psf-card]')).length));
+    await p.evaluate(() => document.querySelectorAll('.modal-overlay').forEach((x) => x.remove()));
+  }
+}
+
+// ===== budget =====
+await go('budget'); await p.selectOption('#bud-project', String(pid)); await p.waitForTimeout(1200);
+await p.selectOption('select', String(pid)).catch(() => {}); await p.waitForTimeout(1000);
+const addHead = await p.$('#bud-add');
+ok('budget has add head button', !!addHead);
+if (addHead) { await addHead.click(); await p.waitForSelector('#f_rate_psf'); await p.fill('#f_code', 'ST'); await p.fill('#f_name', 'Steel'); await p.fill('#f_rate_psf', '1000'); await p.click('#modal-form button[type=submit]'); await p.waitForTimeout(1500); }
+t = await body(); console.log('  budget:', (t.match(/ST · Steel.{0,200}/) || [''])[0]);
+ok('budget head = 1000 x 5000 = ₹50,00,000 and shows ₹1,000 / sq ft', /50,00,000/.test(t) && /1,000 \/ sq ft/.test(t), t.slice(0, 800));
+await shot('10-budget');
+
+// ===== cost meter =====
+await go('costmeter'); await p.waitForTimeout(1500); await p.selectOption('select', String(pid)).catch(() => {}); await p.waitForTimeout(1500);
+t = await body(); console.log('  costmeter:', t.slice(0, 400)); ok('cost meter shows per sq ft on budget', /\/ sq ft/.test(t)); await shot('11-costmeter');
+
+// ===== contractors work order =====
+await o.call('POST', '/api/settings/con.enabled', { value: 'on' });
+const con = (await o.call('POST', '/api/contractors/contractors', { name: 'PSF civil ' + run, trade: 'civil' })).data.id;
+await p.reload(); await p.waitForFunction(() => typeof navigate === 'function' && currentUser, null, { timeout: 15000 }); await p.evaluate((id) => setScopeProject(id), pid);
+await p.evaluate(() => { newWorkOrder(); }); await p.waitForTimeout(1200); await shot('12-wo-form');
+const wf = await p.$$eval('#modal-form input, #modal-form select, #modal-form textarea', (els) => els.map((e) => e.id + (e.required ? '*' : ''))); console.log('  wo fields', wf.join(','));
+await p.selectOption('#f_project_id', String(pid)).catch((e) => console.log('proj', e.message)); await p.selectOption('#f_contractor_id', String(con)).catch((e) => console.log('con', e.message));
+await p.selectOption('#f_basis', 'lump_sum').catch(() => {}); await p.fill('#f_scope', 'Plaster').catch(() => {}); await p.fill('#f_value_psf', '200').catch((e) => console.log('psf', e.message));
+await p.click('#modal-form button[type=submit]'); await p.waitForTimeout(2000); console.log('  toast:', await p.textContent('#toast').catch(() => '')); await shot('13-wo-after');
+const wos = (await o.call('GET', `/api/contractors/work-orders?project_id=${pid}`)).data; const wl = wos.work_orders || wos.items || wos;
+const w = (Array.isArray(wl) ? wl : []).find((x) => x.project_id === pid);
+ok('work order value = 200 x 5000 = ₹10,00,000', w && w.value_paise === 100000000, JSON.stringify(w || wos).slice(0, 300));
+if (w) { await p.evaluate(() => document.querySelectorAll('.modal-overlay').forEach((x) => x.remove())); await p.evaluate((id) => woDetail(id), w.id); await p.waitForTimeout(2000); await shot('14-wo-detail');
+  const mt = (await p.evaluate(() => [...document.querySelectorAll('.modal-overlay')].map((o) => o.innerText).join(' | '))).replace(/\s+/g, ' ');
+  ok('work order detail shows per sq ft', /Per sq ft of the project/.test(mt) && /₹200 \/ sq ft/.test(mt), mt.slice(0, 400)); await p.evaluate(() => document.querySelectorAll('.modal-overlay').forEach((x) => x.remove())); }
+
+// ===== switch off hides =====
+await p.click('#btn-user-menu'); await Promise.all([p.waitForTimeout(1500), p.click('#menu-psf')]);
+await p.waitForFunction(() => typeof navigate === 'function' && currentUser, null, { timeout: 15000 }); await p.evaluate((id) => setScopeProject(id), pid);
+await go('budget'); await p.selectOption('#bud-project', String(pid)); await p.waitForTimeout(1500);
+ok('switch Off hides per sq ft in budget', !/\/ sq ft/.test(await body()));
+
+// ===== Staff delete =====
+const st = (await o.call('POST', '/api/people/staff', { name: 'Zz Staff ' + run, role_title: 'Helper' })).data; console.log('  staff create', JSON.stringify(st));
+await go('people'); await p.waitForTimeout(1200); await shot('20-staff');
+const delBtn = await p.$(`[data-del="${st.id}"]`); ok('staff card has Delete button for Owner', !!delBtn);
+if (delBtn) { await delBtn.click(); await p.waitForTimeout(1500); await shot('21-staff-after');
+  ok('confirm asked', /Delete Zz Staff/.test(dialogs.join('|')), dialogs.join('|'));
+  ok('person gone from list', !(await body()).includes('Zz Staff ' + run));
+  console.log('  toast:', await p.textContent('#toast').catch(() => '')); }
+
+// ===== Users delete =====
+const em = `zz-u-${run}@test.local`; const nu = (await o.call('POST', '/api/users', { name: 'Zz User ' + run, email: em, role: 'site', projects: [] })).data;
+await go('users'); await p.waitForTimeout(1500); await shot('30-users');
+const me = (await o.call('GET', '/api/auth/me')).data.user;
+const rows = await p.$$eval('#users-list > *', (els) => els.map((e) => ({ t: e.innerText.replace(/\s+/g, ' ').slice(0, 120), del: !!e.querySelector('[data-act="remove"]') })));
+console.log('  user rows', JSON.stringify(rows));
+ok('own row has no Delete', !rows.some((r) => r.t.includes('owner@test.local') && r.del), JSON.stringify(rows.filter((r) => r.t.includes('owner@test.local'))));
+const ub = await p.$(`[data-act="remove"][data-id="${nu.id}"]`); ok('new user row has Delete', !!ub);
+if (ub) { dialogs.length = 0; await ub.click(); await p.waitForTimeout(1500); await shot('31-users-after');
+  ok('confirm asked', /Delete Zz User/.test(dialogs.join('|')), dialogs.join('|'));
+  ok('user gone from list', !(await p.textContent('#users-list')).includes('Zz User ' + run));
+  console.log('  toast:', await p.textContent('#toast').catch(() => ''));
+  const re = await o.call('POST', '/api/users', { name: 'Zz User again', email: em, role: 'site', projects: [] }); ok('same email can be added again', re.status === 200, JSON.stringify(re)); }
+// deactivated user: delete button?
+const em2 = `zz-d-${run}@test.local`; const du = (await o.call('POST', '/api/users', { name: 'Zz Deact ' + run, email: em2, role: 'site', projects: [] })).data; await o.call('POST', `/api/users/${du.id}/deactivate`);
+await go('users'); await p.waitForTimeout(1500); ok('deactivated user can be deleted too', !!(await p.$(`[data-act="remove"][data-id="${du.id}"]`)));
+ok('no page errors', errs.length === 0, errs.join(' | '));
+console.log(`\n${pass} passed, ${fail} failed`); await browser.close();

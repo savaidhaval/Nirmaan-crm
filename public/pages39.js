@@ -20,7 +20,8 @@ const psfTotal = (ratePaise, sqft) => Math.round(Number(ratePaise) * Number(sqft
   const m = document.getElementById('user-menu'); if (!m || document.getElementById('menu-psf')) return;
   const d = document.createElement('div'); d.className = 'menu-item'; d.id = 'menu-psf';
   d.textContent = 'Show ₹ per sq ft: ' + (psfOn() ? 'On' : 'Off');
-  d.onclick = () => { try { localStorage.setItem('nirmaan.psf', psfOn() ? '0' : '1'); } catch (e) { /* storage blocked */ } location.reload(); };
+  // redraw the screen the person is on (a full reload would drop them back on the home screen)
+  d.onclick = () => { try { localStorage.setItem('nirmaan.psf', psfOn() ? '0' : '1'); } catch (e) { /* storage blocked */ } d.textContent = 'Show ₹ per sq ft: ' + (psfOn() ? 'On' : 'Off'); m.style.display = 'none'; renderApp(); };
   m.insertBefore(d, document.getElementById('menu-logout'));
 })();
 
@@ -68,6 +69,6 @@ async function psfAreaCard(host, pid) {
     const v = await openForm({ title: 'Project area', intro: 'Every "per sq ft" figure in the app divides by the area you choose here.', fields: [
       { name: 'area_basis', label: 'Divide by', type: 'select', value: a.basis, options: [['saleable', 'RERA carpet area of the flats for sale'], ['carpet_all', 'RERA carpet area of all flats (sale, rehab and landowner)'], ['builtup', 'Built-up area of the project'], ['plot', 'Plot area']] },
       { name: 'builtup_sqft', label: 'Built-up area of the whole project (sq ft)', type: 'number', value: a.builtup_sqft || '' }] });
-    if (v && await act(api('/api/areas', { method: 'POST', body: { project_id: pid, area_basis: v.area_basis, builtup_sqft: v.builtup_sqft === '' ? null : v.builtup_sqft } }), 'Saved')) { delete AREA_CACHE[pid]; location.reload(); }
+    if (v && await act(api('/api/areas', { method: 'POST', body: { project_id: pid, area_basis: v.area_basis, builtup_sqft: v.builtup_sqft === '' ? null : v.builtup_sqft } }), 'Saved')) { delete AREA_CACHE[pid]; renderApp(); }
   };
 }
