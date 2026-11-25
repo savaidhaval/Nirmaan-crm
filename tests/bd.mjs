@@ -55,9 +55,16 @@ for (const s of g.steps.slice(1)) await pm.call('POST', `/api/bd/opportunities/$
 ok('the DA needs the signed copy', (await pm.call('POST', `/api/bd/opportunities/${id}/da`, { action: 'signed', da_signed_on: today })).status === 400);
 ok('register before signing is refused', (await pm.call('POST', `/api/bd/opportunities/${id}/da`, { action: 'registered', da_reg_no: 'X', da_registered_on: today })).status === 409);
 ok('with every step ticked the PM records the DA signed', (await pm.call('POST', `/api/bd/opportunities/${id}/da`, { action: 'signed', da_signed_on: today, da_doc_id: daDoc })).status === 200);
-ok('convert before registration is refused', (await pm.call('POST', `/api/bd/opportunities/${id}/convert`, { code: 'ZB' + run.toUpperCase().slice(-5) })).status === 409);
+const noLetter = await pm.call('POST', `/api/bd/opportunities/${id}/convert`, { code: 'ZB' + run.toUpperCase().slice(-5) });
+ok('convert before the appointment letter is recorded is refused', noLetter.status === 409 && noLetter.code === 'start_paper', JSON.stringify(noLetter));
 ok('registration needs a number', (await pm.call('POST', `/api/bd/opportunities/${id}/da`, { action: 'registered', da_registered_on: today })).status === 400);
 ok('DA registered', (await pm.call('POST', `/api/bd/opportunities/${id}/da`, { action: 'registered', da_reg_no: 'BDR-4/1234/2026', da_registered_on: today })).status === 200);
+
+// the society's appointment letter is the paper that lets the project start
+const letter = (await pdf(pm, 'Appointment letter ' + run)).data.id;
+ok('the appointment letter needs the scan', (await pm.call('POST', `/api/bd/opportunities/${id}/start-paper`, { on: today, ref: 'CHS/LOI/7' })).status === 400);
+ok('accounts cannot record it', (await acc.call('POST', `/api/bd/opportunities/${id}/start-paper`, { on: today, ref: 'CHS/LOI/7', doc_id: letter })).status === 403);
+ok('the PM records the appointment letter', (await pm.call('POST', `/api/bd/opportunities/${id}/start-paper`, { on: today, ref: 'CHS/LOI/7', doc_id: letter })).status === 200);
 
 // open as project
 const code = 'ZB' + run.toUpperCase().slice(-5);
