@@ -15,7 +15,7 @@ async function renderBudget(main) {
   const writer = ['owner', 'pm'].includes(currentUser.role);
   const projects = await projectOptions();
   if (!projects.length) { main.innerHTML = '<h1>Budget</h1><div class="card"><p>No projects yet.</p></div>'; return; }
-  main.innerHTML = `<h1>Budget</h1><div class="field"><label>Project</label><select id="bud-project">${projects.map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join('')}</select></div>
+  main.innerHTML = `<h1>Budget</h1><div class="field"><label>Project</label><select id="bud-project">${projects.map(([v, l]) => `<option value="${esc(v)}"${pickedProject(v)}>${esc(l)}</option>`).join('')}</select></div>
     ${writer ? '<button class="btn btn-primary btn-full" id="bud-add">+ Add a budget head</button>' : ''}<div id="bud-body">Loading...</div>`;
   const pid = () => Number($('bud-project').value);
   $('bud-project').onchange = () => loadBudget(pid(), writer);

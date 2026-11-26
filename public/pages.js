@@ -27,6 +27,8 @@ async function getProjects(force) {
 async function projectOptions() {
   return (await getProjects()).map((p) => [p.id, p.name]);
 }
+// " selected" for the project picked at the top, so a page with its own project list opens on that project, not the first one.
+const pickedProject = (v) => (scopeProject && String(v) === String(scopeProject) ? ' selected' : '');
 
 // ---------- Checking what is typed (the server checks the same again: src/core/inputs.js) ----------
 // Returns a plain-language message for a wrong value, or ''. Negative numbers only where the field says so (f.signed or f.min < 0).

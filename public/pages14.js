@@ -13,7 +13,7 @@ sidebarItems = function (role) {
 async function renderDemandLetters(main) {
   const projects = await projectOptions();
   main.innerHTML = `<h1>Demand letters</h1><p class="help">Payment demands that are ready to go out. Tick the ones you want, then send them all by email in one go, or print them as one sheet.</p>
-    <div class="field"><label>Project</label><select id="dl-project"><option value="0">All projects</option>${projects.map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join('')}</select></div><div id="dl-body">Loading...</div>`;
+    <div class="field"><label>Project</label><select id="dl-project"><option value="0">All projects</option>${projects.map(([v, l]) => `<option value="${esc(v)}"${pickedProject(v)}>${esc(l)}</option>`).join('')}</select></div><div id="dl-body">Loading...</div>`;
   $('dl-project').onchange = () => loadDemandLetters();
   loadDemandLetters();
 }

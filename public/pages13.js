@@ -142,7 +142,7 @@ async function renderFeasibility(main) {
   const projects = await projectOptions();
   if (!projects.length) { main.innerHTML = '<h1>Feasibility</h1><div class="card"><p>No projects yet.</p></div>'; return; }
   main.innerHTML = `<h1>Feasibility study</h1><p class="help">Keep every version of a project's feasibility study. Add a new version whenever the figures are reviewed: version 1 is never overwritten.</p>
-    <div class="field"><label>Project</label><select id="fea-project">${projects.map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join('')}</select></div><div id="fea-body">Loading...</div>`;
+    <div class="field"><label>Project</label><select id="fea-project">${projects.map(([v, l]) => `<option value="${esc(v)}"${pickedProject(v)}>${esc(l)}</option>`).join('')}</select></div><div id="fea-body">Loading...</div>`;
   $('fea-project').onchange = () => loadFeasibility(Number($('fea-project').value));
   loadFeasibility(Number($('fea-project').value));
 }

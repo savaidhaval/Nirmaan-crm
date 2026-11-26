@@ -5,7 +5,7 @@ async function renderRera(main) {
   const projects = await projectOptions();
   if (!projects.length) { main.innerHTML = '<h1>RERA account</h1><div class="card"><p>No projects yet.</p></div>'; return; }
   main.innerHTML = `<h1>RERA account</h1><p class="help">Money buyers have paid, the share that should be in the project's designated account, and what has actually been deposited and withdrawn.</p>
-    <div class="field"><label>Project</label><select id="rera-project">${projects.map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join('')}</select></div><div id="rera-body">Loading...</div>`;
+    <div class="field"><label>Project</label><select id="rera-project">${projects.map(([v, l]) => `<option value="${esc(v)}"${pickedProject(v)}>${esc(l)}</option>`).join('')}</select></div><div id="rera-body">Loading...</div>`;
   const pid = () => Number($('rera-project').value);
   $('rera-project').onchange = () => loadRera(pid());
   loadRera(pid());
