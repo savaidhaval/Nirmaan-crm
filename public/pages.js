@@ -30,6 +30,42 @@ async function projectOptions() {
 // " selected" for the project picked at the top, so a page with its own project list opens on that project, not the first one.
 const pickedProject = (v) => (scopeProject && String(v) === String(scopeProject) ? ' selected' : '');
 
+// ---------- Checking what is typed (the server checks the same again: src/core/inputs.js) ----------
+// Returns a plain-language message for a wrong value, or ''. Negative numbers only where the field says so (f.signed or f.min < 0).
+function formFieldError(f, raw) {
+  const v = String(raw).trim(), label = String(f.label || f.name).replace(/\s*\(.*$/, '');
+  const negOk = f.signed || (f.min !== undefined && f.min < 0) || ['floor', 'rise_from_floor'].includes(f.name);
+  if (f.type === 'money') {
+    if (!/^-?[\d,]*\.?\d{0,2}$/.test(v) || !/\d/.test(v)) return `${label}: type an amount in rupees, like 125000 or 1,25,000.50`;
+    const n = parseFloat(v.replace(/,/g, ''));
+    if (n < 0 && !negOk) return `${label}: the amount cannot be negative.`;
+    if (Math.abs(n) > 1e11) return `${label}: that amount is too large. Please check it.`;
+    return '';
+  }
+  if (f.type === 'number') {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return `${label}: type a number.`;
+    if (n < 0 && !negOk) return `${label}: the number cannot be negative.`;
+    if (f.min !== undefined && n < f.min) return `${label}: the smallest allowed is ${f.min}.`;
+    if (f.max !== undefined && n > f.max) return `${label}: the largest allowed is ${f.max}.`;
+    if (/(_pct$|^pct$|percent)/.test(f.name) && n > 100) return `${label}: a percentage cannot be more than 100.`;
+    return '';
+  }
+  if (f.type === 'tel') {
+    let d = v.replace(/[\s\-().+]/g, '');
+    if (d.length > 10 && ['0', '00', '91', '091', '0091'].includes(d.slice(0, d.length - 10))) d = d.slice(-10);
+    return /^\d{10}$/.test(d) ? '' : `${label}: the phone number must be 10 digits.`;
+  }
+  if (f.type === 'email') return /^[^\s@,;<>]+@[^\s@,;<>]+\.[^\s@,;<>]{2,}$/.test(v) ? '' : `${label}: enter a proper email address, like name@example.com.`;
+  if (f.type === 'date') {
+    const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v);
+    const ok = m && +m[1] >= 1900 && +m[1] <= 2100 && +m[2] >= 1 && +m[2] <= 12 && +m[3] >= 1 && +m[3] <= new Date(Date.UTC(+m[1], +m[2], 0)).getUTCDate();
+    return ok ? '' : `${label}: pick a proper date.`;
+  }
+  if (f.type === 'url') return /^https?:\/\/[^\s]+\.[^\s]+$/i.test(v) ? '' : `${label}: enter a full web address starting with https://`;
+  return '';
+}
+
 // ---------- Modal form helper ----------
 // openForm({title, fields:[{name,label,type,options,required,value,placeholder,help}], submit}) -> values | null
 function openForm({ title, fields, submit = 'Save', intro = '' }) {
@@ -69,6 +105,8 @@ function openForm({ title, fields, submit = 'Save', intro = '' }) {
         if (f.required && (v === '' || v === false)) {
           const er = $('modal-error'); er.textContent = `${t('Please fill in')}: ${f.label}`; er.style.display = 'block'; el.focus(); return;
         }
+        const bad = v === '' || v === false ? '' : formFieldError(f, v);
+        if (bad) { const er = $('modal-error'); er.textContent = bad; er.style.display = 'block'; el.focus(); return; }
         if (f.type === 'money') v = rupeesToPaise(v);
         else if (f.type === 'number' && v !== '') v = Number(v);
         out[f.name] = v;

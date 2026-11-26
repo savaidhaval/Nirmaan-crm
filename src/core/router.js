@@ -1,4 +1,5 @@
 // core/router.js — tiny method+path router (§4.3)
+import { checkBody } from './inputs.js';
 
 export class Router {
   constructor() {
@@ -35,6 +36,20 @@ export class Router {
       const match = matchPath(route.path, path);
       if (match) {
         request.params = match.params;
+        // Every JSON body is checked once here (core/inputs.js) before the route reads it. Lead webhooks from ad platforms are
+        // left as sent (their signature covers the raw text, and the lead route cleans each field itself).
+        if ((method === 'POST' || method === 'PUT') && !path.startsWith('/api/webhooks/') && /application\/json/i.test(request.headers.get('content-type') || '')
+          && Number(request.headers.get('content-length') || 0) <= 1048576) {   // bigger bodies are refused by withAuth as too large
+          const text = await request.clone().text();
+          if (text.trim()) {
+            let parsed;
+            try { parsed = JSON.parse(text); } catch (e) { parsed = undefined; }
+            // text that is not JSON goes on to the route, which answers it as before (too large, or could not be read)
+            const r = parsed === undefined ? { body: undefined } : checkBody(parsed);
+            if (r.error) return Response.json({ ok: false, error: r.error, code: 'bad_input' }, { status: 400 });
+            if (r.body !== undefined) { const clean = JSON.stringify(r.body); request.json = async () => JSON.parse(clean); }
+          }
+        }
         return route.handler(request, env, match.params);
       }
     }
