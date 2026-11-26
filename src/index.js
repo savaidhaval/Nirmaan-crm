@@ -1,5 +1,6 @@
 // src/index.js — NirmaanCRM Worker entry point
 
+import { checkSetting } from './core/inputs.js';
 import { Router } from './core/router.js';
 import {
   getCurrentUser, loginPassword, logout, ensureBootstrapOwner,
@@ -228,6 +229,7 @@ router.post('/api/projects', async (req, env) => {
       if (!name || !code) {
         return json({ ok: false, error: 'Project name and code are required.' }, 400);
       }
+      const wrong = projectFieldError(body); if (wrong) return json({ ok: false, error: wrong }, 400);
       const wantBrand = req.user.role === 'owner' ? (Number(body.brand_id) || null) : null; // only the Owner picks a brand
       const newBrand = wantBrand && (await env.DB.prepare('SELECT id FROM brands WHERE id = ? AND deleted_at IS NULL').bind(wantBrand).first()) ? wantBrand : await defaultBrandId(env);
       const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
@@ -248,6 +250,17 @@ router.post('/api/projects', async (req, env) => {
     }
   });
 });
+
+// The project fields that only take fixed values. Amounts and dates are checked for every route in core/inputs.js.
+const PROJECT_TYPES = ['new_build', 'redevelopment'], PROJECT_STATUSES = ['planning', 'active', 'on_hold', 'completed'];
+function projectFieldError(b) {
+  if (b.type !== undefined && b.type !== null && b.type !== '' && !PROJECT_TYPES.includes(b.type)) return 'Pick the project type: New build or Redevelopment.';
+  if (b.status !== undefined && b.status !== null && b.status !== '' && !PROJECT_STATUSES.includes(b.status)) return 'Pick the project status: Planning, Active, On hold or Completed.';
+  for (const [k, max, what] of [['name', 120, 'name'], ['code', 20, 'code'], ['address', 500, 'address'], ['ward', 60, 'ward'], ['city', 60, 'city'], ['rera_no', 60, 'RERA number'], ['notes', 5000, 'notes']]) {
+    if (b[k] !== undefined && b[k] !== null && (typeof b[k] !== 'string' || b[k].length > max)) return `The project ${what} is too long (at most ${max} letters).`;
+  }
+  return '';
+}
 
 router.get('/api/projects/:id', async (req, env) => {
   return withAuth(req, env, 'projects', 'V', async (req, env) => {
@@ -277,6 +290,7 @@ router.put('/api/projects/:id', async (req, env) => {
     let pct = null;
     if (body.percent_complete !== undefined) { pct = Math.round(Number(body.percent_complete)); if (!(pct >= 0 && pct <= 100)) return json({ ok: false, error: 'Completion must be between 0 and 100.' }, 400); }
     if (body.status === 'archived') return json({ ok: false, error: 'Use Archive on the Projects screen (Owner only).' }, 400);
+    const wrong = projectFieldError(body); if (wrong) return json({ ok: false, error: wrong }, 400);
     if (body.status === 'completed') {
       const was = await env.DB.prepare('SELECT status FROM projects WHERE id = ?').bind(id).first();
       if (was && was.status !== 'completed') {
@@ -332,10 +346,13 @@ router.post('/api/users', async (req, env) => {
     if (!name || !email || !role) {
       return json({ ok: false, error: 'Name, email, and role are required.' }, 400);
     }
+    const bad = userFieldError(body, true); if (bad) return json({ ok: false, error: bad }, 400);
     if (role === 'owner') {
       if ((await getSetting(env, 'access.allow_second_owner')) !== 'on') {
         return json({ ok: false, error: 'Second Owner is not enabled.' }, 403);
       }
+      // the same rule as changing someone into an Owner (loadTarget): only the primary Owner makes another Owner
+      if (!user.is_primary_owner) return json({ ok: false, error: 'Only the primary Owner can add another Owner.' }, 403);
     }
     const existing = await env.DB.prepare('SELECT id FROM users WHERE email = ? AND deleted_at IS NULL').bind(email).first();
     if (existing) {
@@ -345,11 +362,11 @@ router.post('/api/users', async (req, env) => {
     const salt = makeSalt();
     const hash = await hashPassword(tempPassword, salt);
     const now = new Date().toISOString().replace('T', ' ').substring(0, 19);
-    const result = await env.DB.prepare(`INSERT INTO users (name, email, phone, role, password_hash, password_salt, lang, active, must_change_password, extra_roles, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 1, 1, ?, ?)`).bind(name, email, phone || '', role, hash, bytesToBase64(salt), lang || 'en', extra_roles ? JSON.stringify(extra_roles) : null, now).run();
+    const result = await env.DB.prepare(`INSERT INTO users (name, email, phone, role, password_hash, password_salt, lang, active, must_change_password, extra_roles, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 1, 1, ?, ?)`).bind(name, email, phone || '', role, hash, bytesToBase64(salt), 'en', cleanExtraRoles(extra_roles), now).run();
     const userId = result.meta.last_row_id;
     if (projects && Array.isArray(projects) && projects.length) {
       // one statement for all projects (a loop used one per project, over the free-plan 50 for a person on many projects)
-      await env.DB.prepare('INSERT INTO project_members (project_id, user_id, added_by, created_at) SELECT DISTINCT value, ?, ?, ? FROM json_each(?)').bind(userId, user.user_id, now, JSON.stringify(projects)).run();
+      await env.DB.prepare(`INSERT INTO project_members (project_id, user_id, added_by, created_at) SELECT DISTINCT value, ?, ?, ? FROM json_each(?) WHERE ${REAL_PROJECT}`).bind(userId, user.user_id, now, JSON.stringify(projects.map(Number))).run();
     }
     await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, ?, 'users', ?, ?, ?)`).bind(user.user_id, 'create', userId, `Added ${name} as ${roleLabel(role)}`, now).run();
     return json({ ok: true, data: { id: userId, temporaryPassword: tempPassword } });
@@ -357,6 +374,18 @@ router.post('/api/users', async (req, env) => {
 });
 
 // ---------- User management (§4.6 safeguards) ----------
+const ROLE_KEYS = ['owner', 'pm', 'site', 'sales', 'accounts', 'purchase', 'hr', 'viewer'];
+// Extra roles are other roles' permissions added to a person; never the Owner's. Unknown words are dropped.
+const cleanExtraRoles = (x) => { const e = Array.isArray(x) ? [...new Set(x.filter((r) => ROLE_KEYS.includes(r) && r !== 'owner'))] : []; return e.length ? JSON.stringify(e) : null; };
+// json_each value that is a real, live project (a made-up project number is ignored, not stored as a membership)
+const REAL_PROJECT = 'value IN (SELECT id FROM projects WHERE deleted_at IS NULL)';
+function userFieldError(b, creating) {
+  if ((creating || b.role) && !ROLE_KEYS.includes(b.role)) return 'Pick the role from the list.';
+  if (b.name !== undefined && b.name !== null && (typeof b.name !== 'string' || b.name.trim().length < 2 || b.name.length > 120)) return 'Enter the name (2 to 120 letters).';
+  if (b.projects !== undefined && b.projects !== null && (!Array.isArray(b.projects) || b.projects.some((x) => !(Number(x) > 0 && Number.isInteger(Number(x)))))) return 'Pick the projects from the list.';
+  if (b.extra_roles !== undefined && b.extra_roles !== null && !Array.isArray(b.extra_roles)) return 'Pick the extra roles from the list.';
+  return '';
+}
 function makeTempPassword() {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
   const bytes = crypto.getRandomValues(new Uint8Array(12));
@@ -386,14 +415,14 @@ router.put('/api/users/:id', async (req, env) => {
     const { target, err } = await loadTarget(env, req);
     if (err) return err;
     const body = await req.json();
+    const bad = userFieldError(body, false); if (bad) return json({ ok: false, error: bad }, 400);
     const fields = [];
     const vals = [];
-    if (body.name) { fields.push('name = ?'); vals.push(String(body.name)); }
+    if (body.name) { fields.push('name = ?'); vals.push(String(body.name).trim()); }
     if (body.phone !== undefined) { fields.push('phone = ?'); vals.push(String(body.phone)); }
-    if (body.lang) { fields.push('lang = ?'); vals.push(String(body.lang)); }
+    if (body.lang) { fields.push('lang = ?'); vals.push('en'); }   // English only on the website (Nov 2026 decision)
     if (body.extra_roles !== undefined) {
-      const extras = Array.isArray(body.extra_roles) ? body.extra_roles.filter((r) => r !== 'owner') : [];
-      fields.push('extra_roles = ?'); vals.push(extras.length ? JSON.stringify(extras) : null);
+      fields.push('extra_roles = ?'); vals.push(cleanExtraRoles(body.extra_roles));
     }
     if (body.role && body.role !== target.role) {
       if (!['owner', 'pm', 'site', 'sales', 'accounts', 'purchase', 'hr', 'viewer'].includes(body.role)) return json({ ok: false, error: 'Unknown role.' }, 400);
@@ -413,7 +442,7 @@ router.put('/api/users/:id', async (req, env) => {
       // two statements at most, however many projects change (a loop used one per project)
       const add = [...new Set(pids.filter((x) => !have.includes(x)))], drop = have.filter((x) => !pids.includes(x));
       const st = [];
-      if (add.length) st.push(env.DB.prepare('INSERT INTO project_members (project_id, user_id, added_by, created_at) SELECT value, ?, ?, ? FROM json_each(?)').bind(target.id, req.user.user_id, now, JSON.stringify(add)));
+      if (add.length) st.push(env.DB.prepare(`INSERT INTO project_members (project_id, user_id, added_by, created_at) SELECT value, ?, ?, ? FROM json_each(?) WHERE ${REAL_PROJECT}`).bind(target.id, req.user.user_id, now, JSON.stringify(add)));
       if (drop.length) st.push(env.DB.prepare('UPDATE project_members SET removed_at = ? WHERE user_id = ? AND removed_at IS NULL AND project_id IN (SELECT value FROM json_each(?))').bind(now, target.id, JSON.stringify(drop)));
       if (st.length) await env.DB.batch(st);
     }
@@ -622,6 +651,7 @@ router.post('/api/settings/:key', async (req, env) => {
       const key = req.params.key;
       if (!EDITABLE_SETTINGS.includes(key)) return json({ ok: false, error: 'That setting cannot be changed here.' }, 400);
       const { value } = await req.json();
+      const wrong = checkSetting(key, value); if (wrong) return json({ ok: false, error: wrong, code: 'bad_input' }, 400);
       await setSetting(env, key, value, req.user.user_id);
       if (key === 'security.require_mfa_roles') mfaRolesCache.at = 0;
       await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, 'update', 'settings', 0, ?, ?)`).bind(req.user.user_id, `Changed setting ${key}`, nowStr()).run();
@@ -2567,10 +2597,13 @@ router.post('/api/branding', async (req, env) => {
 });
 
 // ---------- Share links routes ----------
+// Share links a person may see and switch off: the Owner all; others those on their projects, or ones they made themselves.
+// Binds ?1 = JSON list of visible project ids, ?2 = user id, ?3 = role.
+const SHARE_SCOPE = "(?3 = 'owner' OR sl.project_id IN (SELECT value FROM json_each(?1)) OR (sl.project_id IS NULL AND sl.created_by = ?2))";
 router.get('/api/share-links', async (req, env) => {
   return withAuth(req, env, 'share_links', 'V', async (req, env) => {
     try {
-      const rows = await env.DB.prepare('SELECT sl.id, sl.recipient_label, sl.expires_at, sl.max_views, sl.view_count, sl.last_viewed_at, sl.created_at, d.title FROM share_links sl JOIN documents d ON d.id = sl.document_id WHERE sl.revoked_at IS NULL ORDER BY sl.created_at DESC LIMIT 50').all();
+      const rows = await env.DB.prepare(`SELECT sl.id, sl.recipient_label, sl.expires_at, sl.max_views, sl.view_count, sl.last_viewed_at, sl.created_at, d.title FROM share_links sl JOIN documents d ON d.id = sl.document_id WHERE sl.revoked_at IS NULL AND ${SHARE_SCOPE} ORDER BY sl.created_at DESC LIMIT 50`).bind(JSON.stringify(await visibleProjectIds(env, req.user)), req.user.user_id, req.user.role).all();
       return json({ ok: true, data: { links: rows.results } });
     } catch (e) {
       return serverError(e, 'share-list');
@@ -2590,7 +2623,14 @@ router.post('/api/share-links', async (req, env) => {
       if (doc.project_id && !(await visibleProjectIds(env, user)).includes(doc.project_id)) return json({ ok: false, error: 'Not allowed.' }, 403);
       if (doc.audience !== 'customer') return json({ ok: false, error: 'This file is internal. Only files marked "can be shared with customers" can be sent.' }, 400);
       const days = Number(await getSetting(env, 'share.default_expiry_days')) || 14;
-      const expiry = expires_at || new Date(Date.now() + days * 86400000).toISOString().replace('T', ' ').substring(0, 19);
+      // a link always expires: a chosen expiry must be a real date between now and one year ahead (§7.10)
+      let expiry = new Date(Date.now() + days * 86400000).toISOString().replace('T', ' ').substring(0, 19);
+      if (expires_at) {
+        const t = Date.parse(String(expires_at).replace(' ', 'T') + (/[zZ]|[+-]\d\d:?\d\d$/.test(String(expires_at)) || String(expires_at).length <= 10 ? '' : 'Z'));
+        if (!Number.isFinite(t) || t <= Date.now() || t > Date.now() + 366 * 86400000) return json({ ok: false, error: 'The link must expire on a date within the next year.' }, 400);
+        expiry = new Date(t).toISOString().replace('T', ' ').substring(0, 19);
+      }
+      if (max_views !== undefined && max_views !== null && max_views !== '' && !(Number.isInteger(Number(max_views)) && Number(max_views) >= 1 && Number(max_views) <= 1000)) return json({ ok: false, error: 'The number of views must be between 1 and 1000.' }, 400);
       const token = crypto.getRandomValues(new Uint8Array(32));
       const tokenHash = await crypto.subtle.digest('SHA-256', token);
       const tokenB64 = bytesToBase64(token).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
@@ -2608,7 +2648,8 @@ router.post('/api/share-links', async (req, env) => {
 router.post('/api/share-links/:id/revoke', async (req, env) => {
   return withAuth(req, env, 'share_links', 'E', async (req, env) => {
     const id = Number(req.params.id);
-    await env.DB.prepare('UPDATE share_links SET revoked_at = ?, revoked_by = ? WHERE id = ? AND revoked_at IS NULL').bind(nowStr(), req.user.user_id, id).run();
+    const r = await env.DB.prepare(`UPDATE share_links AS sl SET revoked_at = ?4, revoked_by = ?5 WHERE sl.id = ?6 AND revoked_at IS NULL AND ${SHARE_SCOPE}`).bind(JSON.stringify(await visibleProjectIds(env, req.user)), req.user.user_id, req.user.role, nowStr(), req.user.user_id, id).run();
+    if (!r.meta.changes) return json({ ok: false, error: 'That link is not one of yours, or it is already switched off.' }, 404);
     await env.DB.prepare(`INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, 'revoke', 'share_links', ?, 'Revoked a customer link', ?)`).bind(req.user.user_id, id, nowStr()).run();
     return json({ ok: true });
   });

@@ -7,6 +7,16 @@ Source: replaying migrations/*.sql into an empty SQLite DB. Live D1 not verified
 - tables not in guide: brands, mfa_challenges, user_totp, user_recovery_codes, sal_interest_waivers, sal_refunds, mkt_spend, webhook_seen
 - pro_bills already has gst/tds columns; sal_inventory.category and sal_receipts.receipt_no already exist
 
+## Field-name rules checked on every request (src/core/inputs.js, Nov 2026)
+Every JSON form sent to the server is checked by field name before the route runs (top-level fields; lists of import rows are checked row by row by their own route):
+- `*_paise`: a number, at most ₹1 lakh crore, not negative (except names with adjust/delta/diff/variance/change/net/balance/opening/closing).
+- `*_bp`: 0 to 10000. `*_pct`, `pct`, `percent_complete`: 0 to 100. `*_sqft`, `*_sqm`, `area`: 0 to 1 crore. `count`, `*_count`: whole number 0 or more.
+- `*_id`: a whole number (text ids such as client_uuid excepted). `*_on`, `*_date`, `date`, `*_expiry`, `period_from/to`: a real YYYY-MM-DD date (1900-2100). `next_followup_at`, `visit_at`: date and time. `month`: YYYY-MM.
+- `phone`, `*_phone`, `mobile`: 10 digits after an optional +91 / 0. `email`, `*_email`: an email address. `pan`, `gstin`, `ifsc`: their official patterns.
+- Dropped if sent (server-owned): created_by, created_at, updated_by, updated_at, deleted_at, deleted_by, erased_at, password_hash, password_salt, is_primary_owner, reversed_at, reversed_by, approved_by, approved_at, by_user, uploaded_by.
+- Settings values follow the same rules by the last part of their key, plus `*_days`, `*_months`, `*_limit`, `*_percent` as counts.
+New columns should follow these names so they are checked automatically.
+
 ### ai_log
 id INTEGER PK, user_id INTEGER, feature TEXT NN, ok INTEGER NN, created_at TEXT
 ### ai_log

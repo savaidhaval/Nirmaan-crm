@@ -101,7 +101,7 @@ async function storeAdjust(pid) {
   if (!stock.length) { toast('No items yet'); return; }
   const v = await openForm({ title: 'Stock count differs', intro: 'Type the difference: a minus for stock that is missing, a plus for extra. A manager has to approve it.', fields: [
     { name: 'item_id', label: 'Item', type: 'select', options: stock.map((s) => [s.item_id, `${s.name} (${qtyText(s.qty)} in store)`]) },
-    { name: 'qty', label: 'Difference (e.g. -5)', type: 'number', required: true }, { name: 'reason', label: 'Why?', type: 'textarea', required: true }] });
+    { name: 'qty', label: 'Difference (e.g. -5)', type: 'number', signed: true, required: true }, { name: 'reason', label: 'Why?', type: 'textarea', required: true }] });
   if (v && await postOrQueue('/api/stores/adjust', { project_id: pid, item_id: Number(v.item_id), qty: v.qty, reason: v.reason }, 'Sent for approval')) loadStores(pid);
 }
 
