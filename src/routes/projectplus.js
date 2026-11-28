@@ -1,5 +1,6 @@
 // routes/projectplus.js — project profile, AutoDCR link, approval sub-steps and file movement, tasks with a person in charge, project quick view.
 import { gateOf, GATE_LABEL, todayIST } from '../core/gates.js';
+import { buildWorkQueue, summarizeQueue } from '../core/workqueue.js';
 // Every route checks the module permission and the project the person may see. Every write is audited.
 
 const str = (v, n = 300) => String(v == null ? '' : v).trim().slice(0, n);
@@ -61,7 +62,7 @@ async function resolveCoords(url) {
 }
 
 export function registerProjectPlus(router, h) {
-  const { withAuth, json, serverError, visibleProjectIds, nowStr, getSetting } = h;
+  const { withAuth, json, serverError, visibleProjectIds, nowStr, getSetting, userCan } = h;
   const audit = (env, user, action, entity, id, summary) => env.DB.prepare('INSERT INTO audit_log (user_id, action, entity, entity_id, summary, created_at) VALUES (?, ?, ?, ?, ?, ?)').bind(user.user_id, action, entity, id || 0, String(summary).slice(0, 300), nowStr());
   const canSee = async (env, req, pid) => pid > 0 && (await visibleProjectIds(env, req.user)).includes(pid);
   const userOk = async (env, uid) => !uid || !!(await env.DB.prepare('SELECT 1 AS x FROM users WHERE id = ? AND active = 1 AND deleted_at IS NULL').bind(uid).first());
@@ -270,41 +271,17 @@ export function registerProjectPlus(router, h) {
   }));
 
   // ----- tasks: one list of open work with the person in charge and the expected date -----
-  // Kinds: approval, step, milestone, snag, meeting. Small pages; every column used is indexed.
-  async function openTasks(env, ids, onlyPid, mine) {
-    const P = onlyPid ? [onlyPid] : ids.slice(0, 90);
-    if (!P.length) return [];
-    const inP = `IN (${P.map(() => '?').join(',')})`;
-    const w = (col) => (mine ? ` AND ${col} = ?` : '');
-    const args = (extra) => [...P, ...(mine ? [mine] : []), ...(extra || [])];
-    const [a, s, m, n, g, q] = await env.DB.batch([
-      env.DB.prepare(`SELECT 'approval' AS kind, i.id, i.project_id, i.name AS title, i.status, i.target_date AS due, i.owner_user_id AS user_id, u.name AS in_charge, i.holder_designation AS detail
-        FROM apr_items i LEFT JOIN users u ON u.id = i.owner_user_id WHERE i.deleted_at IS NULL AND i.project_id ${inP} AND (i.status IN ('applied', 'query', 'in_progress') OR (i.status = 'not_started' AND (i.owner_user_id IS NOT NULL OR i.target_date IS NOT NULL)))${w('i.owner_user_id')} ORDER BY i.target_date IS NULL, i.target_date LIMIT 30`).bind(...args()),
-      env.DB.prepare(`SELECT 'step' AS kind, s.id, s.project_id, s.title || ' · ' || i.name AS title, s.status, s.target_date AS due, s.assigned_to AS user_id, u.name AS in_charge, s.responsible_designation AS detail, s.item_id
-        FROM apr_steps s JOIN apr_items i ON i.id = s.item_id LEFT JOIN users u ON u.id = s.assigned_to WHERE s.deleted_at IS NULL AND s.project_id ${inP} AND s.status IN ('pending', 'in_progress')${w('s.assigned_to')} ORDER BY s.status = 'pending', s.target_date IS NULL, s.target_date LIMIT 30`).bind(...args()),
-      env.DB.prepare(`SELECT 'milestone' AS kind, m.id, m.project_id, m.name || COALESCE(' · ' || m.wing, '') AS title, m.status, m.planned_date AS due, m.assigned_to AS user_id, u.name AS in_charge, NULL AS detail
-        FROM site_milestones m LEFT JOIN users u ON u.id = m.assigned_to WHERE m.deleted_at IS NULL AND m.project_id ${inP} AND m.status != 'done'${w('m.assigned_to')} ORDER BY m.planned_date IS NULL, m.planned_date LIMIT 20`).bind(...args()),
-      env.DB.prepare(`SELECT 'snag' AS kind, s.id, s.project_id, s.title, s.status, s.due_date AS due, s.assigned_to AS user_id, u.name AS in_charge, s.severity AS detail
-        FROM site_snags s LEFT JOIN users u ON u.id = s.assigned_to WHERE s.deleted_at IS NULL AND s.project_id ${inP} AND s.status = 'open'${w('s.assigned_to')} ORDER BY s.due_date IS NULL, s.due_date LIMIT 20`).bind(...args()),
-      env.DB.prepare(`SELECT 'meeting' AS kind, mt.id, so.project_id, mt.next_action AS title, 'pending' AS status, mt.next_action_due AS due, mt.next_action_owner AS user_id, u.name AS in_charge, so.name AS detail
-        FROM red_meetings mt JOIN red_societies so ON so.id = mt.society_id LEFT JOIN users u ON u.id = mt.next_action_owner
-        WHERE mt.deleted_at IS NULL AND so.deleted_at IS NULL AND so.project_id ${inP} AND mt.next_action_done = 0 AND COALESCE(mt.next_action, '') != ''${w('mt.next_action_owner')} ORDER BY mt.next_action_due IS NULL, mt.next_action_due LIMIT 10`).bind(...args()),
-      env.DB.prepare(`SELECT 'ncr' AS kind, q.id, q.project_id, q.title, q.status, q.due_date AS due, q.assigned_to AS user_id, u.name AS in_charge, q.source AS detail
-        FROM qa_ncrs q LEFT JOIN users u ON u.id = q.assigned_to WHERE q.project_id ${inP} AND q.status = 'open'${w('q.assigned_to')} ORDER BY q.due_date IS NULL, q.due_date LIMIT 20`).bind(...args()),
-    ]);
-    return [...a.results, ...s.results, ...m.results, ...n.results, ...g.results, ...q.results];
-  }
+  // Every kind lives in core/workqueue.js; the whole queue is one indexed SQL statement.
+  const openTasks = (env, user, ids, onlyPid, mine) => buildWorkQueue(env, user, ids, onlyPid, mine, userCan);
 
   router.get('/api/tasks', async (req, env) => withAuth(req, env, 'projects', 'V', async (req, env) => {
     try {
       const q = new URL(req.url).searchParams; const pid = Number(q.get('project_id')) || 0;
       const ids = await visibleProjectIds(env, req.user);
       if (pid && !ids.includes(pid)) return json({ ok: false, error: 'Not allowed.' }, 403);
-      const tasks = await openTasks(env, ids, pid, q.get('mine') ? req.user.user_id : 0);
-      const today = todayIST();
-      tasks.forEach((t) => { t.late = !!(t.due && t.due < today); });
-      tasks.sort((x, y) => (x.due || '9999') < (y.due || '9999') ? -1 : 1);
-      return json({ ok: true, data: { tasks } });
+      const tasks = await openTasks(env, req.user, ids, pid, q.get('mine') ? req.user.user_id : 0);
+      const summary = summarizeQueue(tasks);
+      return json({ ok: true, data: { tasks: tasks.slice(0, 300), groups: summary.groups, total: summary.total, oldest_days: summary.oldest_days } });
     } catch (e) { return serverError(e, 'pp-tasks'); }
   }));
 
@@ -437,10 +414,7 @@ export function registerProjectPlus(router, h) {
       ]);
       const project = p.results[0];
       if (!project) return json({ ok: false, error: 'Project not found.' }, 404);
-      const tasks = await openTasks(env, ids, pid, 0);
-      const today = todayIST();
-      tasks.forEach((t) => { t.late = !!(t.due && t.due < today); });
-      tasks.sort((x, y) => (x.due || '9999') < (y.due || '9999') ? -1 : 1);
+      const tasks = await openTasks(env, req.user, ids, pid, 0);
       const counts = Object.fromEntries(apr.results.map((r) => [r.status, r.n]));
       const total = apr.results.reduce((t, r) => t + r.n, 0);
       return json({ ok: true, data: { project, approvals: { total, approved: counts.approved || 0, in_progress: (counts.applied || 0) + (counts.query || 0) + (counts.in_progress || 0), query: counts.query || 0, current: current.results },

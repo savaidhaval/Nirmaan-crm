@@ -9,7 +9,8 @@ import {
 import { userCan, visibleProjectIds } from './core/permissions.js';
 import { getSetting, setSetting, appKeyBytes } from './core/settings.js';
 import { query, withLongInLists } from './core/db.js';
-import { sendMail, retryFailedEmails, sendDigest, notifyMissingDprs, getEmailConfig, esc as escHtml } from './core/mail.js';
+import { sendMail, retryFailedEmails, sendDigest, buildDigest, notifyMissingDprs, getEmailConfig, esc as escHtml } from './core/mail.js';
+import { buildWorkQueue } from './core/workqueue.js';
 import * as gdrive from './core/gdrive.js';
 import { registerSalesOps, expireHolds, LEAD_TRANSITIONS, shared as salesShared } from './routes/sales_ops.js';
 import { registerSales3, ensureDemandNumber, handoverDueSweep } from './routes/sales3.js';
@@ -2440,7 +2441,7 @@ registerPartyDocs(router, { withAuth, json, serverError, nowStr, getSetting });
 registerProfile(router, { withAuth, json, serverError, visibleProjectIds, nowStr, getSetting, printBrand, csvBom });
 registerFeasibility(router, { withAuth, json, serverError, visibleProjectIds, nowStr });
 registerVisits(router, { withAuth, json, serverError, visibleProjectIds, getSetting, nowStr, leadAccess, csvBom });
-registerProjectPlus(router, { withAuth, json, serverError, visibleProjectIds, nowStr, getSetting });
+registerProjectPlus(router, { withAuth, json, serverError, visibleProjectIds, nowStr, getSetting, userCan });
 registerProjStart(router, { withAuth, json, serverError, nowStr });
 registerBd(router, { withAuth, json, serverError, nowStr, getSetting, defaultBrandId, loadMumbaiTemplate, feasibilityFromStudy, societyForProject });
 registerQuality(router, { withAuth, json, serverError, visibleProjectIds, nowStr, getSetting, userCan });
@@ -3593,10 +3594,17 @@ async function runCron(cron, env) {
     await cubeSweep(env);
     await bdSweep(env);
   } else if (cron === '30 2 * * *') {
-    // 08:00 IST digest to every active Owner
-    const owners = await env.DB.prepare("SELECT email FROM users WHERE role = 'owner' AND active = 1 AND deleted_at IS NULL").all();
-    for (const o of owners.results) {
-      try { await sendDigest(env, o.email); } catch (e) { console.error('digest failed', e.message); }
+    // 08:00 IST digest to every active Owner and PM, with the oldest ten open items across modules
+    const [recipients, projects] = await env.DB.batch([
+      env.DB.prepare("SELECT email FROM users WHERE role IN ('owner', 'pm') AND active = 1 AND deleted_at IS NULL"),
+      env.DB.prepare("SELECT * FROM projects WHERE deleted_at IS NULL AND status != 'completed' ORDER BY name"),
+    ]);
+    if (recipients.results.length) {
+      const queue = await buildWorkQueue(env, { role: 'owner', user_id: 0 }, projects.results.map((p) => p.id), 0, 0);
+      const digest = await buildDigest(env, projects.results, queue);
+      for (const r of recipients.results) {
+        try { await sendMail(env, r.email, digest.subject, digest.html, { template: 'digest' }); } catch (e) { console.error('digest failed', e.message); }
+      }
     }
     await approvalReminders(env);
   } else if (cron === '30 13 * * *') {
